@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SessionBar Dashboard</title>
+    <style>
+        :root {
+            --bg: #000000;
+            --card-bg: #1a1a1a;
+            --text: #EBEBF5;
+            --text-dim: #8a8a8a;
+            --border: #2a2a2a;
+            --blue: #007AFF;
+            --green: #34C759;
+            --yellow: #FFCC00;
+            --red: #FF3B30;
+            --radius: 12px;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow-x: hidden;
+        }
+
+        #app {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 20px 16px;
+        }
+
+        /* ── Header ── */
+
+        .top-bar {
+            margin-bottom: 20px;
+            position: sticky;
+            top: 0;
+            background: var(--bg);
+            padding: 12px 0 8px 0;
+            z-index: 10;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .title {
+            margin: 0 0 10px 0;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            background: linear-gradient(90deg, #FF3B30, #FF9500, #FFCC00, #34C759, #007AFF, #AF52DE);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stats-row {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+
+        .stat {
+            font-size: 13px;
+            color: var(--text-dim);
+            font-weight: 500;
+        }
+
+        .stat .val { color: var(--text); font-weight: 600; }
+        .stat.working .val { color: var(--blue); }
+        .stat.error .val { color: var(--red); }
+        .stat.blocked .val { color: var(--yellow); }
+        .stat.idle .val { color: var(--green); }
+
+        .filter-input {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .filter-input:focus {
+            border-color: var(--blue);
+        }
+
+        .filter-input::placeholder {
+            color: var(--text-dim);
+        }
+
+        .filter-hint {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-top: 4px;
+            text-align: right;
+            display: none;
+        }
+
+        .filter-hint.visible { display: block; }
+
+        /* ── Empty state ── */
+
+        .empty-state {
+            text-align: center;
+            color: var(--text-dim);
+            padding: 60px 0;
+            font-size: 15px;
+        }
+
+        .empty-state .dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--border);
+            margin: 0 2px;
+            animation: dotPulse 1.5s infinite;
+        }
+        .empty-state .dot:nth-child(2) { animation-delay: 0.2s; }
+        .empty-state .dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes dotPulse {
+            0%, 60% { opacity: 0.2; }
+            100% { opacity: 0.6; }
+        }
+
+        /* ── Project groups ── */
+
+        .project-group {
+            margin-bottom: 20px;
+        }
+
+        .project-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding: 0 4px;
+        }
+
+        .project-icon {
+            font-size: 16px;
+        }
+
+        .project-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .project-count {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-left: 4px;
+        }
+
+        /* ── Cards ── */
+
+        .agent-card {
+            background-color: var(--card-bg);
+            border-radius: var(--radius);
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            position: relative;
+            overflow: hidden;
+            transition: background-color 0.2s;
+            cursor: pointer;
+        }
+
+        .agent-card:hover {
+            background-color: #222222;
+        }
+
+        .agent-card:last-child {
+            margin-bottom: 0;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .status-indicator {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: #ffffff;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        .status-indicator.idle { background-color: var(--green); }
+        .status-indicator.working {
+            background-color: var(--blue);
+            animation: pulse 1.5s infinite;
+        }
+        .status-indicator.blocked {
+            background-color: var(--yellow);
+            animation: blink 1s infinite;
+        }
+        .status-indicator.error { background-color: var(--red); }
+
+        .info {
+            flex-grow: 1;
+            min-width: 0;
+        }
+
+        .info-row {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .info-type {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .info-project {
+            font-size: 12px;
+            color: var(--text-dim);
+            background: rgba(255,255,255,0.06);
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .info-task {
+            font-size: 14px;
+            color: var(--text);
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .info-sid {
+            font-size: 11px;
+            color: var(--text-dim);
+            margin-top: 3px;
+            font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .card-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .meta-age {
+            min-width: 36px;
+            text-align: right;
+        }
+
+        .meta-status {
+            font-weight: 600;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .meta-status.working { color: var(--blue); background: rgba(0,122,255,0.12); }
+        .meta-status.idle { color: var(--green); background: rgba(52,199,89,0.12); }
+        .meta-status.blocked { color: var(--yellow); background: rgba(255,204,0,0.12); }
+        .meta-status.error { color: var(--red); background: rgba(255,59,48,0.12); }
+
+        /* ── Progress bar ── */
+
+        .progress-bar-container {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .progress-track {
+            flex-grow: 1;
+            height: 5px;
+            background-color: #333333;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--blue), #5AC8FA);
+            border-radius: 3px;
+            transition: width 0.4s ease;
+        }
+
+        .progress-pct {
+            font-size: 12px;
+            color: var(--text-dim);
+            min-width: 36px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* ── Detail expansion ── */
+
+        .card-detail {
+            display: none;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-dim);
+        }
+
+        .card-detail.open { display: block; }
+
+        .detail-row {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+
+        .detail-label {
+            color: var(--text-dim);
+            min-width: 70px;
+        }
+
+        .detail-value {
+            color: var(--text);
+            font-family: "SF Mono", "Fira Code", monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+
+        /* ── Disconnected banner ── */
+
+        .disconnected-banner {
+            background: var(--red);
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 600;
+            margin-bottom: 12px;
+            animation: slideDown 0.3s ease;
+        }
+
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Keyframes ── */
+
+        @keyframes pulse {
+            0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(0, 122, 255, 0.6); }
+            70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(0, 122, 255, 0); }
+            100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(0, 122, 255, 0); }
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* WCAG 2.3.3: respect reduced-motion preference */
+        @media (prefers-reduced-motion: reduce) {
+            .status-indicator.working,
+            .status-indicator.blocked {
+                animation: none;
+            }
+            .progress-fill {
+                transition: none;
+            }
+        }
+
+        /* ── Responsive ── */
+
+        @media (max-width: 500px) {
+            #app { padding: 12px 10px; }
+            .agent-card { padding: 12px; }
+            .card-meta { gap: 6px; }
+            .info-type { font-size: 13px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <header class="top-bar">
+            <h1 class="title">SessionBar</h1>
+            <div class="stats-row" id="stats-row"></div>
+            <input
+                class="filter-input"
+                id="filter-input"
+                type="text"
+                placeholder="Filter by project, task, or type…"
+                autocomplete="off"
+                spellcheck="false"
+            />
+            <div class="filter-hint" id="filter-hint"></div>
+        </header>
+        <div id="agent-container"></div>
+    </div>
+    <script type="module" src="./dist/app.js"></script>
+</body>
+</html>

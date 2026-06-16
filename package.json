@@ -1,0 +1,31 @@
+{
+  "name": "sessionbar",
+  "version": "1.0.0",
+  "description": "Terminal dashboard for AI CLI agent sessions — Claude Code, Gemini CLI, Codex, Copilot",
+  "type": "module",
+  "bin": {
+    "sessionbar": "./dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "index.html",
+    "README.md",
+    "report.sh"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "keywords": ["cli", "terminal", "tui", "ai", "monitor", "dashboard"],
+  "license": "MIT"
+}
