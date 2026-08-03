@@ -1,9 +1,9 @@
 import { StyledText, TextAttributes, type TextChunk } from "@opentui/core";
 import type { SessionPayload } from "./types.js";
 
-export type DetailTab = "overview" | "activity" | "usage" | "flow" | "raw";
+export type DetailTab = "overview" | "activity" | "usage" | "flow" | "raw" | "advisor";
 
-export const DETAIL_TABS: readonly DetailTab[] = ["overview", "activity", "usage", "flow", "raw"];
+export const DETAIL_TABS: readonly DetailTab[] = ["overview", "activity", "usage", "flow", "raw", "advisor"];
 
 export interface UnreadUpdateInput {
   previousFingerprints: ReadonlyMap<string, string>;
@@ -153,6 +153,7 @@ export function buildSessionDetailChunks(
   else if (tab === "activity") lines.push(...activityLines(session, safeWidth, now));
   else if (tab === "usage") lines.push(...usageLines(session, safeWidth, now));
   else if (tab === "flow") lines.push(...flowLines(session, safeWidth, now));
+  else if (tab === "advisor") lines.push(...advisorLines(session, safeWidth, now));
   else lines.push(...rawLines(session));
 
   const body = tab === "raw"
@@ -270,6 +271,20 @@ function flowLines(session: SessionPayload, width: number, now: number): string[
     "no structured flow reported",
     "waiting for workflow hook events",
   ], width);
+}
+
+function advisorLines(session: SessionPayload, _width: number, _now: number): string[] {
+  const advisor = session.advisor;
+  if (!advisor) return ["该会话无额度消耗数据"];
+  return [
+    `Level: ${advisor.level}`,
+    `Pacing: ${advisor.pacing}`,
+    `Card: ${advisor.cardTiming}`,
+    `Auto-reset: ${advisor.autoResetIn}`,
+    `Sustainable rate: ${Math.round(advisor.sustainableRate)} tokens/h`,
+    `Actual/sustainable: ${advisor.actualVsSustainable === null ? "--" : advisor.actualVsSustainable.toFixed(2)}`,
+    `Projected cap-hit: ${advisor.projectedCapHitAt ? new Date(advisor.projectedCapHitAt).toLocaleTimeString() : "--"}`,
+  ];
 }
 
 function rawLines(session: SessionPayload): string[] {

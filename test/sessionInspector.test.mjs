@@ -405,18 +405,41 @@ test("structured flow graph takes priority over workflow event buffer", () => {
   assert.doesNotMatch(content, /WORKFLOW EVENTS|PreCompress/);
 });
 
+test("advisor tab renders advisor fields", () => {
+  const content = buildSessionDetailContent({
+    ...baseSession,
+    advisor: {
+      level: "red",
+      pacing: "烧太快",
+      cardTiming: "现在用卡",
+      autoResetIn: "unblocked in 2h",
+      sustainableRate: 500,
+      actualVsSustainable: 3,
+      projectedCapHitAt: null,
+    },
+  }, "advisor", 80, 1_700_000_000_000);
+  assert.match(content, /Level: red/);
+  assert.match(content, /烧太快/);
+});
+
+test("advisor tab shows empty state without data", () => {
+  const content = buildSessionDetailContent({ ...baseSession, advisor: undefined }, "advisor", 80, 1_700_000_000_000);
+  assert.match(content, /无额度消耗数据/);
+});
+
 test("scope tabs cycle and numeric keys map deterministically", () => {
   assert.equal(nextDetailTab("overview", 1), "activity");
-  assert.equal(nextDetailTab("raw", 1), "overview");
-  assert.equal(nextDetailTab("overview", -1), "raw");
+  assert.equal(nextDetailTab("raw", 1), "advisor");
+  assert.equal(nextDetailTab("overview", -1), "advisor");
   assert.equal(detailTabByNumber("3"), "usage");
   assert.equal(detailTabByNumber("4"), "flow");
+  assert.equal(detailTabByNumber("6"), "advisor");
   assert.equal(detailTabByNumber("9"), null);
 });
 
 test("scope bar renders active tab with inverse attributes", () => {
   const chunks = buildDetailScopeBarChunks("usage");
-  assert.equal(chunks.map(chunk => chunk.text).join(""), "Overview | Activity | Usage | Flow | Raw");
+  assert.equal(chunks.map(chunk => chunk.text).join(""), "Overview | Activity | Usage | Flow | Raw | Advisor");
 
   const active = chunks.find(chunk => chunk.text === "Usage");
   const inactive = chunks.find(chunk => chunk.text === "Overview");
