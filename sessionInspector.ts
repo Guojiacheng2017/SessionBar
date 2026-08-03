@@ -282,8 +282,8 @@ function advisorLines(session: SessionPayload, _width: number, _now: number): st
     `Card: ${advisor.cardTiming}`,
     `Auto-reset: ${advisor.autoResetIn}`,
     `Sustainable rate: ${Math.round(advisor.sustainableRate)} tokens/h`,
-    `Actual/sustainable: ${advisor.actualVsSustainable === null ? "--" : advisor.actualVsSustainable.toFixed(2)}`,
-    `Projected cap-hit: ${advisor.projectedCapHitAt ? new Date(advisor.projectedCapHitAt).toLocaleTimeString() : "--"}`,
+    `Actual/sustainable: ${advisor.actualVsSustainable == null ? "--" : advisor.actualVsSustainable.toFixed(2)}`,
+    `Projected cap-hit: ${advisor.projectedCapHitAt == null ? "--" : new Date(advisor.projectedCapHitAt).toLocaleTimeString()}`,
   ];
 }
 

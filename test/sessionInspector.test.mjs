@@ -427,6 +427,23 @@ test("advisor tab shows empty state without data", () => {
   assert.match(content, /无额度消耗数据/);
 });
 
+test("advisor tab tolerates undefined actualVsSustainable and projectedCapHitAt", () => {
+  const content = buildSessionDetailContent({
+    ...baseSession,
+    advisor: {
+      level: "yellow",
+      pacing: "建议减速",
+      cardTiming: "攒卡",
+      autoResetIn: "unblocked in 5h",
+      sustainableRate: 100,
+      actualVsSustainable: undefined,
+      projectedCapHitAt: undefined,
+    },
+  }, "advisor", 80, 1_700_000_000_000);
+  assert.match(content, /Actual\/sustainable: --/);
+  assert.match(content, /Projected cap-hit: --/);
+});
+
 test("scope tabs cycle and numeric keys map deterministically", () => {
   assert.equal(nextDetailTab("overview", 1), "activity");
   assert.equal(nextDetailTab("raw", 1), "advisor");

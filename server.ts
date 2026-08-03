@@ -106,21 +106,29 @@ const sessions: Record<string, SessionPayload> = {};
 const sseClients = new Set<express.Response>();
 
 const rateBuffers = new Map<string, RateBuffer>();
+const CARDS_REFRESH_MS = 30 * 60 * 1000; // refresh wham cards when stale
 let cachedCards: ResetCard[] = [];
-let cardsFetched = false; // fetch once; avoid hitting the wham API on every poll
+let cardsFetched = false; // first fetch done; avoid hammering the wham API
+let lastCardsFetchAt = 0;
 
 async function refreshProviderSignals() {
   if (providerConfigs.length === 0) return;
   const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
-  if (!applyProviderPollResults(sessions, results)) return;
+  const changed = applyProviderPollResults(sessions, results);
   if (!cardsFetched) {
     cachedCards = await fetchResetCards();
     cardsFetched = true;
+    lastCardsFetchAt = Date.now();
+  } else if (Date.now() - lastCardsFetchAt > CARDS_REFRESH_MS || cachedCards.length === 0) {
+    // retry when stale (>30min) or when the last fetch came back empty
+    cachedCards = await fetchResetCards();
+    lastCardsFetchAt = Date.now();
   }
   const now = Date.now();
   for (const session of Object.values(sessions)) {
     session.advisor = computeAdvisorForSession(session, rateBuffers, cachedCards, now) ?? undefined;
   }
+  if (!changed) return; // advisor recomputed in memory; skip broadcast when signals unchanged
   broadcastSSE();
   if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
 }
