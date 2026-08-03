@@ -11,6 +11,10 @@ import { removeSessionMarkerFiles, scopedSessionId } from "./sessionMarkers.js";
 import { mergeCodexDiscovery } from "./codexSessionMerge.js";
 import { pollProvider, providerConfigsFromEnv } from "./providerAdapters.js";
 import { applyProviderPollResults } from "./providerMonitor.js";
+import { fetchResetCards } from "./codexWhamAdapter.js";
+import { computeAdvisorForSession } from "./quotaAdvisor.js";
+import { RateBuffer } from "./rateBuffer.js";
+import type { ResetCard } from "./quota-engine/types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || "8989", 10);
@@ -101,10 +105,22 @@ function removeClaudeHooks() {
 const sessions: Record<string, SessionPayload> = {};
 const sseClients = new Set<express.Response>();
 
+const rateBuffers = new Map<string, RateBuffer>();
+let cachedCards: ResetCard[] = [];
+let cardsFetched = false; // fetch once; avoid hitting the wham API on every poll
+
 async function refreshProviderSignals() {
   if (providerConfigs.length === 0) return;
   const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
   if (!applyProviderPollResults(sessions, results)) return;
+  if (!cardsFetched) {
+    cachedCards = await fetchResetCards();
+    cardsFetched = true;
+  }
+  const now = Date.now();
+  for (const session of Object.values(sessions)) {
+    session.advisor = computeAdvisorForSession(session, rateBuffers, cachedCards, now) ?? undefined;
+  }
   broadcastSSE();
   if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
 }
