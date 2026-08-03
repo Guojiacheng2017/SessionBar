@@ -6,11 +6,14 @@ import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
+import { runOpenTuiMonitor } from "./openTuiMonitor.js";
+import { pruneSessionMarkerFiles } from "./sessionMarkers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.SESSIONBAR_HOME || process.env.AGENTBAR_HOME || join(homedir(), ".sessionbar");
 const PID_FILE = join(HOME, "server.pid");
 const LOG_FILE = join(HOME, "server.log");
+const SESSION_ID_DIR = join(HOME, "sessions");
 const PORT = parseInt(process.env.PORT || "8989", 10);
 const API_HOST = process.env.SESSIONBAR_HOST || "127.0.0.1";
 const API_BASE = `http://${API_HOST}:${PORT}`;
@@ -29,6 +32,7 @@ const tuiPollMs = Number.isFinite(pollEnv) ? Math.max(100, pollEnv) : 1000;
 
 function ensureDir() {
   if (!existsSync(HOME)) mkdirSync(HOME, { recursive: true });
+  if (!existsSync(SESSION_ID_DIR)) mkdirSync(SESSION_ID_DIR, { recursive: true });
 }
 
 function pidAlive(): boolean {
@@ -94,9 +98,10 @@ function startServer(quiet = false): boolean {
 }
 
 function stopServer(quiet = false) {
-  if (!existsSync(PID_FILE)) { console.log("Not running."); return; }
+  if (!existsSync(PID_FILE)) { if (!quiet) console.log("Not running."); return; }
+  teardownHooks(true, quiet);
   try {
-    process.kill(parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10), "SIGTERM");
+    process.kill(parseInt(readFileSync(PID_FILE, "utf-8").trim().split("|")[0], 10), "SIGTERM");
     if (!quiet) console.log("Stopped.");
   } catch { /* */ }
   try { unlinkSync(PID_FILE); } catch { /* */ }
@@ -126,13 +131,67 @@ async function waitForReady(attempts = 30): Promise<boolean> {
   return false;
 }
 
+async function ensureServerRunning(quiet = false): Promise<boolean> {
+  ensureDir();
+  if (await waitForReady(1)) return true;
+  if (pidAlive()) {
+    // A live PID without a reachable API is not useful for the app. Restart it
+    // so opening SessionBar consistently brings up the service.
+    stopServer(true);
+    await delay(300);
+  }
+  if (!startServer(quiet)) return false;
+  return waitForReady();
+}
+
+// Hook registration belongs to an open SessionBar app, not to the relay
+// itself. Service-only commands can therefore start or inspect the relay
+// without adding work to every agent harness invocation.
+async function ensureAppRunning(quiet = false): Promise<boolean> {
+  const ready = await ensureServerRunning(quiet);
+  if (ready) await injectHooksOnServerReady(true);
+  return ready;
+}
+
+function isBunRuntime(): boolean {
+  return !!(process.versions as Record<string, string | undefined>).bun;
+}
+
+function bunMonitorArgs(): string[] {
+  if (cmd === "monitor" || cmd === "watch") return args;
+  return ["monitor", ...args.filter(arg => arg.startsWith("--"))];
+}
+
+async function relaunchMonitorWithBun(): Promise<boolean> {
+  if (isBunRuntime() || process.env.SESSIONBAR_BUN_REEXEC === "1") return false;
+  return new Promise((resolve, reject) => {
+    const proc = spawn("bun", [fileURLToPath(import.meta.url), ...bunMonitorArgs()], {
+      stdio: "inherit",
+      env: { ...process.env, SESSIONBAR_BUN_REEXEC: "1" },
+    });
+    proc.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") resolve(false);
+      else reject(err);
+    });
+    proc.on("exit", (code) => {
+      process.exitCode = code ?? 0;
+      resolve(true);
+    });
+  });
+}
+
+function isOpenTuiRuntimeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("OpenTUI native FFI is not available") || message.includes("Failed to initialize OpenTUI render library");
+}
+
 async function openWebDashboard() {
   if (!useWeb) {
     useWeb = true;
     if (pidAlive()) stopServer(true);
     await delay(300);
     startServer();
-    await waitForReady();
+    if (await waitForReady()) await injectHooksOnServerReady(true);
   }
   spawn("open", [API_BASE], { detached: true, stdio: "ignore" }).unref();
 }
@@ -216,6 +275,8 @@ function typeIcon(t: string): string {
     "Gemini CLI": "◇",
     "Codex": "▷",
     "Copilot": "◎",
+    "OpenCode": "□",
+    "Pi": "π",
     "Kimi CLI": "❖",
     "Qwen CLI": "⬡",
     "DeepSeek CLI": "◆",
@@ -238,7 +299,7 @@ function extractProject(s: any): string {
   const sep = sid.indexOf("__");
   if (sep !== -1) return sid.slice(sep + 2);
   // Legacy format: "{type}-{project}-{pid}-{random}"
-  const cleaned = sid.replace(/^(claude|gemini|codex|copilot|kimi|qwen|deepseek|windsurf|cursor)-/, "");
+  const cleaned = sid.replace(/^(claude|gemini|codex|copilot|opencode|pi|kimi|qwen|deepseek|windsurf|cursor)-/, "");
   const parsed = cleaned.replace(/-\d+-\d+$/, "");
   // If parsed is a UUID (contains only hex + dashes), project is unknown
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(parsed)) {
@@ -247,8 +308,24 @@ function extractProject(s: any): string {
   return parsed || sid;
 }
 
+function pathTail(path: string): string {
+  const parts = path.replace(/\/+$/, "").split("/").filter(Boolean);
+  return parts.at(-1) || path;
+}
+
+function rawProjectPath(s: any): string {
+  return typeof s.project_path === "string" ? s.project_path.trim() : "";
+}
+
+function compactUserPath(path: string): string {
+  const clean = path.replace(/\/+$/, "") || path;
+  const home = homedir().replace(/\/+$/, "");
+  return clean === home ? "~" : clean.startsWith(`${home}/`) ? `~${clean.slice(home.length)}` : clean;
+}
+
 function projectKey(s: any): string {
-  return s.project_path || s.project || extractProject(s);
+  const path = rawProjectPath(s);
+  return path ? `path:${compactUserPath(path)}` : `name:${projectLabel(s)}`;
 }
 
 function projectLabel(s: any): string {
@@ -257,6 +334,37 @@ function projectLabel(s: any): string {
 
 function projectPathLabel(s: any): string {
   return s.project_path || projectLabel(s);
+}
+
+function uniqueProjectPathsByName(sessions: any[]): Map<string, string> {
+  const paths = new Map<string, Set<string>>();
+  for (const s of sessions) {
+    const path = rawProjectPath(s);
+    if (!path) continue;
+    const name = s.project || pathTail(path);
+    if (!paths.has(name)) paths.set(name, new Set());
+    paths.get(name)!.add(compactUserPath(path));
+  }
+  const unique = new Map<string, string>();
+  for (const [name, values] of paths.entries()) {
+    if (values.size === 1) unique.set(name, [...values][0]!);
+  }
+  return unique;
+}
+
+function projectGroupKey(s: any, uniquePaths: Map<string, string>): string {
+  const path = rawProjectPath(s);
+  if (path) return `path:${compactUserPath(path)}`;
+  const name = projectLabel(s);
+  const inferred = uniquePaths.get(name);
+  return inferred ? `path:${inferred}` : `name:${name}`;
+}
+
+function projectPathSummary(sessions: any[]): string {
+  if (sessions.length === 0) return "unknown";
+  const paths = [...new Set(sessions.map(rawProjectPath).filter(Boolean).map(compactUserPath))];
+  if (paths.length === 0) return projectPathLabel(sessions[0]);
+  return paths.length === 1 ? paths[0]! : `${paths[0]} +${paths.length - 1}`;
 }
 
 function statusStyle(status: string) {
@@ -320,7 +428,7 @@ function rawSessionId(s: any): string {
 }
 
 function sessionShortId(s: any, max = 8): string {
-  const cleaned = rawSessionId(s).replace(/^(claude|codex|gemini|copilot|opencode|kimi|qwen|deepseek|windsurf|cursor)-/i, "");
+  const cleaned = rawSessionId(s).replace(/^(claude|codex|gemini|copilot|opencode|pi|kimi|qwen|deepseek|windsurf|cursor)-/i, "");
   const scoped = /-([0-9a-f]{8})$/i.exec(cleaned);
   if (scoped) {
     if (max <= 12) return scoped[1].slice(0, max);
@@ -430,7 +538,7 @@ function projectTableRow(
   const c = projectTableLayout(w);
   const sample = sessions[0];
   const marker = key === focusKey ? `${_BL}●${_D}` : key === cursorKey ? `${_BL}>${_D}` : " ";
-  const row = `${cell(marker, c.marker)}${cell(projectLabel(sample), c.project)} ${cell(String(sessions.length), c.sessions)} ${cell(agentIcons(sessions, c.agents), c.agents)} ${cell(inlineStatus(sessions), c.status)} ${cell(displayPath(projectPathLabel(sample), c.path), c.path)} ${rightCell(`${_K}${age(latestTimestamp(sessions))}${_D}`, c.age)}`;
+  const row = `${cell(marker, c.marker)}${cell(projectLabel(sample), c.project)} ${cell(String(sessions.length), c.sessions)} ${cell(agentIcons(sessions, c.agents), c.agents)} ${cell(inlineStatus(sessions), c.status)} ${cell(displayPath(projectPathSummary(sessions), c.path), c.path)} ${rightCell(`${_K}${age(latestTimestamp(sessions))}${_D}`, c.age)}`;
   return panelRow(key === cursorKey ? `${_B}${row}${_D}` : row, w);
 }
 
@@ -491,7 +599,7 @@ function renderProjectDetailsLines(
 
   return [
     `${_B}PROJECT${_D} ${projectLabel(sample)}`,
-    `${_K}path${_D} ${displayPath(projectPathLabel(sample), Math.max(8, w - 8))}`,
+    `${_K}path${_D} ${displayPath(projectPathSummary(scopeSessions), Math.max(8, w - 8))}`,
     `${_K}sessions${_D} ${stats.total}  ${_K}agents${_D} ${agentIcons(scopeSessions, Math.max(8, w - 22))}`,
     `${_K}status${_D} ${inlineStatus(scopeSessions)}`,
     `${_K}health${_D} ${health.color}${health.icon} ${String(health.score).padStart(3)}${_D} ${health.label}`,
@@ -635,8 +743,9 @@ const PULSE = (i: number) => animateTui ? PULSE_FRAMES[i % PULSE_FRAMES.length] 
 
 function groupByProject(sessions: any[]): Map<string, any[]> {
   const groups = new Map<string, any[]>();
+  const uniquePaths = uniqueProjectPathsByName(sessions);
   for (const s of sessions) {
-    const proj = projectKey(s);
+    const proj = projectGroupKey(s, uniquePaths);
     if (!groups.has(proj)) groups.set(proj, []);
     groups.get(proj)!.push(s);
   }
@@ -1035,12 +1144,101 @@ function selectionIndex(filtered: any[], selectedId: string | null, fallbackIdx:
   return Math.max(0, Math.min(fallbackIdx, filtered.length - 1));
 }
 
+// ── SSE stream reader ──
+
+async function startSSE(): Promise<ReadableStreamDefaultReader<string> | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/sessions/stream`);
+    if (!resp.ok || !resp.body) return null;
+    const reader = resp.body
+      .pipeThrough(new TextDecoderStream())
+      .getReader();
+    return reader;
+  } catch { return null; }
+}
+
+async function readSSE(
+  reader: ReadableStreamDefaultReader<string>,
+  timeoutMs = 30000,
+): Promise<any[] | "timeout" | "closed"> {
+  let buffer = "";
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let result: ReadableStreamReadResult<string>;
+    try {
+      result = await reader.read();
+    } catch {
+      return "closed";
+    }
+    if (result.done) return "closed";
+    buffer += result.value;
+    // Extract complete SSE events (delimited by \n\n)
+    while (true) {
+      const idx = buffer.indexOf("\n\n");
+      if (idx === -1) break;
+      const event = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const dataLine = event.split("\n").find((l: string) => l.startsWith("data: "));
+      if (dataLine) {
+        try {
+          return JSON.parse(dataLine.slice(6));
+        } catch { /* skip malformed event, continue parsing buffer */ }
+      }
+    }
+  }
+  return "timeout";
+}
+
 async function watch() {
   if (!process.stdout.isTTY) {
     const result = await fetchSessions();
     render(result.sessions, 0, result.error);
     return;
   }
+
+  if (await relaunchMonitorWithBun()) return;
+
+  // SSE-aware fetch wrapper: toggles between REST polling and SSE push
+  let sse = false;
+  let sseReader: ReadableStreamDefaultReader<string> | null = null;
+
+  const sseToggleFetch: typeof fetchSessions = async () => {
+    if (!sse) return fetchSessions();
+    if (!sseReader) {
+      sseReader = await startSSE();
+      if (!sseReader) return { sessions: [], error: "SSE connect failed" };
+    }
+    const data = await readSSE(sseReader, tuiRenderMs);
+    if (data === "closed") { sseReader = null; sse = false; return { sessions: [], error: "SSE lost" }; }
+    if (data === "timeout") return { sessions: [], error: undefined };
+    return { sessions: data as any[], error: undefined };
+  };
+
+  const toggleSSE = (): boolean => {
+    sse = !sse;
+    if (!sse && sseReader) { try { sseReader.cancel(); } catch { /* */ } sseReader = null; }
+    return sse;
+  };
+
+  try {
+    await runOpenTuiMonitor({
+      fetchSessions: sseToggleFetch,
+      openWebDashboard,
+      renderMs: tuiRenderMs,
+      pollMs: tuiPollMs,
+      port: PORT,
+      apiHost: API_HOST,
+      stateDir: HOME,
+      animate: animateTui,
+      toggleSSE,
+      isSSE: () => sse,
+    });
+  } catch (error) {
+    if (!isOpenTuiRuntimeError(error)) throw error;
+    console.error("OpenTUI monitor requires Bun's native FFI runtime. Install Bun or run: bun dist/cli.js monitor");
+    process.exitCode = 1;
+  }
+  return;
 
   // Enter alternate screen, disable cursor
   process.stdout.write("\x1b[?1049h\x1b[?25l");
@@ -1340,17 +1538,17 @@ async function watch() {
 
     // Fetch if needed
     if (pendingFetch || now - lastFetch >= pollDelay || forceRefresh) {
-      try {
-        const result = await fetchSessions();
-        const newStats = computeStats(result.sessions);
-        if (newStats.fingerprint !== stats.fingerprint || forceRefresh) {
-          sessions = result.sessions;
-          stats = newStats;
-          errorMsg = result.error;
-        }
-        lastFetch = now;
-        pendingFetch = false;
-      } catch { /* keep old sessions on fetch error */ }
+        try {
+          const result = await fetchSessions();
+          const newStats = computeStats(result.sessions);
+          if (newStats.fingerprint !== stats.fingerprint || forceRefresh) {
+            sessions = result.sessions;
+            stats = newStats;
+            errorMsg = result.error;
+          }
+          lastFetch = now;
+          pendingFetch = false;
+        } catch { /* keep old sessions on fetch error */ }
     }
 
 	    // Clamp project/session selection independently.
@@ -1365,17 +1563,17 @@ async function watch() {
 	      selectedId = null;
 	      detailId = null;
 	    } else {
-	      const byProjectKey = projectCursorKey ? keys.indexOf(projectCursorKey) : -1;
+	      const byProjectKey = projectCursorKey ? keys.indexOf(projectCursorKey as string) : -1;
 	      projectIdx = byProjectKey === -1 ? Math.max(0, Math.min(projectIdx, keys.length - 1)) : byProjectKey;
 	      projectCursorKey = keys[projectIdx] || null;
-	      if (projectFocusKey && !groups.has(projectFocusKey)) {
+	      if (projectFocusKey && !groups.has(projectFocusKey as string)) {
 	        projectFocusKey = null;
 	        selectedIdx = -1;
 	        selectedId = null;
 	        detailId = null;
 	      }
 	      if (projectFocusKey) {
-	        const projectSessions = groups.get(projectFocusKey) || [];
+	        const projectSessions = groups.get(projectFocusKey as string) || [];
 	        selectedIdx = selectionIndex(projectSessions, selectedId, selectedIdx);
 	        selectedId = projectSessions[selectedIdx]?.session_id || null;
 	      } else {
@@ -1431,27 +1629,146 @@ async function watch() {
 
 async function setupHooks(global: boolean) {
   const reportPath = join(dirname(__dirname), "report.sh");
+  const targets = [
+    setupClaudeHooks(global, reportPath),
+    setupCodexHooks(global, reportPath),
+    setupGeminiHooks(global, reportPath),
+    setupCopilotHooks(global, reportPath),
+  ];
+  for (const target of targets) {
+    console.log(`${target.added > 0 ? "Installed" : "Already configured"} ${target.name} → ${target.path}`);
+  }
+}
+
+function teardownClaudeHooks(global: boolean): number {
+  const settingsPath = global
+    ? join(homedir(), ".claude", "settings.json")
+    : join(process.cwd(), ".claude", "settings.json");
+  const settings = readJsonFile(settingsPath);
+  if (!settings.hooks) return 0;
+  let removed = 0;
+  for (const event of Object.keys(settings.hooks)) {
+    const before = settings.hooks[event].length;
+    settings.hooks[event] = settings.hooks[event].filter((d: any) =>
+      !d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "claude"))
+    );
+    removed += before - settings.hooks[event].length;
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
+  if (removed > 0) writeJsonFile(settingsPath, settings);
+  return removed;
+}
+
+function teardownCodexHooks(global: boolean): number {
+  const hooksPath = global
+    ? join(homedir(), ".codex", "hooks.json")
+    : join(process.cwd(), ".codex", "hooks.json");
+  const config = readJsonFile(hooksPath);
+  if (!config.hooks) return 0;
+  let removed = 0;
+  for (const event of Object.keys(config.hooks)) {
+    const before = config.hooks[event].length;
+    config.hooks[event] = config.hooks[event].filter((d: any) =>
+      !d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "codex"))
+    );
+    removed += before - config.hooks[event].length;
+    if (config.hooks[event].length === 0) delete config.hooks[event];
+  }
+  if (removed > 0) writeJsonFile(hooksPath, config);
+  return removed;
+}
+
+function teardownGeminiHooks(global: boolean): number {
+  const settingsPath = global
+    ? join(homedir(), ".gemini", "settings.json")
+    : join(process.cwd(), ".gemini", "settings.json");
+  const settings = readJsonFile(settingsPath);
+  if (!settings.hooks) return 0;
+  let removed = 0;
+  for (const event of Object.keys(settings.hooks)) {
+    const before = settings.hooks[event].length;
+    settings.hooks[event] = settings.hooks[event].filter((d: any) =>
+      !d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "gemini"))
+    );
+    removed += before - settings.hooks[event].length;
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
+  if (removed > 0) writeJsonFile(settingsPath, settings);
+  return removed;
+}
+
+function teardownCopilotHooks(global: boolean): number {
+  const hooksPath = global
+    ? join(homedir(), ".copilot", "hooks", "agentbar.json")
+    : join(process.cwd(), ".github", "hooks", "agentbar.json");
+  const config = readJsonFile(hooksPath);
+  if (!config.hooks) return 0;
+  let removed = 0;
+  for (const event of Object.keys(config.hooks)) {
+    const before = config.hooks[event].length;
+    config.hooks[event] = config.hooks[event].filter((h: any) =>
+      !isSessionbarCommandFor(h.command || "", "copilot")
+    );
+    removed += before - config.hooks[event].length;
+    if (config.hooks[event].length === 0) delete config.hooks[event];
+  }
+  if (removed > 0) writeJsonFile(hooksPath, config);
+  return removed;
+}
+
+function teardownHooks(global: boolean, quiet = false) {
+  const removed = teardownClaudeHooks(global) + teardownCodexHooks(global) + teardownGeminiHooks(global) + teardownCopilotHooks(global);
+  if (removed > 0 && !quiet) console.log(`Removed ${removed} hook${removed === 1 ? "" : "s"}.`);
+}
+
+async function injectHooksOnServerReady(global: boolean) {
+  const reportPath = join(dirname(__dirname), "report.sh");
+  // Only inject Claude hooks — Codex/Gemini/Copilot managed via explicit setup
+  const result = setupClaudeHooks(global, reportPath);
+  if (result.added > 0) console.log(`Injected hooks → ${result.path}`);
+}
+
+type SetupResult = { name: string; path: string; added: number };
+
+function commandFor(agent: string, label: string, reportPath: string, status: string, task: string, hookEvent: string): string {
+  return `SESSIONBAR_AGENT=${agent} SESSIONBAR_SESSION_TYPE=${shellEscape(label)} SESSIONBAR_HOOK_EVENT=${shellEscape(hookEvent)} ${shellEscape(reportPath)} ${status} ${task} ${String(PORT)}`;
+}
+
+function isSessionbarCommandFor(command: string, agent: string): boolean {
+  return /(^|\/)report\.sh(\s|$)/.test(command || "") && new RegExp(`\\b(SESSIONBAR_AGENT|AGENTBAR_AGENT)=${agent}\\b`).test(command || "");
+}
+
+function readJsonFile(path: string): any {
+  try { return JSON.parse(readFileSync(path, "utf-8")); } catch { return {}; }
+}
+
+function writeJsonFile(path: string, value: any) {
+  const dir = dirname(path);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(path, JSON.stringify(value, null, 2));
+}
+
+function setupClaudeHooks(global: boolean, reportPath: string): SetupResult {
   const settingsPath = global
     ? join(homedir(), ".claude", "settings.json")
     : join(process.cwd(), ".claude", "settings.json");
 
-  let settings: any = {};
-  try { settings = JSON.parse(readFileSync(settingsPath, "utf-8")); } catch { /* new */ }
+  const settings = readJsonFile(settingsPath);
   if (!settings.hooks) settings.hooks = {};
 
   type HookDef = { matcher: string; hooks: Array<{ type: string; command: string }> };
   const hookDefs: Record<string, HookDef[]> = {
-    SessionStart: [{ matcher: "", hooks: [{ type: "command", command: shellEscape(reportPath) + " working 'Working' " + String(PORT) }] }],
-    PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: shellEscape(reportPath) + " working \"${CLAUDE_TOOL_NAME:-Working}\" " + String(PORT) }] }],
-    Stop: [{ matcher: "", hooks: [{ type: "command", command: shellEscape(reportPath) + " idle 'Ready' " + String(PORT) }] }],
-    SessionEnd: [{ matcher: "", hooks: [{ type: "command", command: shellEscape(reportPath) + " idle 'Session ended' " + String(PORT) }] }],
+    SessionStart: [{ matcher: "", hooks: [{ type: "command", command: commandFor("claude", "Claude Code", reportPath, "working", "'Working'", "SessionStart") }] }],
+    PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: commandFor("claude", "Claude Code", reportPath, "working", "\"${CLAUDE_TOOL_NAME:-Working}\"", "PreToolUse") }] }],
+    Stop: [{ matcher: "", hooks: [{ type: "command", command: commandFor("claude", "Claude Code", reportPath, "idle", "'Ready'", "Stop") }] }],
+    SessionEnd: [{ matcher: "", hooks: [{ type: "command", command: commandFor("claude", "Claude Code", reportPath, "idle", "'Session ended'", "SessionEnd") }] }],
   };
 
   let added = 0;
   for (const [event, defs] of Object.entries(hookDefs)) {
     if (!settings.hooks[event]) settings.hooks[event] = [];
     const already = settings.hooks[event].some((d: any) =>
-      d.hooks?.some?.((h: any) => /(^|\/)report\.sh(\s|$)/.test(h.command || ""))
+      d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "claude"))
     );
     if (!already) {
       settings.hooks[event].push(...(defs as any));
@@ -1459,10 +1776,98 @@ async function setupHooks(global: boolean) {
     }
   }
 
-  const dir = dirname(settingsPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-  console.log(`${added > 0 ? "Installed" : "Already configured"} → ${settingsPath}`);
+  writeJsonFile(settingsPath, settings);
+  return { name: "Claude Code", path: settingsPath, added };
+}
+
+function setupCodexHooks(global: boolean, reportPath: string): SetupResult {
+  const hooksPath = global
+    ? join(homedir(), ".codex", "hooks.json")
+    : join(process.cwd(), ".codex", "hooks.json");
+  const config = readJsonFile(hooksPath);
+  if (!config.hooks) config.hooks = {};
+
+  const hookDefs: Record<string, any[]> = {
+    SessionStart: [{ matcher: "", hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "working", "'Working'", "SessionStart") }] }],
+    PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "working", "\"${CODEX_TOOL_NAME:-Working}\"", "PreToolUse") }] }],
+    PermissionRequest: [{ matcher: "", hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "blocked", "'Waiting for permission'", "PermissionRequest") }] }],
+    Stop: [{ hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "idle", "'Ready'", "Stop") }] }],
+  };
+
+  let added = 0;
+  for (const [event, defs] of Object.entries(hookDefs)) {
+    if (!config.hooks[event]) config.hooks[event] = [];
+    const already = config.hooks[event].some((d: any) =>
+      d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "codex"))
+    );
+    if (!already) {
+      config.hooks[event].push(...defs);
+      added += defs.length;
+    }
+  }
+
+  writeJsonFile(hooksPath, config);
+  return { name: "Codex", path: hooksPath, added };
+}
+
+function setupGeminiHooks(global: boolean, reportPath: string): SetupResult {
+  const settingsPath = global
+    ? join(homedir(), ".gemini", "settings.json")
+    : join(process.cwd(), ".gemini", "settings.json");
+  const settings = readJsonFile(settingsPath);
+  if (!settings.hooks) settings.hooks = {};
+
+  const hookDefs: Record<string, any[]> = {
+    BeforeModel: [{ matcher: ".*", hooks: [{ type: "command", command: commandFor("gemini", "Gemini CLI", reportPath, "working", "'Thinking'", "BeforeModel") }] }],
+    BeforeTool: [{ matcher: ".*", hooks: [{ type: "command", command: commandFor("gemini", "Gemini CLI", reportPath, "working", "'Using tool'", "BeforeTool") }] }],
+    AfterTool: [{ matcher: ".*", hooks: [{ type: "command", command: commandFor("gemini", "Gemini CLI", reportPath, "working", "'Analyzing tool results'", "AfterTool") }] }],
+    SessionEnd: [{ matcher: ".*", hooks: [{ type: "command", command: commandFor("gemini", "Gemini CLI", reportPath, "idle", "'Session ended'", "SessionEnd") }] }],
+  };
+
+  let added = 0;
+  for (const [event, defs] of Object.entries(hookDefs)) {
+    if (!settings.hooks[event]) settings.hooks[event] = [];
+    const already = settings.hooks[event].some((d: any) =>
+      d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "gemini"))
+    );
+    if (!already) {
+      settings.hooks[event].push(...defs);
+      added += defs.length;
+    }
+  }
+
+  writeJsonFile(settingsPath, settings);
+  return { name: "Gemini CLI", path: settingsPath, added };
+}
+
+function setupCopilotHooks(global: boolean, reportPath: string): SetupResult {
+  const hooksPath = global
+    ? join(homedir(), ".copilot", "hooks", "agentbar.json")
+    : join(process.cwd(), ".github", "hooks", "agentbar.json");
+  const config = readJsonFile(hooksPath);
+  config.version = config.version || 1;
+  if (!config.hooks) config.hooks = {};
+
+  const hookDefs: Record<string, any[]> = {
+    SessionStart: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "working", "'Working'", "sessionStart") }],
+    PreToolUse: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "working", "\"${COPILOT_TOOL_NAME:-Working}\"", "preToolUse") }],
+    PermissionRequest: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "blocked", "'Waiting for permission'", "PermissionRequest") }],
+    AgentStop: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "idle", "'Ready'", "AgentStop") }],
+    SessionEnd: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "idle", "'Session ended'", "sessionEnd") }],
+  };
+
+  let added = 0;
+  for (const [event, defs] of Object.entries(hookDefs)) {
+    if (!config.hooks[event]) config.hooks[event] = [];
+    const already = config.hooks[event].some((h: any) => isSessionbarCommandFor(h.command || "", "copilot"));
+    if (!already) {
+      config.hooks[event].push(...defs);
+      added += defs.length;
+    }
+  }
+
+  writeJsonFile(hooksPath, config);
+  return { name: "Copilot", path: hooksPath, added };
 }
 
 async function ask(q: string): Promise<string> {
@@ -1471,13 +1876,17 @@ async function ask(q: string): Promise<string> {
 }
 
 async function setup() {
-  const isGlobal = args.includes("--global") ? true : args.includes("--project") ? false : null;
+  const isGlobal = args.includes("--global") || args.includes("--focus-global")
+    ? true
+    : args.includes("--project") || args.includes("--local") || args.includes("--focus-local")
+      ? false
+      : null;
   if (isGlobal !== null) {
     await setupHooks(isGlobal);
     return;
   }
-  console.log("Install SessionBar hooks for Claude Code.\nSessionBar can also receive Codex/OpenCode/etc. reports through report.sh.\n");
-  const ans = await ask("[g] Global (~/.claude/settings.json)  |  [p] Project (.claude/settings.json)\n> ");
+  console.log("SessionBar service starts automatically when the app opens.\nSetup configures supported local agent hooks: Claude Code, Codex, Gemini CLI, and Copilot.\n");
+  const ans = await ask("[l] Local focus (this project agent config files)  |  [g] Global focus (home agent config files)\n> ");
   const global = ans.toLowerCase().startsWith("g");
   await setupHooks(global);
 }
@@ -1555,10 +1964,9 @@ function logoLines(w: number): string[] {
 }
 
 async function menu() {
-  // Auto-start server if not running — scan for existing sessions on startup
-  if (!(await waitForReady(1)) && !pidAlive()) {
-    if (startServer(true)) await waitForReady();
-  }
+  // Opening SessionBar should bring the local service up. Setup only controls
+  // hook focus, not whether the background service exists.
+  await ensureAppRunning(true);
 
   let menuRunning = true;
   let menuSessions: any[] = [];
@@ -1610,6 +2018,7 @@ async function menu() {
     menuRunning = false;
     setMenuRaw(false);
     setMenuScreen(false);
+    teardownHooks(true, true);
     if (!menuScreen) process.stdout.write("\x1b[?25h"); // ensure cursor visible
     process.exit(0);
   };
@@ -1618,10 +2027,9 @@ async function menu() {
 
   const menuActions = () => [
     { key: "1", label: "monitor", desc: "Open live TUI dashboard", enabled: true },
-    { key: "2", label: "setup", desc: "Install or update hooks", enabled: true },
+    { key: "2", label: "setup", desc: "Choose local/global hook focus", enabled: true },
     { key: "3", label: "status", desc: "Print current sessions", enabled: true },
     { key: "w", label: "web", desc: "Open browser dashboard", enabled: true },
-    { key: "4", label: "stop", desc: menuServerRunning ? "Stop background server" : "Server is not running", enabled: menuServerRunning },
   ];
 
   const renderLanding = async () => {
@@ -1677,7 +2085,7 @@ async function menu() {
         const style = S[s.status as keyof typeof S] || S.idle;
         const sd = `${style.c}${style.icon}${_D}`;
         const ai = `${typeIcon(s.session_type || "?")} ${agentName(s.session_type || "?", 12)}`;
-        const line = `${sd} ${ai.padEnd(14)} ${projectLabel(s).padEnd(16)} ${statusShort(s.status).padEnd(5)} ${age(s.timestamp || Date.now()).padStart(4)}  ${s.task_name || ""}`;
+        const line = `${sd} ${ai.padEnd(14)} ${projectLabel(s).padEnd(16)} ${statusShort(s.status).padEnd(5)} ${age(s.timestamp || Date.now()).padStart(4)}`;
         out(panelRow(line, w));
       }
       if (menuSessions.length > 4) out(panelRow(`${_K}+${menuSessions.length - 4} more sessions${_D}`, w));
@@ -1723,7 +2131,7 @@ async function menu() {
       else if (ch === "\r" || ch === "\n") keys.push("enter");
       else if (ch === "k" || ch === "K") keys.push("up");
       else if (ch === "j" || ch === "J") keys.push("down");
-      else if ("1234qrRwW".includes(ch)) keys.push(ch.toLowerCase());
+      else if ("123qrRwW".includes(ch)) keys.push(ch.toLowerCase());
     }
     return keys;
   };
@@ -1752,8 +2160,9 @@ async function menu() {
     }
     if (key === "2") {
       suspendLandingForAction();
-      console.log("\nInstall Claude Code hooks. Other agents can call report.sh with SESSIONBAR_AGENT.\n");
-      const a = await ask("[g] Global  |  [p] Project\n> ");
+      console.log("\nSessionBar service starts automatically when the app opens.");
+      console.log("Setup only chooses which Claude Code sessions report into it.\n");
+      const a = await ask("[l] Local focus  |  [g] Global focus\n> ");
       await setupHooks(a.toLowerCase().startsWith("g"));
       await ask("\nPress enter...");
       needsRender = true;
@@ -1778,22 +2187,12 @@ async function menu() {
         needsRender = true;
         return;
       }
+      await injectHooksOnServerReady(true);
       console.log(`\nDashboard: ${API_BASE}`);
       spawn("open", [API_BASE], { detached: true, stdio: "ignore" }).unref();
       await ask("\nPress enter...");
       needsRender = true;
       return;
-    }
-    if (key === "4") {
-      suspendLandingForAction();
-      if (menuServerRunning) {
-        stopServer();
-        await new Promise(r => setTimeout(r, 500));
-      } else {
-        console.log(`\n${_K}Server is not running.${_D}`);
-        await ask("\nPress enter...");
-      }
-      needsRender = true;
     }
   };
 
@@ -1824,7 +2223,7 @@ async function menu() {
       needsRender = true;
       continue;
     }
-    if (["1", "2", "3", "4", "w", "web"].includes(c)) {
+    if (["1", "2", "3", "w", "web"].includes(c)) {
       await runAction(c);
       continue;
     }
@@ -1833,6 +2232,7 @@ async function menu() {
   }
   setMenuRaw(false);
   setMenuScreen(false);
+  teardownHooks(true, true);
 }
 
 async function status() {
@@ -1861,6 +2261,26 @@ async function status() {
   }
 }
 
+function pruneMaxAgeMs(): number {
+  const explicit = args.find(arg => arg.startsWith("--max-age-ms="))?.slice("--max-age-ms=".length);
+  const raw = explicit || process.env.SESSIONBAR_PRUNE_MS || "300000";
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 300_000;
+}
+
+function pruneMarkers() {
+  ensureDir();
+  if (pidAlive()) {
+    stopServer(true);
+  }
+  const maxAgeMs = pruneMaxAgeMs();
+  const result = pruneSessionMarkerFiles(SESSION_ID_DIR, { maxAgeMs });
+  console.log(`Pruned ${result.removed.length} stale session marker${result.removed.length === 1 ? "" : "s"} older than ${Math.round(maxAgeMs / 1000)}s.`);
+  for (const item of result.removed) {
+    console.log(`- ${item.file}`);
+  }
+}
+
 async function main() {
   switch (cmd) {
     case "web":
@@ -1875,15 +2295,14 @@ async function main() {
         process.exitCode = 1;
         break;
       }
+      await injectHooksOnServerReady(true);
       console.log(`SessionBar server started on :${PORT}`);
       console.log(`Dashboard: ${API_BASE}`);
       spawn("open", [API_BASE], { detached: true, stdio: "ignore" }).unref();
       break;
     case "start":
-      ensureDir();
       if (await waitForReady(1)) { console.log("Already running."); break; }
-      if (pidAlive()) { console.log("Already running."); break; }
-      if (!startServer() || !(await waitForReady())) {
+      if (!await ensureServerRunning()) {
         console.error("Server failed to start.");
         process.exitCode = 1;
         break;
@@ -1894,6 +2313,9 @@ async function main() {
     case "stop":
       stopServer();
       break;
+    case "prune":
+      pruneMarkers();
+      break;
     case "setup":
       await setup();
       break;
@@ -1902,15 +2324,13 @@ async function main() {
       break;
     case "watch":
     case "monitor":
-      ensureDir();
-      if (!pidAlive()) {
-        if (!startServer() || !(await waitForReady())) {
-          console.error("Server failed to start.");
-          process.exitCode = 1;
-          break;
-        }
+      if (!await ensureAppRunning()) {
+        console.error("Server failed to start.");
+        process.exitCode = 1;
+        break;
       }
       await watch();
+      teardownHooks(true, true);
       break;
     default:
       await menu();

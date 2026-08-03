@@ -14,9 +14,13 @@
   ],
   "scripts": {
     "build": "tsc",
-    "start": "node dist/cli.js"
+    "prestart": "npm run build",
+    "start": "node dist/cli.js",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@opentui/core": "^0.4.1",
     "cors": "^2.8.5",
     "express": "^5.0.0"
   },
@@ -26,6 +30,13 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   },
-  "keywords": ["cli", "terminal", "tui", "ai", "monitor", "dashboard"],
+  "keywords": [
+    "cli",
+    "terminal",
+    "tui",
+    "ai",
+    "monitor",
+    "dashboard"
+  ],
   "license": "MIT"
 }

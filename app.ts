@@ -26,7 +26,7 @@ function extractProject(s: SessionPayload): string {
   const sid = s.session_id || "";
   const sep = sid.indexOf("__");
   if (sep !== -1) return sid.slice(sep + 2);
-  const cleaned = sid.replace(/^(claude|gemini|codex|copilot|kimi|qwen|deepseek|windsurf|cursor)-/, "");
+  const cleaned = sid.replace(/^(claude|gemini|codex|copilot|opencode|pi|kimi|qwen|deepseek|windsurf|cursor)-/, "");
   const parsed = cleaned.replace(/-\d+-\d+$/, "");
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(parsed)) {
     return "unknown";
@@ -39,6 +39,8 @@ const TYPE_ICONS: Record<string, string> = {
   "Gemini CLI": "◇",
   Codex: "▷",
   Copilot: "◎",
+  OpenCode: "□",
+  Pi: "π",
   "Kimi CLI": "❖",
   "Qwen CLI": "⬡",
   "DeepSeek CLI": "◆",

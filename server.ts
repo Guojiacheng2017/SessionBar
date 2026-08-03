@@ -1,12 +1,16 @@
 import express from "express";
 import cors from "cors";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, Dirent } from "fs";
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, Dirent } from "fs";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
-import { createHash } from "crypto";
 import { SessionPayload } from "./types.js";
+import { mergeSessionPayload, validateSessionPayload } from "./sessionPayload.js";
 import { syncToICloud } from "./icloud.js";
+import { removeSessionMarkerFiles, scopedSessionId } from "./sessionMarkers.js";
+import { mergeCodexDiscovery } from "./codexSessionMerge.js";
+import { pollProvider, providerConfigsFromEnv } from "./providerAdapters.js";
+import { applyProviderPollResults } from "./providerMonitor.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || "8989", 10);
@@ -48,6 +52,11 @@ const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), ".codex");
 const CODEX_SESSION_DIR = join(CODEX_HOME, "sessions");
 const CODEX_DISCOVERY_WINDOW_MS = parseInt(process.env.SESSIONBAR_CODEX_DISCOVERY_MS || String(24 * 60 * 60 * 1000), 10);
 const CODEX_ACTIVE_MS = parseInt(process.env.SESSIONBAR_CODEX_ACTIVE_MS || String(10 * 60 * 1000), 10);
+const ACTIVITY_TAIL_BYTES = parseInt(process.env.SESSIONBAR_ACTIVITY_TAIL_BYTES || String(192 * 1024), 10);
+const PROVIDER_POLL_ENABLED = process.env.SESSIONBAR_PROVIDER_POLL !== "0";
+const PROVIDER_POLL_MS = Math.max(30_000, parseInt(process.env.SESSIONBAR_PROVIDER_POLL_MS || String(5 * 60 * 1000), 10));
+const providerConfigs = PROVIDER_POLL_ENABLED ? providerConfigsFromEnv(process.env) : [];
+let providerPollInterval: NodeJS.Timeout | undefined;
 
 if (!existsSync(HOME)) mkdirSync(HOME, { recursive: true });
 if (!existsSync(SESSION_ID_DIR)) mkdirSync(SESSION_ID_DIR, { recursive: true });
@@ -55,11 +64,56 @@ if (!existsSync(SESSION_ID_DIR)) mkdirSync(SESSION_ID_DIR, { recursive: true });
 function cleanup() {
   clearInterval(heartbeatInterval);
   clearInterval(purgeInterval);
+  if (providerPollInterval) clearInterval(providerPollInterval);
+  removeClaudeHooks();
   try { unlinkSync(PID_FILE); } catch { /* ignore */ }
+}
+
+function removeClaudeHooks() {
+  const settingsPath = join(homedir(), ".claude", "settings.json");
+  let settings: any;
+  try {
+    settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+  } catch { return; }
+  if (!settings.hooks) return;
+
+  let changed = false;
+  for (const event of Object.keys(settings.hooks)) {
+    const before = settings.hooks[event].length;
+    settings.hooks[event] = settings.hooks[event].filter((d: any) => {
+      return !d.hooks?.some?.((h: any) => {
+        const cmd = h.command || "";
+        return /(^|\/)report\.sh(\s|$)/.test(cmd) && /\bSESSIONBAR_AGENT=claude\b/.test(cmd);
+      });
+    });
+    if (settings.hooks[event].length !== before) changed = true;
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
+
+  if (changed) {
+    try {
+      writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+      console.log("[cleanup] removed Claude hooks");
+    } catch { /* ignore */ }
+  }
 }
 
 const sessions: Record<string, SessionPayload> = {};
 const sseClients = new Set<express.Response>();
+
+async function refreshProviderSignals() {
+  if (providerConfigs.length === 0) return;
+  const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
+  if (!applyProviderPollResults(sessions, results)) return;
+  broadcastSSE();
+  if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
+}
+
+function startProviderPolling() {
+  if (providerConfigs.length === 0) return;
+  void refreshProviderSignals();
+  providerPollInterval = setInterval(() => void refreshProviderSignals(), PROVIDER_POLL_MS);
+}
 
 function sorted(): SessionPayload[] {
   refreshCodexSessions();
@@ -76,34 +130,6 @@ function broadcastSSE() {
       sseClients.delete(c);
     }
   }
-}
-
-function validatePayload(body: any): body is SessionPayload {
-  if (!body || typeof body !== "object") return false;
-  if (typeof body.session_id !== "string" || !body.session_id) return false;
-  if (typeof body.session_type !== "string" || !body.session_type) return false;
-  if (!["idle", "working", "blocked", "error"].includes(body.status)) return false;
-  if (body.progress !== undefined && (typeof body.progress !== "number" || body.progress < 0 || body.progress > 1)) return false;
-  if (body.context_percent !== undefined && (typeof body.context_percent !== "number" || body.context_percent < 0 || body.context_percent > 100)) return false;
-  if (body.tokens !== undefined && (typeof body.tokens !== "number" || body.tokens < 0)) return false;
-  if (body.turns !== undefined && (typeof body.turns !== "number" || body.turns < 0)) return false;
-  if (typeof body.task_name !== "string" || body.task_name.length > 500) return false;
-  if (body.project !== undefined && typeof body.project !== "string") return false;
-  if (body.project_path !== undefined && typeof body.project_path !== "string") return false;
-  return true;
-}
-
-function markerScopeSuffix(file: string): string {
-  const scopeKey = file.replace(/^sessionbar-id-/, "");
-  return createHash("md5").update(scopeKey).digest("hex").slice(0, 8);
-}
-
-function scopedSessionId(sid: string, file: string): string {
-  const suffix = markerScopeSuffix(file);
-  const sep = sid.indexOf("__");
-  const raw = sep === -1 ? sid : sid.slice(0, sep);
-  const project = sep === -1 ? "" : sid.slice(sep);
-  return raw.endsWith(`-${suffix}`) ? sid : `${raw}-${suffix}${project}`;
 }
 
 function hasScopeSuffix(sid: string): boolean {
@@ -199,6 +225,111 @@ function isCodexTopLevel(meta: any): boolean {
   return true;
 }
 
+function compactLine(value: unknown, max = 120): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 3))}...`;
+}
+
+function readTail(path: string, maxBytes: number): string {
+  let fd: number | undefined;
+  try {
+    const stat = statSync(path);
+    const size = Math.min(stat.size, Math.max(0, maxBytes));
+    const start = Math.max(0, stat.size - size);
+    const buffer = Buffer.alloc(size);
+    fd = openSync(path, "r");
+    readSync(fd, buffer, 0, size, start);
+    const text = buffer.toString("utf-8");
+    return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
+function textFromContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part: any) =>
+    part?.text || part?.input_text || part?.output_text || ""
+  ).filter(Boolean).join(" ");
+}
+
+function commandLabel(name: string, args: unknown): string {
+  if (name === "exec_command") {
+    try {
+      const parsed = typeof args === "string" ? JSON.parse(args) : args;
+      if (parsed && typeof parsed.cmd === "string" && parsed.cmd.trim()) {
+        return compactLine(parsed.cmd, 96);
+      }
+    } catch { /* fall through */ }
+  }
+  if (name === "write_stdin") return "terminal input";
+  if (name === "apply_patch") return "apply patch";
+  return name.replace(/^functions\./, "").replace(/_/g, " ");
+}
+
+function codexActivityFromJsonl(path: string, isActive: boolean): { taskName: string; tail: string[] } {
+  if (!isActive) return { taskName: "Ready", tail: [] };
+
+  const lines = readTail(path, ACTIVITY_TAIL_BYTES).split("\n").filter(Boolean);
+  const pending = new Map<string, string>();
+  const calls = new Map<string, string>();
+  const tail: string[] = [];
+  const pushTail = (line: string) => {
+    const clean = compactLine(line, 160);
+    if (!clean || tail.at(-1) === clean) return;
+    tail.push(clean);
+  };
+
+  for (const line of lines) {
+    let item: any;
+    try { item = JSON.parse(line); } catch { continue; }
+    const payload = item?.payload || {};
+
+    if (item.type === "response_item" && payload.type === "function_call") {
+      const label = commandLabel(payload.name || "tool", payload.arguments);
+      if (payload.call_id) {
+        pending.set(payload.call_id, label);
+        calls.set(payload.call_id, label);
+      }
+      pushTail(`tool: ${label}`);
+    } else if (item.type === "response_item" && payload.type === "custom_tool_call") {
+      const label = commandLabel(payload.name || "tool", payload.input);
+      if (payload.call_id) {
+        pending.set(payload.call_id, label);
+        calls.set(payload.call_id, label);
+      }
+      pushTail(`tool: ${label}`);
+    } else if (item.type === "response_item" && payload.type === "function_call_output") {
+      if (payload.call_id) pending.delete(payload.call_id);
+      const label = payload.call_id ? calls.get(payload.call_id) : undefined;
+      if (label) pushTail(`done: ${label}`);
+    } else if (item.type === "response_item" && payload.type === "custom_tool_call_output") {
+      if (payload.call_id) pending.delete(payload.call_id);
+      const label = payload.call_id ? calls.get(payload.call_id) : undefined;
+      if (label) pushTail(`done: ${label}`);
+    } else if (item.type === "event_msg" && payload.type === "agent_message") {
+      const message = compactLine(payload.message, 120);
+      if (message) pushTail(`agent: ${message}`);
+    } else if (item.type === "event_msg" && payload.type === "user_message") {
+      const message = compactLine(payload.message, 120);
+      if (message) pushTail(`user: ${message}`);
+    } else if (item.type === "response_item" && payload.type === "message") {
+      const message = compactLine(textFromContent(payload.content), 120);
+      if (message) pushTail(`agent: ${message}`);
+    }
+  }
+
+  const pendingLabel = [...pending.values()].at(-1);
+  const recent = tail.slice(-5);
+  if (pendingLabel) return { taskName: `running: ${pendingLabel}`, tail: recent };
+  return { taskName: recent.at(-1) || "Active Codex session", tail: recent };
+}
+
 function refreshCodexSessions() {
   const now = Date.now();
   const files: Array<{ path: string; mtimeMs: number }> = [];
@@ -211,7 +342,7 @@ function refreshCodexSessions() {
     } catch { /* skip unreadable files */ }
   }
 
-  const discovered = new Set<string>();
+  const discoveries: SessionPayload[] = [];
   for (const file of files.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 80)) {
     const first = readFirstJsonLine(file.path);
     const meta = first?.type === "session_meta" ? first.payload : null;
@@ -219,24 +350,22 @@ function refreshCodexSessions() {
 
     const project = basename(meta.cwd);
     const sid = `codex-${meta.id}__${project}`;
-    discovered.add(sid);
     const isActive = now - file.mtimeMs <= CODEX_ACTIVE_MS;
-    sessions[sid] = {
+    const activity = codexActivityFromJsonl(file.path, isActive);
+    discoveries.push({
       session_id: sid,
       session_type: "Codex",
+      source: "codex_jsonl",
       status: isActive ? "working" : "idle",
-      task_name: isActive ? "Active Codex session" : "Ready",
+      task_name: activity.taskName,
+      activity_tail: activity.tail,
       timestamp: file.mtimeMs,
       project,
       project_path: meta.cwd,
-    };
+    });
   }
 
-  for (const id of Object.keys(sessions)) {
-    if (/^codex-[0-9a-f-]{36}__/.test(id) && !discovered.has(id)) {
-      delete sessions[id];
-    }
-  }
+  mergeCodexDiscovery(sessions, discoveries);
 }
 
 // Recover sessions that were already running before the server started.
@@ -277,6 +406,7 @@ function recoverSessions() {
         sessions[sid] = {
           session_id: sid,
           session_type: typeMap[type] || type,
+          source: "hook",
           status: "idle",
           task_name: "Ready",
           timestamp: Date.now(),
@@ -310,12 +440,14 @@ const purgeInterval = setInterval(() => {
     // Case 1: Explicit SessionEnd — remove after 5s grace so TUI can show final state
     if (s.status === "idle" && s.task_name === "Session ended" && now - s.timestamp > 5_000) {
       delete sessions[id];
+      removeSessionMarkerFiles(SESSION_ID_DIR, id);
       changed = true;
       console.log(`[purge] ${id} (ended)`);
     }
     // Case 2: Crash recovery — no heartbeat in 5min means the CLI process is gone
     else if (now - s.timestamp > 300_000) {
       delete sessions[id];
+      removeSessionMarkerFiles(SESSION_ID_DIR, id);
       changed = true;
       console.log(`[purge] ${id} (timeout — assumed crashed)`);
     }
@@ -328,25 +460,13 @@ const purgeInterval = setInterval(() => {
 
 // POST: session reports its status
 app.post("/session/status", (req, res) => {
-  if (!validatePayload(req.body)) {
+  if (!validateSessionPayload(req.body)) {
     res.status(400).json({ ok: false, error: "invalid payload" });
     return;
   }
   const data = req.body;
   const prev = sessions[data.session_id];
-  sessions[data.session_id] = {
-    session_id: data.session_id,
-    session_type: data.session_type,
-    status: data.status,
-    task_name: data.task_name,
-    progress: data.progress,
-    context_percent: data.context_percent ?? prev?.context_percent,
-    tokens: data.tokens ?? prev?.tokens,
-    turns: data.turns ?? prev?.turns,
-    timestamp: Date.now(),
-    project: data.project || prev?.project,
-    project_path: data.project_path || prev?.project_path,
-  };
+  sessions[data.session_id] = mergeSessionPayload(prev, data, Date.now());
   console.log(`[session] ${data.session_id} → ${data.status}`);
   broadcastSSE();
   if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
@@ -379,6 +499,7 @@ app.delete("/session/:id", (req, res) => {
   const id = req.params.id;
   if (sessions[id]) {
     delete sessions[id];
+    removeSessionMarkerFiles(SESSION_ID_DIR, id);
     console.log(`[session] ${id} → removed`);
     broadcastSSE();
     if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
@@ -391,6 +512,7 @@ app.listen(PORT, HOST, () => {
   console.log(`SessionBar on http://${HOST}:${PORT}`);
   if (WEB_ENABLED) console.log(`Dashboard: http://${HOST}:${PORT}`);
   recoverSessions();
+  startProviderPolling();
 });
 
 process.on("SIGTERM", () => { cleanup(); process.exit(0); });

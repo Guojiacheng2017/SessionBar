@@ -14,6 +14,8 @@ case "$AGENT_SLUG" in
   codex) DEFAULT_SESSION_TYPE="Codex" ;;
   gemini) DEFAULT_SESSION_TYPE="Gemini CLI" ;;
   copilot) DEFAULT_SESSION_TYPE="Copilot" ;;
+  opencode) DEFAULT_SESSION_TYPE="OpenCode" ;;
+  pi) DEFAULT_SESSION_TYPE="Pi" ;;
   *) DEFAULT_SESSION_TYPE="$AGENT_SLUG" ;;
 esac
 
@@ -116,6 +118,7 @@ if [ -z "$EXPLICIT_SESSION_ID" ]; then
     esac
   fi
 fi
+touch "$ID_FILE" 2>/dev/null || true
 PROJ_PATH="${SESSIONBAR_PROJECT_DIR:-${AGENTBAR_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PROJECT_DIR}}}"
 
 # Cleanup on session end
@@ -167,15 +170,74 @@ append_number_field() {
   fi
 }
 
+append_string_field() {
+  local key="$1"
+  local value="$2"
+  if [ -n "$value" ]; then
+    local escaped
+    escaped=$(json_escape "$value")
+    EXTRA_FIELDS="${EXTRA_FIELDS},\"${key}\":${escaped}"
+  fi
+}
+
 append_number_field "progress" "${SESSIONBAR_PROGRESS:-${AGENTBAR_PROGRESS:-}}"
 append_number_field "context_percent" "${SESSIONBAR_CONTEXT_PERCENT:-${AGENTBAR_CONTEXT_PERCENT:-}}"
 append_number_field "tokens" "${SESSIONBAR_TOKENS:-${AGENTBAR_TOKENS:-}}"
 append_number_field "turns" "${SESSIONBAR_TURNS:-${AGENTBAR_TURNS:-}}"
+append_number_field "input_tokens" "${SESSIONBAR_INPUT_TOKENS:-${AGENTBAR_INPUT_TOKENS:-}}"
+append_number_field "output_tokens" "${SESSIONBAR_OUTPUT_TOKENS:-${AGENTBAR_OUTPUT_TOKENS:-}}"
+append_number_field "cache_read_tokens" "${SESSIONBAR_CACHE_READ_TOKENS:-${AGENTBAR_CACHE_READ_TOKENS:-}}"
+append_number_field "cache_write_tokens" "${SESSIONBAR_CACHE_WRITE_TOKENS:-${AGENTBAR_CACHE_WRITE_TOKENS:-}}"
+append_number_field "token_rate" "${SESSIONBAR_TOKEN_RATE:-${AGENTBAR_TOKEN_RATE:-}}"
+append_number_field "quota_percent" "${SESSIONBAR_QUOTA_PERCENT:-${AGENTBAR_QUOTA_PERCENT:-}}"
+append_string_field "quota_reset" "${SESSIONBAR_QUOTA_RESET:-${AGENTBAR_QUOTA_RESET:-}}"
+append_string_field "hook_event" "${SESSIONBAR_HOOK_EVENT:-${AGENTBAR_HOOK_EVENT:-}}"
+
+AGENT_SIGNAL="${SESSIONBAR_AGENT_SIGNAL:-${AGENTBAR_AGENT_SIGNAL:-}}"
+AGENT_SIGNAL_FIELDS=""
+AGENT_SIGNAL_ATTRIBUTES=""
+append_agent_number_field() {
+  local key="$1"
+  local value="$2"
+  if [ -n "$value" ] && printf '%s' "$value" | grep -Eq '^[0-9]+([.][0-9]+)?$'; then
+    AGENT_SIGNAL_ATTRIBUTES="${AGENT_SIGNAL_ATTRIBUTES},\"${key}\":${value}"
+  fi
+}
+
+append_agent_string_field() {
+  local key="$1"
+  local value="$2"
+  if [ -n "$value" ]; then
+    local escaped
+    escaped=$(json_escape "$value")
+    AGENT_SIGNAL_ATTRIBUTES="${AGENT_SIGNAL_ATTRIBUTES},\"${key}\":${escaped}"
+  fi
+}
+
+if [ -n "$AGENT_SIGNAL" ]; then
+  AGENT_SIGNAL_ESC=$(json_escape "$AGENT_SIGNAL")
+  append_agent_string_field "source" "${SESSIONBAR_AGENT_SIGNAL_SOURCE:-${AGENTBAR_AGENT_SIGNAL_SOURCE:-}}"
+  append_agent_string_field "scope" "${SESSIONBAR_AGENT_SIGNAL_SCOPE:-${AGENTBAR_AGENT_SIGNAL_SCOPE:-}}"
+  append_agent_string_field "kind" "${SESSIONBAR_AGENT_SIGNAL_KIND:-${AGENTBAR_AGENT_SIGNAL_KIND:-}}"
+  append_agent_number_field "used" "${SESSIONBAR_AGENT_USED:-${AGENTBAR_AGENT_USED:-}}"
+  append_agent_number_field "remaining" "${SESSIONBAR_AGENT_REMAINING:-${AGENTBAR_AGENT_REMAINING:-}}"
+  append_agent_number_field "limit" "${SESSIONBAR_AGENT_LIMIT:-${AGENTBAR_AGENT_LIMIT:-}}"
+  append_agent_string_field "unit" "${SESSIONBAR_AGENT_UNIT:-${AGENTBAR_AGENT_UNIT:-}}"
+  append_agent_string_field "status" "${SESSIONBAR_AGENT_STATUS:-${AGENTBAR_AGENT_STATUS:-}}"
+  append_agent_string_field "error_code" "${SESSIONBAR_AGENT_ERROR_CODE:-${AGENTBAR_AGENT_ERROR_CODE:-}}"
+  append_agent_number_field "balance" "${SESSIONBAR_AGENT_BALANCE:-${AGENTBAR_AGENT_BALANCE:-}}"
+  append_agent_string_field "balance_unit" "${SESSIONBAR_AGENT_BALANCE_UNIT:-${AGENTBAR_AGENT_BALANCE_UNIT:-}}"
+  append_agent_number_field "used_percent" "${SESSIONBAR_AGENT_USED_PERCENT:-${AGENTBAR_AGENT_USED_PERCENT:-}}"
+  append_agent_number_field "reset_at" "${SESSIONBAR_AGENT_RESET_AT:-${AGENTBAR_AGENT_RESET_AT:-}}"
+  append_agent_string_field "label" "${SESSIONBAR_AGENT_LABEL:-${AGENTBAR_AGENT_LABEL:-}}"
+  AGENT_SIGNAL_FIELDS=",\"agent_signals\":[{\"signal\":${AGENT_SIGNAL_ESC}${AGENT_SIGNAL_ATTRIBUTES}}]"
+fi
 
 # SID_ESC / STATUS_ESC / TASK_ESC are already JSON-string-encoded by json_escape
 # (json.dumps includes surrounding quotes + escapes interior chars).
 # Embed them directly — no extra shell quoting.
 curl -s -X POST "http://localhost:${SERVER_PORT}/session/status" \
+  --connect-timeout 1 --max-time 2 \
   -H "Content-Type: application/json" \
-  -d "{\"session_id\":${SID_ESC},\"session_type\":${SESSION_TYPE_ESC},\"status\":${STATUS_ESC},\"task_name\":${TASK_ESC},\"project\":${PROJ_ESC},\"project_path\":${PROJ_PATH_ESC}${EXTRA_FIELDS}}" \
+  -d "{\"session_id\":${SID_ESC},\"session_type\":${SESSION_TYPE_ESC},\"status\":${STATUS_ESC},\"task_name\":${TASK_ESC},\"project\":${PROJ_ESC},\"project_path\":${PROJ_PATH_ESC}${EXTRA_FIELDS}${AGENT_SIGNAL_FIELDS}}" \
   > /dev/null 2>&1 || true

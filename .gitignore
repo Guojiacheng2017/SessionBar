@@ -1,1 +1,5 @@
 .sessionbar/
+node_modules/
+dist/
+.superpowers/
+outputs/
