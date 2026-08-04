@@ -60,3 +60,19 @@ test("computeAdvisorRows: no signals and no subscription rows → []", async () 
   const rows = await computeAdvisorRows({ ...baseSession, agent_signals: [] }, new Map(), 1_700_000_000_000);
   assert.deepEqual(rows, []);
 });
+
+test("computeAdvisorRows: distinct api signals without labels keep distinct labels (not provider-collapsed)", async () => {
+  const session = {
+    ...baseSession,
+    agent_signals: [
+      { signal: "openai.usage", kind: "usage", source: "provider_api", scope: "account", used: 500_000, limit: 1_000_000, unit: "tokens" },
+      { signal: "openai.balance", kind: "balance", source: "provider_api", scope: "account", remaining: 42.5, unit: "USD" },
+    ],
+  };
+  const rows = await computeAdvisorRows(session, new Map(), 1_700_000_000_000);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    rows.map(r => r.label).sort(),
+    ["openai.balance", "openai.usage"],
+  );
+});

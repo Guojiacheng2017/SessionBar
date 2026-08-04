@@ -507,6 +507,29 @@ test("advisor tab shows empty state without rows", () => {
   assert.match(content, /无额度数据/);
 });
 
+test("advisor tab renders subscription rows for a session with no api signals (regression: no 无额度数据)", () => {
+  const content = buildSessionDetailContent({
+    ...baseSession,
+    advisorRows: [
+      {
+        form: "subscription",
+        provider: "openai",
+        label: "OpenAI ChatGPT 订阅",
+        level: "green",
+        pacing: "ok",
+        cardTiming: "reset 3d",
+        autoResetIn: "5h",
+        sustainableRate: 10,
+        actualVsSustainable: null,
+        projectedCapHitAt: null,
+      },
+    ],
+  }, "advisor", 80, 1_700_000_000_000);
+  assert.match(content, /订阅 \| OpenAI ChatGPT 订阅/);
+  assert.match(content, /level: green/);
+  assert.doesNotMatch(content, /无额度数据/);
+});
+
 test("scope tabs cycle and numeric keys map deterministically", () => {
   assert.equal(nextDetailTab("overview", 1), "activity");
   assert.equal(nextDetailTab("raw", 1), "advisor");

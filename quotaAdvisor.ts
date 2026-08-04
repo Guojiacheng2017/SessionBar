@@ -37,7 +37,10 @@ function signalToApiRow(signal: SessionAgentSignal): PlanRow {
   return {
     form: "api",
     provider,
-    label: signal.label ?? provider,
+    // Fall back to the signal name (e.g. "openai.usage" vs "openai.balance")
+    // so distinct api signals for the same provider without labels keep
+    // distinct rows instead of collapsing to the bare provider label.
+    label: signal.label ?? signal.signal ?? provider,
     // api form is display-only; these subscription fields are N/A.
     level: "green",
     pacing: "",

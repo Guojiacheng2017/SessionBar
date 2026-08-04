@@ -1224,14 +1224,10 @@ async function watch() {
     await runOpenTuiMonitor({
       fetchSessions: sseToggleFetch,
       fetchProviders: async () => {
-        try {
-          const resp = await fetch(`${API_BASE}/providers/live`);
-          if (!resp.ok) return [];
-          const data = await resp.json();
-          return Array.isArray(data?.providers) ? data.providers : [];
-        } catch {
-          return [];
-        }
+        const resp = await fetch(`${API_BASE}/providers/live`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        return Array.isArray(data?.providers) ? data.providers : [];
       },
       openWebDashboard,
       renderMs: tuiRenderMs,

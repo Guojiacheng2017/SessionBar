@@ -79,6 +79,13 @@ test("provider table shows 无额度数据 when there are no rows", () => {
   assert.equal(content[0][0][0].text, "无额度数据");
 });
 
+test("provider table shows the fetch error instead of 无额度数据 when providersError is set", () => {
+  const renderer = { width: 120, height: 40 };
+  const content = providerTableContent([], renderer, "HTTP 500");
+  assert.equal(content.length, 1);
+  assert.equal(content[0][0][0].text, "HTTP 500");
+});
+
 test("provider table renders one row per PlanRow", () => {
   const renderer = { width: 120, height: 40 };
   const rows = [subscriptionRow(), apiRow()];

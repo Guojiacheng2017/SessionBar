@@ -59,6 +59,7 @@ interface MonitorState {
   sseMode: boolean;
   view: "sessions" | "providers";
   providers: PlanRow[];
+  providersError?: string;
 }
 
 interface ProjectRow {
@@ -604,7 +605,8 @@ export function providerSummaryLine(row: PlanRow): string {
   return parts.length ? `${label} ${form} | ${parts.join(" · ")}` : `${label} ${form}`;
 }
 
-export function providerTableContent(rows: readonly PlanRow[], renderer: CliRenderer): TextTableContent {
+export function providerTableContent(rows: readonly PlanRow[], renderer: CliRenderer, error?: string): TextTableContent {
+  if (error) return [[cell(error, PALETTE.red)]];
   if (rows.length === 0) return [[cell("无额度数据", PALETTE.muted)]];
   const slots = Math.max(4, renderer.height - 17);
   const visible = visibleWindow(rows, 0, slots);
@@ -621,19 +623,21 @@ export function providerTableContent(rows: readonly PlanRow[], renderer: CliRend
   return content;
 }
 
-function providerOverviewText(rows: readonly PlanRow[], opts: OpenTuiMonitorOptions): string {
+function providerOverviewText(rows: readonly PlanRow[], opts: OpenTuiMonitorOptions, error?: string): string {
   const api = rows.filter(r => r.form === "api").length;
   const sub = rows.length - api;
-  return [
+  const lines = [
     "PROVIDER OVERVIEW",
-    `providers ${rows.length}`,
-    `subscription ${sub}`,
-    `api ${api}`,
+    error ? "provider fetch failed" : `providers ${rows.length}`,
+  ];
+  if (!error) lines.push(`subscription ${sub}`, `api ${api}`);
+  lines.push(
     "",
-    rows.length === 0 ? "无额度数据" : "v / P  switch to sessions",
+    error ?? (rows.length === 0 ? "无额度数据" : "v / P  switch to sessions"),
     `API ${opts.apiHost}:${opts.port}`,
     `State ${compactPath(opts.stateDir)}`,
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<MonitorState>, opts: OpenTuiMonitorOptions): void {
@@ -641,21 +645,24 @@ function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Re
   const providers = state.providers || [];
   const apiCount = providers.filter(r => r.form === "api").length;
   const subCount = providers.length - apiCount;
+  const error = state.providersError;
 
   refs.title.content = "SessionBar";
   refs.online.content = `online :${opts.port}`;
   refs.projectsBox.visible = false;
-  refs.activity.content = [
-    `${providers.length} provider${providers.length !== 1 ? "s" : ""}`,
-    subCount > 0 ? `${subCount} subscription` : "",
-    apiCount > 0 ? `${apiCount} api` : "",
-  ].filter(Boolean).join("  ");
+  refs.activity.content = error
+    ? "provider fetch failed"
+    : [
+        `${providers.length} provider${providers.length !== 1 ? "s" : ""}`,
+        subCount > 0 ? `${subCount} subscription` : "",
+        apiCount > 0 ? `${apiCount} api` : "",
+      ].filter(Boolean).join("  ");
   refs.sessionsBox.title = `Providers (${providers.length})`;
   refs.sessionsBox.width = layout.sidebarPanelWidth;
   refs.detailsBox.width = layout.detailPanelWidth;
-  refs.sessionsTable.content = providerTableContent(providers, renderer);
+  refs.sessionsTable.content = providerTableContent(providers, renderer, error);
   refs.detailsBox.title = "Provider Overview";
-  refs.detailsText.content = providerOverviewText(providers, opts);
+  refs.detailsText.content = providerOverviewText(providers, opts, error);
   refs.footer.content = state.errorMsg ? `! ${state.errorMsg}` : "v / P sessions  r refresh  / filter  w web  q quit";
   refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;
   renderer.requestRender();
@@ -1073,13 +1080,17 @@ async function fetchProvidersIntoState(
   update: (updater: (state: Readonly<MonitorState>) => MonitorState) => void,
 ): Promise<void> {
   if (!opts.fetchProviders) return;
-  let providers: PlanRow[] = [];
   try {
-    providers = await opts.fetchProviders();
-  } catch {
-    providers = [];
+    const providers = await opts.fetchProviders();
+    update(state => clampState({ ...state, providers, providersError: undefined }));
+  } catch (error) {
+    update(state => clampState({ ...state, providersError: errorMessage(error) }));
   }
-  update(state => clampState({ ...state, providers }));
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error);
 }
 
 export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<void> {
@@ -1112,6 +1123,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       sseMode: false,
       view: "sessions",
       providers: [],
+      providersError: undefined,
     });
     let disposed = false;
     const refs = createRefs(renderer, opts);

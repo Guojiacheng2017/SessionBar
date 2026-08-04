@@ -138,6 +138,42 @@ export function aggregateProviders(
   return [...seen.values()];
 }
 
+/**
+ * Whether a global subscription row belongs on a given session's advisor tab.
+ * Maps subscription provider → session_type: codex/openai/chatgpt sessions get
+ * the OpenAI subscription row, claude/anthropic sessions get the Anthropic one,
+ * kimi/moonshot sessions get the Kimi one. Rows whose provider has no matching
+ * session still show on the overview page (aggregateProviders reads subscription
+ * rows globally, unaffected by this filter).
+ */
+export function matchesSessionProvider(row: PlanRow, session: SessionPayload): boolean {
+  const type = (session.session_type || "").toLowerCase();
+  switch (row.provider.toLowerCase()) {
+    case "openai":
+      return /codex|openai|chatgpt/.test(type);
+    case "anthropic":
+      return /claude|anthropic/.test(type);
+    case "kimi":
+      return /kimi|moonshot/.test(type);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Compose a session's advisor tab rows: its display-only api rows (derived from
+ * agent signals) plus the global subscription rows that match the session's
+ * provider. Embedding subscription rows in the session payload lets the session
+ * detail advisor tab render them without the TUI needing global state.
+ */
+export function sessionAdvisorRows(
+  session: SessionPayload,
+  apiRows: PlanRow[],
+  subscriptionRows: PlanRow[],
+): PlanRow[] {
+  return [...apiRows, ...subscriptionRows.filter(row => matchesSessionProvider(row, session))];
+}
+
 function advisorFingerprint(): string {
   const snapshot: Record<string, unknown> = {};
   for (const id of Object.keys(sessions)) snapshot[id] = sessions[id].advisorRows;
@@ -160,7 +196,8 @@ async function refreshProviderSignals() {
   // keys are configured.
   const before = advisorFingerprint();
   for (const session of Object.values(sessions)) {
-    session.advisorRows = await computeAdvisorRows(session, rateBuffers, now);
+    const apiRows = await computeAdvisorRows(session, rateBuffers, now);
+    session.advisorRows = sessionAdvisorRows(session, apiRows, subscriptionRows);
   }
   // Broadcast when provider signals OR advisor rows changed (card expiry / reset
   // countdowns move even when provider signals are stable).
