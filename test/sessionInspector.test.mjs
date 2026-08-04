@@ -405,43 +405,106 @@ test("structured flow graph takes priority over workflow event buffer", () => {
   assert.doesNotMatch(content, /WORKFLOW EVENTS|PreCompress/);
 });
 
-test("advisor tab renders advisor fields", () => {
+test("advisor tab renders api rows with numeric remaining/used/limit/unit, never as a status", () => {
   const content = buildSessionDetailContent({
     ...baseSession,
-    advisor: {
-      level: "red",
-      pacing: "烧太快",
-      cardTiming: "现在用卡",
-      autoResetIn: "unblocked in 2h",
-      sustainableRate: 500,
-      actualVsSustainable: 3,
-      projectedCapHitAt: null,
-    },
+    advisorRows: [
+      {
+        form: "api",
+        provider: "openai",
+        label: "OpenAI usage",
+        level: "green",
+        pacing: "",
+        cardTiming: "",
+        autoResetIn: "",
+        sustainableRate: 0,
+        actualVsSustainable: null,
+        projectedCapHitAt: null,
+        remaining: 500_000,
+        used: 500_000,
+        limit: 1_000_000,
+        unit: "tokens",
+      },
+    ],
   }, "advisor", 80, 1_700_000_000_000);
-  assert.match(content, /Level: red/);
+  assert.match(content, /API \| OpenAI usage/);
+  assert.match(content, /remaining: 500k tokens/);
+  assert.match(content, /used: 500k tokens/);
+  assert.match(content, /limit: 1M tokens/);
+  // api rows carry a green placeholder; the renderer must branch on form first
+  // and show numbers — never render api rows as a green subscription status.
+  assert.doesNotMatch(content, /level: green/);
+});
+
+test("advisor tab renders subscription rows with level/pacing/card/auto-reset", () => {
+  const content = buildSessionDetailContent({
+    ...baseSession,
+    advisorRows: [
+      {
+        form: "subscription",
+        provider: "anthropic",
+        label: "Anthropic 订阅 (5h)",
+        level: "red",
+        pacing: "烧太快",
+        cardTiming: "现在用卡",
+        autoResetIn: "unblocked in 2h",
+        sustainableRate: 500,
+        actualVsSustainable: 3,
+        projectedCapHitAt: null,
+      },
+    ],
+  }, "advisor", 80, 1_700_000_000_000);
+  assert.match(content, /订阅 \| Anthropic 订阅 \(5h\)/);
+  assert.match(content, /level: red/);
   assert.match(content, /烧太快/);
+  assert.match(content, /现在用卡/);
+  assert.match(content, /auto-reset: unblocked in 2h/);
+  assert.match(content, /sustainable: 500\/h/);
+  assert.match(content, /actual\/sustainable: 3\.00/);
 });
 
-test("advisor tab shows empty state without data", () => {
-  const content = buildSessionDetailContent({ ...baseSession, advisor: undefined }, "advisor", 80, 1_700_000_000_000);
-  assert.match(content, /无额度消耗数据/);
-});
-
-test("advisor tab tolerates undefined actualVsSustainable and projectedCapHitAt", () => {
+test("advisor tab renders mixed api and subscription rows flat", () => {
   const content = buildSessionDetailContent({
     ...baseSession,
-    advisor: {
-      level: "yellow",
-      pacing: "建议减速",
-      cardTiming: "攒卡",
-      autoResetIn: "unblocked in 5h",
-      sustainableRate: 100,
-      actualVsSustainable: undefined,
-      projectedCapHitAt: undefined,
-    },
+    advisorRows: [
+      {
+        form: "api",
+        provider: "xai",
+        label: "xai balance",
+        level: "green",
+        pacing: "",
+        cardTiming: "",
+        autoResetIn: "",
+        sustainableRate: 0,
+        actualVsSustainable: null,
+        projectedCapHitAt: null,
+        remaining: 7.25,
+        unit: "USD",
+      },
+      {
+        form: "subscription",
+        provider: "kimi",
+        label: "Kimi 订阅 (整体)",
+        level: "yellow",
+        pacing: "建议减速",
+        cardTiming: "攒卡",
+        autoResetIn: "unblocked in 5h",
+        sustainableRate: 100,
+        actualVsSustainable: null,
+        projectedCapHitAt: null,
+      },
+    ],
   }, "advisor", 80, 1_700_000_000_000);
-  assert.match(content, /Actual\/sustainable: --/);
-  assert.match(content, /Projected cap-hit: --/);
+  assert.match(content, /API \| xai balance/);
+  assert.match(content, /remaining: 7\.25 USD/);
+  assert.match(content, /订阅 \| Kimi 订阅 \(整体\)/);
+  assert.match(content, /level: yellow/);
+  assert.match(content, /建议减速/);
+});
+
+test("advisor tab shows empty state without rows", () => {
+  const content = buildSessionDetailContent({ ...baseSession, advisorRows: undefined }, "advisor", 80, 1_700_000_000_000);
+  assert.match(content, /无额度数据/);
 });
 
 test("scope tabs cycle and numeric keys map deterministically", () => {

@@ -11,10 +11,8 @@ import { removeSessionMarkerFiles, scopedSessionId } from "./sessionMarkers.js";
 import { mergeCodexDiscovery } from "./codexSessionMerge.js";
 import { pollProvider, providerConfigsFromEnv } from "./providerAdapters.js";
 import { applyProviderPollResults } from "./providerMonitor.js";
-import { fetchResetCards } from "./codexWhamAdapter.js";
-import { computeAdvisorForSession } from "./quotaAdvisor.js";
+import { computeAdvisorRows } from "./quotaAdvisor.js";
 import { RateBuffer } from "./rateBuffer.js";
-import type { ResetCard } from "./quota-engine/types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = parseInt(process.env.PORT || "8989", 10);
@@ -106,27 +104,14 @@ const sessions: Record<string, SessionPayload> = {};
 const sseClients = new Set<express.Response>();
 
 const rateBuffers = new Map<string, RateBuffer>();
-const CARDS_REFRESH_MS = 30 * 60 * 1000; // refresh wham cards when stale
-let cachedCards: ResetCard[] = [];
-let cardsFetched = false; // first fetch done; avoid hammering the wham API
-let lastCardsFetchAt = 0;
 
 async function refreshProviderSignals() {
   if (providerConfigs.length === 0) return;
   const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
   const changed = applyProviderPollResults(sessions, results);
-  if (!cardsFetched) {
-    cachedCards = await fetchResetCards();
-    cardsFetched = true;
-    lastCardsFetchAt = Date.now();
-  } else if (Date.now() - lastCardsFetchAt > CARDS_REFRESH_MS || cachedCards.length === 0) {
-    // retry when stale (>30min) or when the last fetch came back empty
-    cachedCards = await fetchResetCards();
-    lastCardsFetchAt = Date.now();
-  }
   const now = Date.now();
   for (const session of Object.values(sessions)) {
-    session.advisor = computeAdvisorForSession(session, rateBuffers, cachedCards, now) ?? undefined;
+    session.advisorRows = await computeAdvisorRows(session, rateBuffers, now);
   }
   if (!changed) return; // advisor recomputed in memory; skip broadcast when signals unchanged
   broadcastSSE();

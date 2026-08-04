@@ -1,3 +1,5 @@
+import type { PlanRow } from "./planTypes.js";
+
 export type SessionStatus = "idle" | "working" | "blocked" | "error";
 
 export interface SessionPlanSignal {
@@ -46,16 +48,6 @@ export type SessionAgentSignalInput = Omit<SessionAgentSignal, "timestamp"> & {
   timestamp?: number;
 };
 
-export interface SessionAdvisor {
-  level: "green" | "yellow" | "red";
-  pacing: string;
-  cardTiming: string;
-  autoResetIn: string;
-  sustainableRate: number;
-  actualVsSustainable: number | null;
-  projectedCapHitAt: number | null;
-}
-
 export interface SessionUnknownEvent {
   timestamp: number;
   source?: string;
@@ -100,5 +92,5 @@ export interface SessionPayload {
   timestamp: number;
   project?: string;       // project dir basename, e.g. "vision-dash"
   project_path?: string;  // full project dir, e.g. "/Users/…/Vision-Dash"
-  advisor?: SessionAdvisor; // server-internal derived field, NOT from POST /session/status
+  advisorRows?: PlanRow[]; // server-internal derived field, NOT from POST /session/status
 }

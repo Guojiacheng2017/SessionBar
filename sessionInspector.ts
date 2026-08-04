@@ -1,5 +1,6 @@
 import { StyledText, TextAttributes, type TextChunk } from "@opentui/core";
 import type { SessionPayload } from "./types.js";
+import type { PlanRow } from "./planTypes.js";
 
 export type DetailTab = "overview" | "activity" | "usage" | "flow" | "raw" | "advisor";
 
@@ -274,17 +275,49 @@ function flowLines(session: SessionPayload, width: number, now: number): string[
 }
 
 function advisorLines(session: SessionPayload, _width: number, _now: number): string[] {
-  const advisor = session.advisor;
-  if (!advisor) return ["该会话无额度消耗数据"];
-  return [
-    `Level: ${advisor.level}`,
-    `Pacing: ${advisor.pacing}`,
-    `Card: ${advisor.cardTiming}`,
-    `Auto-reset: ${advisor.autoResetIn}`,
-    `Sustainable rate: ${Math.round(advisor.sustainableRate)} tokens/h`,
-    `Actual/sustainable: ${advisor.actualVsSustainable == null ? "--" : advisor.actualVsSustainable.toFixed(2)}`,
-    `Projected cap-hit: ${advisor.projectedCapHitAt == null ? "--" : new Date(advisor.projectedCapHitAt).toLocaleTimeString()}`,
+  const rows = session.advisorRows ?? [];
+  if (rows.length === 0) return ["无额度数据"];
+  const lines: string[] = [];
+  for (const row of rows) {
+    lines.push(advisorRowHeader(row));
+    lines.push(...(row.form === "api" ? advisorApiFields(row) : advisorSubscriptionFields(row)));
+  }
+  return lines;
+}
+
+function advisorRowHeader(row: PlanRow): string {
+  return `${row.form === "api" ? "API" : "订阅"} | ${row.label}`;
+}
+
+function advisorApiFields(row: PlanRow): string[] {
+  const unit = row.unit ? ` ${row.unit}` : "";
+  const fields: string[] = [];
+  if (row.remaining !== undefined) fields.push(`remaining: ${formatApiNumber(row.remaining)}${unit}`);
+  if (row.used !== undefined) fields.push(`used: ${formatApiNumber(row.used)}${unit}`);
+  if (row.limit !== undefined) fields.push(`limit: ${formatApiNumber(row.limit)}${unit}`);
+  return fields.length > 0 ? [`  ${fields.join(" · ")}`] : ["  --"];
+}
+
+function advisorSubscriptionFields(row: PlanRow): string[] {
+  const lines = [
+    `  level: ${row.level}`,
+    `  pacing: ${row.pacing || "--"}`,
+    `  card: ${row.cardTiming || "--"}`,
+    `  auto-reset: ${row.autoResetIn || "--"}`,
+    `  sustainable: ${compactNumber(row.sustainableRate)}/h`,
   ];
+  if (row.actualVsSustainable != null) {
+    lines.push(`  actual/sustainable: ${row.actualVsSustainable.toFixed(2)}`);
+  }
+  if (row.projectedCapHitAt != null) {
+    lines.push(`  cap-hit: ${new Date(row.projectedCapHitAt).toLocaleTimeString()}`);
+  }
+  return lines;
+}
+
+function formatApiNumber(value: number): string {
+  if (Number.isInteger(value) || Math.abs(value) >= 1000) return compactNumber(value);
+  return value.toFixed(2);
 }
 
 function rawLines(session: SessionPayload): string[] {
