@@ -17,10 +17,16 @@ export interface PlanOpts {
  */
 export async function computePlanRows(opts: PlanOpts = {}): Promise<PlanRow[]> {
   const now = opts.now ?? Date.now();
+  // Kimi access token falls back to env so subscription rows show whenever a
+  // token is present (SESSIONBAR_ prefix wins over the bare form). Neither set
+  // → kimi rows stay hidden (no-credential-hides behavior).
+  const kimiAccessToken = opts.kimiAccessToken
+    ?? process.env.SESSIONBAR_KIMI_ACCESS_TOKEN
+    ?? process.env.KIMI_ACCESS_TOKEN;
   const results = await Promise.allSettled([
     fetchOpenAISubscription({ authJsonPath: opts.openaiAuthPath, now }),
     fetchAnthropicSubscription({ credentialsPath: opts.anthropicCredentialsPath, now }),
-    fetchKimiSubscription({ accessToken: opts.kimiAccessToken, now }),
+    fetchKimiSubscription({ accessToken: kimiAccessToken, now }),
   ]);
   const rows: PlanRow[] = [];
   for (const r of results) {

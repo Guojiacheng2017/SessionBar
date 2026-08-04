@@ -69,6 +69,28 @@ test("oauth.access_token shape + epoch resets_at both work", async () => {
   assert.ok(rows.every(r => r.provider === "anthropic"));
 });
 
+test("tokens array shape (real Claude Code .credentials.json) works", async () => {
+  writeFileSync(credsPath, JSON.stringify({
+    tokens: [
+      { accessToken: "array-first-token", refreshToken: "refresh", expiresAt: 999 },
+      { accessToken: "array-second-token" },
+    ],
+  }));
+  const rows = await fetchAnthropicSubscription({
+    credentialsPath: credsPath,
+    fetchImpl: async (_url, init) => {
+      const headers = init?.headers;
+      assert.equal(headers.Authorization, "Bearer array-first-token");
+      return new Response(JSON.stringify({
+        five_hour: { utilization: 10, resets_at: Date.now() + 5 * 3600000 },
+        seven_day: { utilization: 20, resets_at: Date.now() + 2 * 86400000 },
+      }), { status: 200 });
+    },
+  });
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every(r => r.provider === "anthropic"));
+});
+
 test("no credentials → empty array", async () => {
   const rows = await fetchAnthropicSubscription({
     credentialsPath: missingCredsPath,

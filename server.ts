@@ -105,21 +105,38 @@ const sseClients = new Set<express.Response>();
 
 const rateBuffers = new Map<string, RateBuffer>();
 
+function advisorFingerprint(): string {
+  const snapshot: Record<string, unknown> = {};
+  for (const id of Object.keys(sessions)) snapshot[id] = sessions[id].advisorRows;
+  return JSON.stringify(snapshot);
+}
+
 async function refreshProviderSignals() {
-  if (providerConfigs.length === 0) return;
-  const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
-  const changed = applyProviderPollResults(sessions, results);
   const now = Date.now();
+  let changed = false;
+  if (providerConfigs.length > 0) {
+    const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
+    changed = applyProviderPollResults(sessions, results);
+  }
+  // Advisor is computed regardless of providerConfigs — subscription adapters
+  // (wham/anthropic/kimi) read their own credential files, so a user with only
+  // ~/.codex/auth.json still gets subscription rows even when no provider API
+  // keys are configured.
+  const before = advisorFingerprint();
   for (const session of Object.values(sessions)) {
     session.advisorRows = await computeAdvisorRows(session, rateBuffers, now);
   }
-  if (!changed) return; // advisor recomputed in memory; skip broadcast when signals unchanged
+  // Broadcast when provider signals OR advisor rows changed (card expiry / reset
+  // countdowns move even when provider signals are stable).
+  if (!changed && advisorFingerprint() === before) return;
   broadcastSSE();
   if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
 }
 
 function startProviderPolling() {
-  if (providerConfigs.length === 0) return;
+  // Start unconditionally — refreshProviderSignals gates the provider poll on
+  // providerConfigs internally, so the advisor still ticks (card expiry / reset
+  // countdowns) even when no provider API keys are configured.
   void refreshProviderSignals();
   providerPollInterval = setInterval(() => void refreshProviderSignals(), PROVIDER_POLL_MS);
 }

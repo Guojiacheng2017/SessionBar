@@ -20,8 +20,7 @@ export async function fetchAnthropicSubscription(opts: AnthropicOpts = {}): Prom
     const credPath = opts.credentialsPath ?? join(homedir(), ".claude", ".credentials.json");
     if (!existsSync(credPath)) return [];
     const cred = JSON.parse(readFileSync(credPath, "utf-8"));
-    // ~/.claude/.credentials.json 结构不固定：{ tokens: { accessToken } } 或 { oauth: { access_token } } 或 { accessToken }
-    const token = cred?.tokens?.accessToken ?? cred?.accessToken ?? cred?.oauth?.access_token;
+    const token = extractAccessToken(cred);
     if (!token) return [];
 
     const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
@@ -93,6 +92,27 @@ function buildRow(windowName: "5h" | "weekly", utilization: number, resetAt: num
 function num(v: unknown): number | undefined {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") { const n = Number(v); return Number.isFinite(n) ? n : undefined; }
+  return undefined;
+}
+
+/**
+ * ~/.claude/.credentials.json 结构不固定：
+ *   { tokens: [{ accessToken, refreshToken, ... }] }  (真实 Claude Code 形状：数组)
+ *   { tokens: { accessToken } }
+ *   { oauth: { access_token } }
+ *   { accessToken }
+ * 按上述顺序返回第一个找到的 accessToken。
+ */
+function extractAccessToken(cred: any): string | undefined {
+  if (!cred || typeof cred !== "object") return undefined;
+  const tokens = cred.tokens;
+  if (Array.isArray(tokens)) {
+    if (typeof tokens[0]?.accessToken === "string") return tokens[0].accessToken;
+  } else if (typeof tokens?.accessToken === "string") {
+    return tokens.accessToken;
+  }
+  if (typeof cred.oauth?.access_token === "string") return cred.oauth.access_token;
+  if (typeof cred.accessToken === "string") return cred.accessToken;
   return undefined;
 }
 
