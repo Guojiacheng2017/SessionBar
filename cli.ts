@@ -1223,6 +1223,16 @@ async function watch() {
   try {
     await runOpenTuiMonitor({
       fetchSessions: sseToggleFetch,
+      fetchProviders: async () => {
+        try {
+          const resp = await fetch(`${API_BASE}/providers/live`);
+          if (!resp.ok) return [];
+          const data = await resp.json();
+          return Array.isArray(data?.providers) ? data.providers : [];
+        } catch {
+          return [];
+        }
+      },
       openWebDashboard,
       renderMs: tuiRenderMs,
       pollMs: tuiPollMs,

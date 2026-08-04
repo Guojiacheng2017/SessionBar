@@ -13,6 +13,7 @@ import {
   type TextTableContent,
 } from "@opentui/core";
 import { homedir } from "os";
+import type { PlanRow } from "./planTypes.js";
 import type { SessionPayload } from "./types.js";
 import {
   buildSessionDetailChunks,
@@ -28,6 +29,7 @@ type FetchSessions = () => Promise<{ sessions: Session[]; error?: string }>;
 
 export interface OpenTuiMonitorOptions {
   fetchSessions: FetchSessions;
+  fetchProviders?: () => Promise<PlanRow[]>;
   openWebDashboard: () => Promise<void>;
   renderMs: number;
   pollMs: number;
@@ -55,6 +57,8 @@ interface MonitorState {
   unreadSessionIds: Set<string>;
   unreadInitialized: boolean;
   sseMode: boolean;
+  view: "sessions" | "providers";
+  providers: PlanRow[];
 }
 
 interface ProjectRow {
@@ -567,6 +571,96 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
   return content;
 }
 
+function compactNumber(value: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${trimZero((value / 1_000_000_000).toFixed(1))}B`;
+  if (abs >= 1_000_000) return `${trimZero((value / 1_000_000).toFixed(1))}M`;
+  if (abs >= 1_000) return `${trimZero((value / 1_000).toFixed(1))}K`;
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function trimZero(text: string): string {
+  return text.replace(/\.0$/, "");
+}
+
+export function providerSummaryLine(row: PlanRow): string {
+  const form = row.form === "api" ? "API" : "订阅";
+  const label = row.label || row.provider || "?";
+  if (row.form === "api") {
+    const unit = row.unit ? ` ${row.unit}` : "";
+    const parts = [
+      row.remaining !== undefined ? `remaining ${compactNumber(row.remaining)}${unit}` : "",
+      row.used !== undefined ? `used ${compactNumber(row.used)}${unit}` : "",
+      row.limit !== undefined ? `limit ${compactNumber(row.limit)}${unit}` : "",
+    ].filter(Boolean);
+    return parts.length ? `${label} ${form} | ${parts.join(" · ")}` : `${label} ${form}`;
+  }
+  const parts = [
+    row.level ? `level ${row.level}` : "",
+    row.pacing ? `pacing ${row.pacing}` : "",
+    row.cardTiming ? `card ${row.cardTiming}` : "",
+    row.autoResetIn ? `reset ${row.autoResetIn}` : "",
+  ].filter(Boolean);
+  return parts.length ? `${label} ${form} | ${parts.join(" · ")}` : `${label} ${form}`;
+}
+
+export function providerTableContent(rows: readonly PlanRow[], renderer: CliRenderer): TextTableContent {
+  if (rows.length === 0) return [[cell("无额度数据", PALETTE.muted)]];
+  const slots = Math.max(4, renderer.height - 17);
+  const visible = visibleWindow(rows, 0, slots);
+  const content: TextTableContent = [];
+  for (const row of visible) {
+    const fg = row.form === "api"
+      ? PALETTE.cyan
+      : row.level === "red" ? PALETTE.red : row.level === "yellow" ? PALETTE.yellow : PALETTE.green;
+    content.push([cell(providerSummaryLine(row), fg)]);
+  }
+  if (visible.length < rows.length) {
+    content.push([cell(`... ${rows.length - visible.length} more provider${rows.length - visible.length === 1 ? "" : "s"}`, PALETTE.muted)]);
+  }
+  return content;
+}
+
+function providerOverviewText(rows: readonly PlanRow[], opts: OpenTuiMonitorOptions): string {
+  const api = rows.filter(r => r.form === "api").length;
+  const sub = rows.length - api;
+  return [
+    "PROVIDER OVERVIEW",
+    `providers ${rows.length}`,
+    `subscription ${sub}`,
+    `api ${api}`,
+    "",
+    rows.length === 0 ? "无额度数据" : "v / P  switch to sessions",
+    `API ${opts.apiHost}:${opts.port}`,
+    `State ${compactPath(opts.stateDir)}`,
+  ].join("\n");
+}
+
+function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<MonitorState>, opts: OpenTuiMonitorOptions): void {
+  const layout = monitorBodyLayout(renderer.width);
+  const providers = state.providers || [];
+  const apiCount = providers.filter(r => r.form === "api").length;
+  const subCount = providers.length - apiCount;
+
+  refs.title.content = "SessionBar";
+  refs.online.content = `online :${opts.port}`;
+  refs.projectsBox.visible = false;
+  refs.activity.content = [
+    `${providers.length} provider${providers.length !== 1 ? "s" : ""}`,
+    subCount > 0 ? `${subCount} subscription` : "",
+    apiCount > 0 ? `${apiCount} api` : "",
+  ].filter(Boolean).join("  ");
+  refs.sessionsBox.title = `Providers (${providers.length})`;
+  refs.sessionsBox.width = layout.sidebarPanelWidth;
+  refs.detailsBox.width = layout.detailPanelWidth;
+  refs.sessionsTable.content = providerTableContent(providers, renderer);
+  refs.detailsBox.title = "Provider Overview";
+  refs.detailsText.content = providerOverviewText(providers, opts);
+  refs.footer.content = state.errorMsg ? `! ${state.errorMsg}` : "v / P sessions  r refresh  / filter  w web  q quit";
+  refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;
+  renderer.requestRender();
+}
+
 function healthScore(sessions: readonly Session[]): { score: number; label: string; color: string } {
   if (sessions.length === 0) return { score: 0, label: "waiting for sessions", color: PALETTE.muted };
   const counts = statusCounts(sessions);
@@ -841,6 +935,11 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
 }
 
 function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<MonitorState>, opts: OpenTuiMonitorOptions): void {
+  if (state.view === "providers") {
+    renderProvidersView(refs, renderer, state, opts);
+    return;
+  }
+  refs.projectsBox.visible = true;
   const shown = applyFilter(state.sessions, state.filterText);
   const groups = groupByProject(shown);
   const counts = statusCounts(state.sessions);
@@ -927,6 +1026,23 @@ export function nextDetailTabFromMonitorKey(current: DetailTab, key: MonitorKeyL
   return null;
 }
 
+export function nextViewFromMonitorKey(
+  current: "sessions" | "providers",
+  key: MonitorKeyLike,
+): "sessions" | "providers" | null {
+  const normalized = {
+    ...key,
+    raw: key.raw || "",
+    sequence: key.sequence || "",
+    ctrl: Boolean(key.ctrl),
+    meta: Boolean(key.meta),
+    option: Boolean(key.option),
+  } as KeyEvent;
+  const char = printableChar(normalized);
+  if (char === "v" || char === "P") return current === "providers" ? "sessions" : "providers";
+  return null;
+}
+
 async function fetchIntoState(
   opts: OpenTuiMonitorOptions,
   update: (updater: (state: Readonly<MonitorState>) => MonitorState) => void,
@@ -950,6 +1066,20 @@ async function fetchIntoState(
       unreadInitialized: unread.initialized,
     });
   });
+}
+
+async function fetchProvidersIntoState(
+  opts: OpenTuiMonitorOptions,
+  update: (updater: (state: Readonly<MonitorState>) => MonitorState) => void,
+): Promise<void> {
+  if (!opts.fetchProviders) return;
+  let providers: PlanRow[] = [];
+  try {
+    providers = await opts.fetchProviders();
+  } catch {
+    providers = [];
+  }
+  update(state => clampState({ ...state, providers }));
 }
 
 export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<void> {
@@ -980,6 +1110,8 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       unreadSessionIds: new Set(),
       unreadInitialized: false,
       sseMode: false,
+      view: "sessions",
+      providers: [],
     });
     let disposed = false;
     const refs = createRefs(renderer, opts);
@@ -1032,6 +1164,12 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
         return;
       }
 
+      const nextView = nextViewFromMonitorKey(state.view, key);
+      if (nextView) {
+        update(current => clampState({ ...current, view: nextView }));
+        return;
+      }
+
       if (key.name === "up" || key.name === "k") update(current => moveSession(current, -1));
       else if (key.name === "down" || key.name === "j") update(current => moveSession(current, 1));
       else if (isEnter(key)) update(toggleDetail);
@@ -1047,6 +1185,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
         });
       } else if (key.name === "r") {
         void fetchIntoState(opts, update);
+        void fetchProvidersIntoState(opts, update);
       } else if (key.name === "/" || key.sequence === "/") {
         update(current => clearProjectFocus({ ...current, filterActive: true, filterText: "" }));
       } else if (key.name === "w") {
@@ -1062,6 +1201,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
 
     const poll = setInterval(() => {
       void fetchIntoState(opts, update);
+      if (state.view === "providers") void fetchProvidersIntoState(opts, update);
     }, opts.pollMs);
     const tick = setInterval(() => {
       update(current => clampState({ ...current, frame: current.frame + 1 }));
@@ -1072,5 +1212,6 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
     renderer.start();
     render();
     void fetchIntoState(opts, update);
+    void fetchProvidersIntoState(opts, update);
   });
 }
