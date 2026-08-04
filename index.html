@@ -391,6 +391,126 @@
             }
         }
 
+        /* ── Provider overview ── */
+
+        .provider-section {
+            margin-bottom: 20px;
+        }
+
+        .provider-header {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding: 0 4px;
+        }
+
+        .provider-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .provider-count {
+            font-size: 12px;
+            color: var(--text-dim);
+            margin-left: 4px;
+        }
+
+        .provider-card {
+            background-color: var(--card-bg);
+            border-radius: var(--radius);
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--border);
+        }
+
+        .provider-card:last-child {
+            margin-bottom: 0;
+        }
+
+        .provider-card.api { border-left-color: var(--blue); }
+        .provider-card.level-green { border-left-color: var(--green); }
+        .provider-card.level-yellow { border-left-color: var(--yellow); }
+        .provider-card.level-red { border-left-color: var(--red); }
+
+        .provider-main {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            flex-wrap: wrap;
+        }
+
+        .provider-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .provider-form {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            background: rgba(255,255,255,0.06);
+        }
+
+        .provider-form.api {
+            color: var(--blue);
+            background: rgba(0,122,255,0.12);
+        }
+
+        .provider-level {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .provider-level.level-green { color: var(--green); background: rgba(52,199,89,0.12); }
+        .provider-level.level-yellow { color: var(--yellow); background: rgba(255,204,0,0.12); }
+        .provider-level.level-red { color: var(--red); background: rgba(255,59,48,0.12); }
+
+        .provider-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .provider-meta .chip {
+            font-variant-numeric: tabular-nums;
+        }
+
+        .provider-meta .chip .k {
+            color: var(--text-dim);
+            margin-right: 3px;
+        }
+
+        .provider-meta .chip .v {
+            color: var(--text);
+            font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", monospace;
+            font-size: 12px;
+        }
+
+        .provider-empty,
+        .provider-error {
+            text-align: center;
+            color: var(--text-dim);
+            padding: 24px 0;
+            font-size: 14px;
+        }
+
+        .provider-error {
+            color: var(--red);
+        }
+
         /* ── Responsive ── */
 
         @media (max-width: 500px) {
@@ -416,8 +536,114 @@
             />
             <div class="filter-hint" id="filter-hint"></div>
         </header>
+        <section class="provider-section" id="provider-section">
+            <div class="provider-header">
+                <span class="provider-title">Provider 额度</span>
+                <span class="provider-count" id="provider-count"></span>
+            </div>
+            <div id="provider-container"></div>
+        </section>
         <div id="agent-container"></div>
     </div>
     <script type="module" src="./dist/app.js"></script>
+    <script>
+    (function () {
+        "use strict";
+
+        var container = document.getElementById("provider-container");
+        var countEl = document.getElementById("provider-count");
+        if (!container) return;
+
+        function fmtNum(n) {
+            var abs = Math.abs(n);
+            if (abs >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+            if (abs >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+            if (abs >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+            return Number.isInteger(n) ? String(n) : n.toFixed(1);
+        }
+
+        function esc(s) {
+            return String(s)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+        }
+
+        function chip(key, value) {
+            return '<span class="chip"><span class="k">' + esc(key) +
+                '</span><span class="v">' + value + "</span></span>";
+        }
+
+        function renderRow(row) {
+            var label = row.label || row.provider || "?";
+            var form = row.form === "api" ? "API" : "订阅";
+            var levelCls = "";
+            if (row.form === "subscription" && row.level) levelCls = " level-" + row.level;
+
+            var levelBadge = "";
+            if (row.form === "subscription" && row.level) {
+                levelBadge = '<span class="provider-level level-' + row.level + '">' + row.level + "</span>";
+            }
+
+            var main =
+                '<div class="provider-main">' +
+                '<span class="provider-label">' + esc(label) + "</span>" +
+                '<span class="provider-form' + (row.form === "api" ? " api" : "") + '">' + form + "</span>" +
+                levelBadge +
+                "</div>";
+
+            var meta = "";
+            if (row.form === "api") {
+                var unit = row.unit ? " " + esc(row.unit) : "";
+                var parts = [];
+                if (row.remaining !== undefined) parts.push(chip("remaining", fmtNum(row.remaining) + unit));
+                if (row.used !== undefined) parts.push(chip("used", fmtNum(row.used) + unit));
+                if (row.limit !== undefined) parts.push(chip("limit", fmtNum(row.limit) + unit));
+                meta = '<div class="provider-meta">' + parts.join("") + "</div>";
+            } else {
+                var sparts = [];
+                if (row.pacing) sparts.push(chip("pacing", esc(row.pacing)));
+                if (row.cardTiming) sparts.push(chip("card", esc(row.cardTiming)));
+                if (row.autoResetIn) sparts.push(chip("reset", esc(row.autoResetIn)));
+                meta = '<div class="provider-meta">' + sparts.join("") + "</div>";
+            }
+
+            var card = document.createElement("div");
+            card.className = "provider-card" + (row.form === "api" ? " api" : "") + levelCls;
+            card.innerHTML = main + meta;
+            return card;
+        }
+
+        function render(rows) {
+            if (countEl) countEl.textContent = rows.length ? String(rows.length) : "";
+            if (!rows || rows.length === 0) {
+                container.innerHTML = '<div class="provider-empty">无额度数据</div>';
+                return;
+            }
+            var frag = document.createDocumentFragment();
+            for (var i = 0; i < rows.length; i++) frag.appendChild(renderRow(rows[i]));
+            container.innerHTML = "";
+            container.appendChild(frag);
+        }
+
+        function load() {
+            fetch("/providers/live")
+                .then(function (res) {
+                    if (!res.ok) throw new Error("HTTP " + res.status);
+                    return res.json();
+                })
+                .then(function (data) {
+                    render(data.providers || []);
+                })
+                .catch(function () {
+                    container.innerHTML = '<div class="provider-error">无法加载额度数据</div>';
+                });
+        }
+
+        load();
+        setInterval(load, 60000);
+    })();
+    </script>
 </body>
 </html>
