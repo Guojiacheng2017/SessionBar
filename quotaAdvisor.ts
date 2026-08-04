@@ -1,27 +1,23 @@
 import type { SessionAgentSignal, SessionPayload } from "./types.js";
 import { RateBuffer } from "./rateBuffer.js";
-import { computePlanRows } from "./planAdvisor.js";
 import type { PlanRow } from "./planTypes.js";
 
 const API_KINDS = new Set(["usage", "quota", "balance"]);
 
 /**
- * Aggregate advisor rows for a session:
- *   - one display-only "api" row per usage/quota/balance agent signal, and
- *   - subscription rows from computePlanRows (wham/anthropic/kimi).
- * api rows never run computeAdvice — they only show numbers. Returns [] when
- * there is nothing to display (no signals and no subscription rows).
+ * Aggregate advisor rows for a session: one display-only "api" row per
+ * usage/quota/balance agent signal. api rows never run computeAdvice — they
+ * only show numbers. Subscription rows are handled globally in server.ts
+ * (computePlanRows), not per session. Returns [] when there are no signals.
  */
 export async function computeAdvisorRows(
   session: SessionPayload,
   _buffers: Map<string, RateBuffer>,
-  now: number,
+  _now: number,
 ): Promise<PlanRow[]> {
-  const apiRows = (session.agent_signals ?? [])
+  return (session.agent_signals ?? [])
     .filter(isApiSignal)
     .map(signalToApiRow);
-  const subscriptionRows = await computePlanRows({ now });
-  return [...apiRows, ...subscriptionRows];
 }
 
 function isApiSignal(signal: SessionAgentSignal): boolean {

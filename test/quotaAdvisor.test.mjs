@@ -2,15 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { computeAdvisorRows } from "../dist/quotaAdvisor.js";
 
-// computePlanRows reads provider credentials from real paths/env. This machine
-// has Codex auth configured, which would otherwise trigger live wham API calls
-// during the computeAdvisorRows tests. Point CODEX_HOME at a nonexistent dir
-// and drop KIMI_ACCESS_TOKEN so the subscription adapters short-circuit to
-// "no credentials" → [] rows. Each test file runs in its own process, so this
-// mutation is file-scoped and does not leak to other test files.
-process.env.CODEX_HOME = "/nonexistent-sessionbar-codex-home";
-delete process.env.KIMI_ACCESS_TOKEN;
-
 const baseSession = {
   session_id: "codex-abc__Vision-Dash",
   session_type: "Codex",
