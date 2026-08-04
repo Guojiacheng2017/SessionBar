@@ -12,5 +12,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["*.ts", "quota-engine/*.ts"]
+  "include": ["*.ts", "quota-engine/*.ts", "provider-plans/*.ts"]
 }
