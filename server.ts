@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, Dirent } from "fs";
-import { join, dirname, basename } from "path";
+import { join, dirname, basename, resolve } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { SessionPayload } from "./types.js";
@@ -17,6 +17,11 @@ import type { PlanRow } from "./planTypes.js";
 import { RateBuffer } from "./rateBuffer.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+// Start the HTTP server + polling loops only when run directly
+// (`node dist/server.js`, how cli.ts spawns it) — not when the module is
+// imported by tests. Otherwise app.listen would bind the port and the timers
+// would hold the test process's event loop open.
+const isDirectRun = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 const PORT = parseInt(process.env.PORT || "8989", 10);
 const HOST = process.env.SESSIONBAR_HOST || "127.0.0.1";
 
@@ -110,6 +115,28 @@ const rateBuffers = new Map<string, RateBuffer>();
 // Global subscription plan rows, refreshed on every provider poll cycle.
 let subscriptionRows: PlanRow[] = [];
 export function getSubscriptionRows(): PlanRow[] { return subscriptionRows; }
+
+/**
+ * Merge global subscription rows with every session's display-only "api" rows
+ * (advisorRows entries where form === "api"). Rows are deduped by
+ * `${provider}:${form}:${label}` — keep the first occurrence — so the same
+ * provider/form/label reported by multiple sessions collapses to one row, while
+ * distinct subscription rows (e.g. Anthropic 5h vs weekly, different labels)
+ * and subscription vs api forms of the same provider are all preserved.
+ */
+export function aggregateProviders(
+  subscriptionRows: PlanRow[],
+  sessions: Record<string, SessionPayload>,
+): PlanRow[] {
+  const apiRows = Object.values(sessions)
+    .flatMap(s => s.advisorRows?.filter(r => r.form === "api") ?? []);
+  const seen = new Map<string, PlanRow>();
+  for (const row of [...subscriptionRows, ...apiRows]) {
+    const key = `${row.provider}:${row.form}:${row.label}`;
+    if (!seen.has(key)) seen.set(key, row);
+  }
+  return [...seen.values()];
+}
 
 function advisorFingerprint(): string {
   const snapshot: Record<string, unknown> = {};
@@ -457,41 +484,45 @@ function recoverSessions() {
 }
 
 // SSE heartbeat — detect dead connections
-const heartbeatInterval = setInterval(() => {
-  for (const c of sseClients) {
-    try { c.write(":\n"); } catch {
-      sseClients.delete(c);
+let heartbeatInterval: NodeJS.Timeout | undefined;
+let purgeInterval: NodeJS.Timeout | undefined;
+if (isDirectRun) {
+  heartbeatInterval = setInterval(() => {
+    for (const c of sseClients) {
+      try { c.write(":\n"); } catch {
+        sseClients.delete(c);
+      }
     }
-  }
-}, 15_000);
+  }, 15_000);
 
-// Auto-purge: only remove sessions whose owning CLI session has ended.
-// Sessions stay alive while the CLI process is open — even if idle for minutes.
-const purgeInterval = setInterval(() => {
-  const now = Date.now();
-  let changed = false;
-  for (const id of Object.keys(sessions)) {
-    const s = sessions[id];
-    // Case 1: Explicit SessionEnd — remove after 5s grace so TUI can show final state
-    if (s.status === "idle" && s.task_name === "Session ended" && now - s.timestamp > 5_000) {
-      delete sessions[id];
-      removeSessionMarkerFiles(SESSION_ID_DIR, id);
-      changed = true;
-      console.log(`[purge] ${id} (ended)`);
+  // Auto-purge: only remove sessions whose owning CLI session has ended.
+  // Sessions stay alive while the CLI process is open — even if idle for minutes.
+  purgeInterval = setInterval(() => {
+    const now = Date.now();
+    let changed = false;
+    for (const id of Object.keys(sessions)) {
+      const s = sessions[id];
+      // Case 1: Explicit SessionEnd — remove after 5s grace so TUI can show final state
+      if (s.status === "idle" && s.task_name === "Session ended" && now - s.timestamp > 5_000) {
+        delete sessions[id];
+        removeSessionMarkerFiles(SESSION_ID_DIR, id);
+        changed = true;
+        console.log(`[purge] ${id} (ended)`);
+      }
+      // Case 2: Crash recovery — no heartbeat in 5min means the CLI process is gone
+      else if (now - s.timestamp > 300_000) {
+        delete sessions[id];
+        removeSessionMarkerFiles(SESSION_ID_DIR, id);
+        changed = true;
+        console.log(`[purge] ${id} (timeout — assumed crashed)`);
+      }
     }
-    // Case 2: Crash recovery — no heartbeat in 5min means the CLI process is gone
-    else if (now - s.timestamp > 300_000) {
-      delete sessions[id];
-      removeSessionMarkerFiles(SESSION_ID_DIR, id);
-      changed = true;
-      console.log(`[purge] ${id} (timeout — assumed crashed)`);
+    if (changed) {
+      broadcastSSE();
+      if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
     }
-  }
-  if (changed) {
-    broadcastSSE();
-    if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
-  }
-}, 10_000);
+  }, 10_000);
+}
 
 // POST: session reports its status
 app.post("/session/status", (req, res) => {
@@ -511,6 +542,11 @@ app.post("/session/status", (req, res) => {
 // GET: current state
 app.get("/sessions/live", (_req, res) => {
   res.json(sorted());
+});
+
+// GET: aggregated provider plan rows (subscription + per-session api rows)
+app.get("/providers/live", (_req, res) => {
+  res.json({ providers: aggregateProviders(subscriptionRows, sessions) });
 });
 
 // GET: SSE stream
@@ -542,14 +578,16 @@ app.delete("/session/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(PORT, HOST, () => {
-  writeFileSync(PID_FILE, String(process.pid));
-  console.log(`SessionBar on http://${HOST}:${PORT}`);
-  if (WEB_ENABLED) console.log(`Dashboard: http://${HOST}:${PORT}`);
-  recoverSessions();
-  startProviderPolling();
-});
+if (isDirectRun) {
+  app.listen(PORT, HOST, () => {
+    writeFileSync(PID_FILE, String(process.pid));
+    console.log(`SessionBar on http://${HOST}:${PORT}`);
+    if (WEB_ENABLED) console.log(`Dashboard: http://${HOST}:${PORT}`);
+    recoverSessions();
+    startProviderPolling();
+  });
 
-process.on("SIGTERM", () => { cleanup(); process.exit(0); });
-process.on("SIGINT", () => { cleanup(); process.exit(0); });
-process.on("uncaughtException", () => { cleanup(); process.exit(1); });
+  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+  process.on("SIGINT", () => { cleanup(); process.exit(0); });
+  process.on("uncaughtException", () => { cleanup(); process.exit(1); });
+}
