@@ -12,6 +12,8 @@ import { mergeCodexDiscovery } from "./codexSessionMerge.js";
 import { pollProvider, providerConfigsFromEnv } from "./providerAdapters.js";
 import { applyProviderPollResults } from "./providerMonitor.js";
 import { computeAdvisorRows } from "./quotaAdvisor.js";
+import { computePlanRows } from "./planAdvisor.js";
+import type { PlanRow } from "./planTypes.js";
 import { RateBuffer } from "./rateBuffer.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -105,6 +107,10 @@ const sseClients = new Set<express.Response>();
 
 const rateBuffers = new Map<string, RateBuffer>();
 
+// Global subscription plan rows, refreshed on every provider poll cycle.
+let subscriptionRows: PlanRow[] = [];
+export function getSubscriptionRows(): PlanRow[] { return subscriptionRows; }
+
 function advisorFingerprint(): string {
   const snapshot: Record<string, unknown> = {};
   for (const id of Object.keys(sessions)) snapshot[id] = sessions[id].advisorRows;
@@ -118,6 +124,9 @@ async function refreshProviderSignals() {
     const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
     changed = applyProviderPollResults(sessions, results);
   }
+  // Refresh global subscription rows every poll — adapters read their own
+  // credential files, so rows appear regardless of providerConfigs.
+  subscriptionRows = await computePlanRows({ now });
   // Advisor is computed regardless of providerConfigs — subscription adapters
   // (wham/anthropic/kimi) read their own credential files, so a user with only
   // ~/.codex/auth.json still gets subscription rows even when no provider API
