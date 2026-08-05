@@ -68,6 +68,10 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
       sustainableRate: advice.sustainableRate,
       actualVsSustainable: advice.actualVsSustainable,
       projectedCapHitAt: advice.projectedCapHitAt,
+      // 百分比额度（wham 只给 used_percent，无数值 token）: remaining = 剩余百分比
+      remaining,
+      limit,
+      unit: "%",
     };
   } catch {
     return null;

@@ -597,6 +597,7 @@ export function providerSummaryLine(row: PlanRow): string {
     return parts.length ? `${label} ${form} | ${parts.join(" · ")}` : `${label} ${form}`;
   }
   const parts = [
+    row.remaining !== undefined && row.limit !== undefined ? `${Math.round(row.remaining)}% left` : "",
     row.level ? `level ${row.level}` : "",
     row.pacing ? `pacing ${row.pacing}` : "",
     row.cardTiming ? `card ${row.cardTiming}` : "",
