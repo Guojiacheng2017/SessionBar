@@ -30,11 +30,11 @@ test("builds subscription row from wham usage + credits", async () => {
           credits: [{ expires_at: new Date(Date.now() + 86400000).toISOString() }],
         }), { status: 200 });
       }
-      // wham/usage
+      // wham/usage — 真实结构: rate_limit.primary_window.{used_percent, reset_at}
       return new Response(JSON.stringify({
-        available_count: 1,
-        rate_limit_reset_credits: { available_count: 1 },
-        usage: { utilization: 40, limit: 100, remaining: 60, reset_at: Date.now() + 86400000 },
+        rate_limit: {
+          primary_window: { used_percent: 40, reset_at: Date.now() + 3 * 86400000 },
+        },
       }), { status: 200 });
     },
   });

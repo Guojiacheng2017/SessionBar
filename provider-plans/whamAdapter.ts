@@ -37,16 +37,16 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
       ? usageBody as Record<string, unknown>
       : {};
 
-    // wham/usage 真实形状把周限额指标嵌套在 usage.usage 下；rate_limit_reset_credits.available_count 只在顶层。
-    // 防御性读取：先取嵌套 usage.usage，再回退到顶层 / rate_limit_reset_credits。
-    const nested = sub(usage, "usage");
-    const rlrc = sub(usage, "rate_limit_reset_credits");
-    const utilization = num(nested?.utilization ?? usage.utilization ?? rlrc?.used_percent);
-    const limit = num(nested?.limit ?? usage.limit ?? rlrc?.limit);
-    const resetRaw = nested?.reset_at ?? usage.reset_at ?? rlrc?.reset_at;
+    // wham/usage 真实形状：周限额在 rate_limit.primary_window（used_percent / reset_at）。
+    // codex /status 的 "54% left (resets Aug 8)" 即来自 used_percent=46 + reset_at。
+    const rateLimit = sub(usage, "rate_limit");
+    const primary = sub(rateLimit, "primary_window");
+    const utilization = num(primary?.used_percent ?? usage.utilization);    const resetRaw = primary?.reset_at ?? usage.reset_at;
     const resetAt = resetRaw ? parseTs(resetRaw) : undefined;
-    if (limit === undefined || utilization === undefined) return null; // 无周限额数据 → 跳过
+    if (utilization === undefined) return null; // 无周限额数据 → 跳过
 
+    // wham/usage 只给 used_percent + reset，无数值额度 → 用 100 抽象百分比额度
+    const limit = 100;
     const remaining = Math.max(0, Math.round(limit * (1 - utilization / 100)));
     const state: QuotaState = {
       window: "weekly",
@@ -74,8 +74,8 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
   }
 }
 
-function sub(obj: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
-  const v = obj[key];
+function sub(obj: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  const v = obj?.[key];
   return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
 }
 
