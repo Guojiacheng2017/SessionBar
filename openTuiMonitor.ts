@@ -661,22 +661,6 @@ export function providerTableContent(rows: readonly PlanRow[], renderer: CliRend
   return content;
 }
 
-function providerOverviewText(rows: readonly PlanRow[], opts: OpenTuiMonitorOptions, error?: string): string {
-  const api = rows.filter(r => r.form === "api").length;
-  const sub = rows.length - api;
-  const lines = [
-    "PROVIDER OVERVIEW",
-    error ? "provider fetch failed" : `providers ${rows.length}`,
-  ];
-  if (!error) lines.push(`subscription ${sub}`, `api ${api}`);
-  lines.push(
-    "",
-    error ?? (rows.length === 0 ? "No quota data" : "v / P  switch to sessions"),
-    `API ${opts.apiHost}:${opts.port}`,
-    `State ${compactPath(opts.stateDir)}`,
-  );
-  return lines.join("\n");
-}
 
 function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<MonitorState>, opts: OpenTuiMonitorOptions): void {
   const layout = monitorBodyLayout(renderer.width);
@@ -696,13 +680,11 @@ function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Re
         apiCount > 0 ? `${apiCount} api` : "",
       ].filter(Boolean).join("  ");
   refs.sessionsBox.title = `Providers (${providers.length})`;
-  refs.sessionsBox.width = layout.sidebarPanelWidth;
-  refs.detailsBox.width = layout.detailPanelWidth;
+  refs.sessionsBox.width = layout.bodyWidth;
+  refs.detailsBox.visible = false;
   refs.sessionsTable.visible = false;
   refs.providersTable.visible = true;
   refs.providersTable.content = providerTableContent(providers, renderer, error);
-  refs.detailsBox.title = "Provider Overview";
-  refs.detailsText.content = providerOverviewText(providers, opts, error);
   refs.footer.content = state.errorMsg ? `! ${state.errorMsg}` : "v / P  switch to sessions  r refresh  / filter  w web  q quit";
   refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;
   renderer.requestRender();
@@ -1006,6 +988,7 @@ function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<Mo
   }
   refs.sessionsTable.visible = true;
   refs.providersTable.visible = false;
+  refs.detailsBox.visible = true;
   refs.projectsBox.visible = true;
   const shown = applyFilter(state.sessions, state.filterText);
   const groups = groupByProject(shown);
