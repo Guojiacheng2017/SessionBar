@@ -647,7 +647,7 @@ function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Re
   const subCount = providers.length - apiCount;
   const error = state.providersError;
 
-  refs.title.content = "SessionBar";
+  refs.title.content = "SessionBar [Providers]";
   refs.online.content = `online :${opts.port}`;
   refs.projectsBox.visible = false;
   refs.activity.content = error
@@ -663,7 +663,7 @@ function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Re
   refs.sessionsTable.content = providerTableContent(providers, renderer, error);
   refs.detailsBox.title = "Provider Overview";
   refs.detailsText.content = providerOverviewText(providers, opts, error);
-  refs.footer.content = state.errorMsg ? `! ${state.errorMsg}` : "v / P sessions  r refresh  / filter  w web  q quit";
+  refs.footer.content = state.errorMsg ? `! ${state.errorMsg}` : "v / P  switch to sessions  r refresh  / filter  w web  q quit";
   refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;
   renderer.requestRender();
 }
@@ -977,10 +977,10 @@ function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<Mo
     : state.filterActive
       ? `/${state.filterText}_  ${shown.length}/${state.sessions.length} sessions  Esc clear  Enter accept`
       : state.projectFocusKey
-        ? "Up/Down session  Tab detail tab  1-5 scope  a/Backspace all projects  r refresh  / filter  w web  q quit"
-        : "Up/Down project  Enter open project  r refresh  / filter  w web  q quit";
+        ? "Up/Down session  Tab detail tab  1-5 scope  a/Backspace all projects  r refresh  v providers  / filter  w web  q quit"
+        : "Up/Down project  Enter open project  r refresh  v providers  / filter  w web  q quit";
 
-  refs.title.content = "SessionBar";
+  refs.title.content = "SessionBar [Sessions]";
   refs.online.content = `online :${opts.port}`;
   refs.activity.content = activity;
   refs.projectsBox.title = `Projects (${groups.size})`;
