@@ -50,8 +50,8 @@ test("builds overall + 5h windowed rows from coding usage (string limit/remainin
   assert.equal(rows.length, 2);
   assert.ok(rows.every(r => r.form === "subscription" && r.provider === "kimi"));
 
-  const overall = rows.find(r => r.label === "Kimi 订阅 (整体)");
-  const fiveHour = rows.find(r => r.label === "Kimi 订阅 (5h)");
+  const overall = rows.find(r => r.label === "Kimi Subscription (overall)");
+  const fiveHour = rows.find(r => r.label === "Kimi Subscription (5h)");
   assert.ok(overall && fiveHour);
 
   // string limit/remaining parsed as numbers
@@ -80,7 +80,7 @@ test("epoch resetTime (seconds) is converted to ms", async () => {
     }), { status: 200 }),
   });
   assert.equal(rows.length, 2);
-  const overall = rows.find(r => r.label === "Kimi 订阅 (整体)");
+  const overall = rows.find(r => r.label === "Kimi Subscription (overall)");
   assert.ok(overall);
   // 50 remaining over 1h
   assert.ok(Math.abs(overall.sustainableRate - 50) < 1e-9);

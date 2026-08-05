@@ -89,6 +89,7 @@ interface MonitorRefs {
   projectsTable: TextTableRenderable;
   sessionsBox: BoxRenderable;
   sessionsTable: TextTableRenderable;
+  providersTable: TextTableRenderable;
   detailsBox: BoxRenderable;
   detailsText: TextRenderable;
   footer: TextRenderable;
@@ -585,7 +586,7 @@ function trimZero(text: string): string {
 }
 
 export function providerSummaryLine(row: PlanRow): string {
-  const form = row.form === "api" ? "API" : "订阅";
+  const form = providerFormLabel(row);
   const label = row.label || row.provider || "?";
   if (row.form === "api") {
     const unit = row.unit ? ` ${row.unit}` : "";
@@ -606,17 +607,53 @@ export function providerSummaryLine(row: PlanRow): string {
   return parts.length ? `${label} ${form} | ${parts.join(" · ")}` : `${label} ${form}`;
 }
 
+function providerFormLabel(row: PlanRow): string {
+  return row.form === "api" ? "API" : "Subscription";
+}
+
+function providerLeftText(row: PlanRow): string {
+  if (row.form === "api") {
+    const unit = row.unit ? ` ${row.unit}` : "";
+    if (row.remaining !== undefined) return `${compactNumber(row.remaining)}${unit} left`;
+    if (row.used !== undefined && row.limit !== undefined) return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit}`;
+    if (row.used !== undefined) return `${compactNumber(row.used)} used`;
+    if (row.limit !== undefined) return `${compactNumber(row.limit)} limit`;
+    return "—";
+  }
+  return row.remaining !== undefined ? `${Math.round(row.remaining)}%` : "—";
+}
+
+function levelColor(level: string): string {
+  if (level === "red") return PALETTE.red;
+  if (level === "yellow") return PALETTE.yellow;
+  return PALETTE.green;
+}
+
 export function providerTableContent(rows: readonly PlanRow[], renderer: CliRenderer, error?: string): TextTableContent {
   if (error) return [[cell(error, PALETTE.red)]];
-  if (rows.length === 0) return [[cell("无额度数据", PALETTE.muted)]];
+  if (rows.length === 0) return [[cell("No quota data", PALETTE.muted)]];
+  const compact = renderer.width < 100;
+  const content: TextTableContent = compact
+    ? [[header("Provider"), header("Form"), header("Left"), header("Reset")]]
+    : [[header("Provider"), header("Form"), header("Left"), header("Level"), header("Reset"), header("Card")]];
   const slots = Math.max(4, renderer.height - 17);
   const visible = visibleWindow(rows, 0, slots);
-  const content: TextTableContent = [];
   for (const row of visible) {
-    const fg = row.form === "api"
-      ? PALETTE.cyan
-      : row.level === "red" ? PALETTE.red : row.level === "yellow" ? PALETTE.yellow : PALETTE.green;
-    content.push([cell(providerSummaryLine(row), fg)]);
+    const rowFg = row.form === "api" ? PALETTE.cyan : levelColor(row.level);
+    const providerCell = cell(row.label || row.provider || "?", PALETTE.fg);
+    const formCell = cell(providerFormLabel(row), rowFg);
+    const leftCell = cell(providerLeftText(row), rowFg);
+    const resetCell = cell(row.autoResetIn || "", PALETTE.muted);
+    content.push(compact
+      ? [providerCell, formCell, leftCell, resetCell]
+      : [
+          providerCell,
+          formCell,
+          leftCell,
+          cell(row.form === "api" ? "" : row.level, row.form === "api" ? PALETTE.muted : rowFg),
+          resetCell,
+          cell(row.form === "api" ? "" : row.cardTiming || "", PALETTE.muted),
+        ]);
   }
   if (visible.length < rows.length) {
     content.push([cell(`... ${rows.length - visible.length} more provider${rows.length - visible.length === 1 ? "" : "s"}`, PALETTE.muted)]);
@@ -634,7 +671,7 @@ function providerOverviewText(rows: readonly PlanRow[], opts: OpenTuiMonitorOpti
   if (!error) lines.push(`subscription ${sub}`, `api ${api}`);
   lines.push(
     "",
-    error ?? (rows.length === 0 ? "无额度数据" : "v / P  switch to sessions"),
+    error ?? (rows.length === 0 ? "No quota data" : "v / P  switch to sessions"),
     `API ${opts.apiHost}:${opts.port}`,
     `State ${compactPath(opts.stateDir)}`,
   );
@@ -661,7 +698,9 @@ function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Re
   refs.sessionsBox.title = `Providers (${providers.length})`;
   refs.sessionsBox.width = layout.sidebarPanelWidth;
   refs.detailsBox.width = layout.detailPanelWidth;
-  refs.sessionsTable.content = providerTableContent(providers, renderer, error);
+  refs.sessionsTable.visible = false;
+  refs.providersTable.visible = true;
+  refs.providersTable.content = providerTableContent(providers, renderer, error);
   refs.detailsBox.title = "Provider Overview";
   refs.detailsText.content = providerOverviewText(providers, opts, error);
   refs.footer.content = state.errorMsg ? `! ${state.errorMsg}` : "v / P  switch to sessions  r refresh  / filter  w web  q quit";
@@ -884,6 +923,23 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
   });
   sessionsBox.add(sessionsTable);
 
+  const providersTable = new TextTableRenderable(renderer, {
+    id: "sessionbar-providers",
+    width: "100%",
+    height: "100%",
+    content: [],
+    wrapMode: "none",
+    columnWidthMode: "full",
+    columnFitter: "proportional",
+    columnGap: 1,
+    border: false,
+    showBorders: false,
+    fg: PALETTE.fg,
+    bg: PALETTE.panel,
+    visible: false,
+  });
+  sessionsBox.add(providersTable);
+
   const detailsBox = new BoxRenderable(renderer, {
     id: "sessionbar-details-box",
     title: "Details / Project",
@@ -936,6 +992,7 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     projectsTable,
     sessionsBox,
     sessionsTable,
+    providersTable,
     detailsBox,
     detailsText,
     footer,
@@ -947,6 +1004,8 @@ function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<Mo
     renderProvidersView(refs, renderer, state, opts);
     return;
   }
+  refs.sessionsTable.visible = true;
+  refs.providersTable.visible = false;
   refs.projectsBox.visible = true;
   const shown = applyFilter(state.sessions, state.filterText);
   const groups = groupByProject(shown);

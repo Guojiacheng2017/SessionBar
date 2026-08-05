@@ -44,7 +44,7 @@ export function computeAdvice(state: QuotaState, now: number): Advice {
   if (windowReset) {
     // expired window: never report a normal green/OK pacing with sustainable 0
     level = "yellow";
-    pacing = "窗口已重置，重新评估额度";
+    pacing = "Window reset, re-evaluate quota";
   }
 
   const cardTiming = cardTimingText(state.cards ?? [], projectedCapHitAt, resetAt, now, remaining);
@@ -54,15 +54,15 @@ export function computeAdvice(state: QuotaState, now: number): Advice {
 }
 
 function pacingText(remaining: number, measuredRate: number, sustainableRate: number, level: string): string {
-  if (remaining === 0) return "额度已耗尽，等待重置或使用重置卡";
-  if (measuredRate <= 0) return "数据不足，先观察消耗速率";
+  if (remaining === 0) return "Quota exhausted, wait for reset or use reset card";
+  if (measuredRate <= 0) return "Insufficient data, observing burn rate";
   const rate = Math.round(sustainableRate);
   if (level === "red") {
-    if (measuredRate > sustainableRate) return `烧太快：按 ≤ ${rate} token/小时 消耗才能撑到重置`;
-    return "额度不足：剩余 <5%，建议暂停或使用重置卡";
+    if (measuredRate > sustainableRate) return `Burning too fast: consume ≤ ${rate} tokens/h to reach reset`;
+    return "Quota low: <5% left, pause or use reset card";
   }
-  if (level === "yellow") return `建议减速：目标 ≤ ${rate} token/小时`;
-  return `可持续消耗速率 ${rate} token/小时，当前节奏 OK`;
+  if (level === "yellow") return `Slow down: target ≤ ${rate} tokens/h`;
+  return `Sustainable rate ${rate} tokens/h, current pace OK`;
 }
 
 function cardTimingText(
@@ -77,34 +77,34 @@ function cardTimingText(
     c => c.count > 0 && (c.expiresAt === undefined || c.expiresAt - now >= 0),
   );
   const total = active.reduce((sum, c) => sum + c.count, 0);
-  if (total === 0) return "无重置卡可建议";
+  if (total === 0) return "No reset cards";
   const expiringSoon = active.some(
     c => c.expiresAt !== undefined && c.expiresAt - now < CARD_EXPIRY_GRACE_MS,
   );
-  if (expiringSoon) return "有卡即将过期（<24h），立即用卡，避免作废";
+  if (expiringSoon) return "Card expiring (<24h), use now to avoid waste";
   // remaining 0 counts as cap-hit even though projectedCapHitAt is null for it
   const capped = remaining === 0 || (projectedCapHitAt !== null && projectedCapHitAt < resetAt);
-  if (capped) return "现在用卡最佳：额度已耗尽或触顶在即，且自然重置还远";
+  if (capped) return "Best time to use card: quota exhausted or cap imminent, natural reset far";
   const expiresBeforeReset = active.find(
     c => c.expiresAt !== undefined && c.expiresAt < resetAt,
   );
   if (expiresBeforeReset) {
-    return `未触顶，但卡将于 ${formatDuration(expiresBeforeReset.expiresAt! - now)} 后过期（先于重置），注意别浪费`;
+    return `No cap hit, but card expires in ${formatDuration(expiresBeforeReset.expiresAt! - now)} (before reset), don't waste it`;
   }
-  return "未触顶，攒卡（有效期 30 天），重置后再评估";
+  return "No cap hit, save card (30d validity), re-evaluate after reset";
 }
 
 function formatDuration(ms: number): string {
   const days = Math.floor(ms / (24 * MS_PER_HOUR));
   const hours = Math.floor((ms % (24 * MS_PER_HOUR)) / MS_PER_HOUR);
-  if (days > 0) return hours > 0 ? `${days}天${hours}小时` : `${days}天`;
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
   const hoursTotal = Math.floor(ms / MS_PER_HOUR);
-  if (hoursTotal > 0) return `${hoursTotal}小时`;
-  return `${Math.max(1, Math.ceil(ms / 60_000))}分钟`;
+  if (hoursTotal > 0) return `${hoursTotal}h`;
+  return `${Math.max(1, Math.ceil(ms / 60_000))}m`;
 }
 
 function autoResetText(resetAt: number, now: number): string {
-  if (resetAt <= now) return "重置中/即将重置";
+  if (resetAt <= now) return "Resetting / reset imminent";
   const diffMs = resetAt - now;
   if (diffMs < 24 * MS_PER_HOUR) {
     const resetDate = new Date(resetAt);

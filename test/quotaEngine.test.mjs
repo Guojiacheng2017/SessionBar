@@ -93,15 +93,15 @@ test("all-zero samples return 0", () => {
 });
 
 // ===== quotaEngine =====
-const NOW = 1_728_000_000_000; // 固定 now，测试确定性
+const NOW = 1_728_000_000_000; // fixed now for deterministic tests
 
-// 注意：estimateRate 需 ≥2 样本才有速率；helper 默认给 2 个 50k 样本
+// note: estimateRate needs >=2 samples to compute a rate; helper defaults to 2x 50k samples
 function state(over) {
   return {
     window: "weekly",
     limit: 1_000_000,
     remaining: 500_000,
-    resetAt: NOW + 7 * 24 * 3_600_000, // 7 天后（168h 窗口）
+    resetAt: NOW + 7 * 24 * 3_600_000, // 7 days out (168h window)
     rateSamples: [
       { value: 50_000, at: NOW - 3_600_000 },
       { value: 50_000, at: NOW - 7_200_000 },
@@ -111,7 +111,7 @@ function state(over) {
 }
 
 test("green: reset arrives before cap hit", () => {
-  // remaining 900k, rate 5k/h → 180h 触顶 > 168h 重置 → 重置先到，null
+  // remaining 900k, rate 5k/h -> 180h cap hit > 168h reset -> reset comes first, null
   const advice = computeAdvice(state({ remaining: 900_000, rateSamples: [
     { value: 5_000, at: NOW - 3_600_000 },
     { value: 5_000, at: NOW - 7_200_000 },
@@ -121,7 +121,7 @@ test("green: reset arrives before cap hit", () => {
 });
 
 test("yellow: cap hits in second half of window", () => {
-  // remaining 900k, rate 8k/h → 112.5h 触顶；窗口 168h 后半段 → yellow
+  // remaining 900k, rate 8k/h -> 112.5h cap hit; second half of 168h window -> yellow
   const advice = computeAdvice(state({ remaining: 900_000, rateSamples: [
     { value: 8_000, at: NOW - 3_600_000 },
     { value: 8_000, at: NOW - 7_200_000 },
@@ -130,13 +130,13 @@ test("yellow: cap hits in second half of window", () => {
 });
 
 test("red: cap hits in first half of window", () => {
-  // remaining 100k, rate 50k/h → 2h 触顶 < 84h → red
+  // remaining 100k, rate 50k/h -> 2h cap hit < 84h -> red
   const advice = computeAdvice(state({ remaining: 100_000 }), NOW);
   assert.equal(advice.level, "red");
 });
 
 test("red: remaining below 5% while still burning", () => {
-  // limit 1M 的 5% = 50k；remaining 40k（4%）且 measured>0 → red
+  // 5% of 1M limit = 50k; remaining 40k (4%) with measured>0 -> red
   const advice = computeAdvice(state({ remaining: 40_000, rateSamples: [
     { value: 5_000, at: NOW - 3_600_000 },
     { value: 5_000, at: NOW - 7_200_000 },
@@ -162,26 +162,26 @@ test("zero remaining → red, sustainable 0", () => {
   const advice = computeAdvice(state({ remaining: 0 }), NOW);
   assert.equal(advice.level, "red");
   assert.equal(advice.sustainableRate, 0);
-  assert.match(advice.pacing, /耗尽/);
+  assert.match(advice.pacing, /Quota exhausted/);
 });
 
 test("resetAt in past → autoResetIn says resetting", () => {
   const advice = computeAdvice(state({ resetAt: NOW - 1_000 }), NOW);
-  assert.match(advice.autoResetIn, /重置/);
+  assert.match(advice.autoResetIn, /Resetting|reset/);
 });
 
 test("insufficient samples → no cap projection", () => {
   const advice = computeAdvice(state({ rateSamples: [] }), NOW);
   assert.equal(advice.projectedCapHitAt, null);
-  assert.match(advice.pacing, /数据不足/);
+  assert.match(advice.pacing, /Insufficient data/);
 });
 
 test("card: spend when cap hit before reset and reset far", () => {
   const advice = computeAdvice(state({
     remaining: 100_000,
     cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
-  }), NOW); // 默认 2×50k → 2h 触顶，重置 168h 远 → 现在用卡
-  assert.match(advice.cardTiming, /现在用卡|立即用/);
+  }), NOW); // default 2x50k -> 2h cap hit, reset 168h out -> use card now
+  assert.match(advice.cardTiming, /Best time to use card|use now/);
 });
 
 test("card: expiring soon forces spend", () => {
@@ -191,9 +191,9 @@ test("card: expiring soon forces spend", () => {
       { value: 5_000, at: NOW - 3_600_000 },
       { value: 5_000, at: NOW - 7_200_000 },
     ],
-    cards: [{ count: 1, expiresAt: NOW + 12 * 3_600_000 }], // 12h 后过期
+    cards: [{ count: 1, expiresAt: NOW + 12 * 3_600_000 }], // expires in 12h
   }), NOW);
-  assert.match(advice.cardTiming, /立即用/);
+  assert.match(advice.cardTiming, /use now/);
 });
 
 test("card: no cap hit → save", () => {
@@ -205,7 +205,7 @@ test("card: no cap hit → save", () => {
     ],
     cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
   }), NOW);
-  assert.match(advice.cardTiming, /攒|未触顶/);
+  assert.match(advice.cardTiming, /save card|No cap hit/);
 });
 
 test("no divide by zero → finite numbers", () => {
@@ -217,31 +217,31 @@ test("no divide by zero → finite numbers", () => {
   assert.equal(advice.projectedCapHitAt, null);
 });
 
-test("card: remaining=0 with a valid card → spend it now, not 攒卡", () => {
+test("card: remaining=0 with a valid card -> spend it now, not save", () => {
   const advice = computeAdvice(state({
     remaining: 0,
     cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
   }), NOW);
-  assert.match(advice.cardTiming, /现在用卡|立即用/);
-  assert.doesNotMatch(advice.cardTiming, /攒卡/);
+  assert.match(advice.cardTiming, /Best time to use card|use now/);
+  assert.doesNotMatch(advice.cardTiming, /save card/);
 });
 
 test("card: already-expired card is not actionable", () => {
   const advice = computeAdvice(state({
     cards: [{ count: 1, expiresAt: NOW - 3_600_000 }], // expired 1h ago
   }), NOW);
-  assert.doesNotMatch(advice.cardTiming, /立即用|现在用卡/);
-  assert.match(advice.cardTiming, /无重置卡可建议/);
+  assert.doesNotMatch(advice.cardTiming, /use now|Best time to use card/);
+  assert.match(advice.cardTiming, /No reset cards/);
 });
 
-test("card: all-expired cards → 无重置卡可建议", () => {
+test("card: all-expired cards -> No reset cards", () => {
   const advice = computeAdvice(state({
     cards: [
       { count: 2, expiresAt: NOW - 3_600_000 },
       { count: 1, expiresAt: NOW - 24 * 3_600_000 },
     ],
   }), NOW);
-  assert.match(advice.cardTiming, /无重置卡可建议/);
+  assert.match(advice.cardTiming, /No reset cards/);
 });
 
 test("card: expires before reset in save branch → mentions it", () => {
@@ -253,7 +253,7 @@ test("card: expires before reset in save branch → mentions it", () => {
     ],
     cards: [{ count: 1, expiresAt: NOW + 3 * 24 * 3_600_000 }], // 3d < reset 7d
   }), NOW);
-  assert.match(advice.cardTiming, /先于重置/);
+  assert.match(advice.cardTiming, /before reset/);
 });
 
 test("actualVsSustainable null/0 instead of Infinity", () => {
@@ -272,8 +272,8 @@ test("actualVsSustainable null/0 instead of Infinity", () => {
 test("resetAt in past → yellow level + window-reset pacing", () => {
   const advice = computeAdvice(state({ resetAt: NOW - 1_000 }), NOW);
   assert.equal(advice.level, "yellow");
-  assert.equal(advice.pacing, "窗口已重置，重新评估额度");
-  assert.match(advice.autoResetIn, /重置/);
+  assert.equal(advice.pacing, "Window reset, re-evaluate quota");
+  assert.match(advice.autoResetIn, /Resetting|reset/);
 });
 
 test("autoResetIn: same-day reset → at HH:MM", () => {
@@ -288,7 +288,7 @@ test("autoResetIn: same-day reset → at HH:MM", () => {
   assert.equal(advice.autoResetIn, `at ${hh}:${mm}`);
 });
 
-test("red from low remaining (not fast burn) → 额度不足 copy", () => {
+test("red from low remaining (not fast burn) -> Quota low copy", () => {
   const advice = computeAdvice(state({
     remaining: 40_000, // 4% of limit
     rateSamples: [
@@ -297,6 +297,6 @@ test("red from low remaining (not fast burn) → 额度不足 copy", () => {
     ],
   }), NOW);
   assert.equal(advice.level, "red");
-  assert.match(advice.pacing, /额度不足/);
-  assert.doesNotMatch(advice.pacing, /烧太快/);
+  assert.match(advice.pacing, /Quota low/);
+  assert.doesNotMatch(advice.pacing, /Burning too fast/);
 });

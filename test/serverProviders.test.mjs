@@ -6,7 +6,7 @@ function planRow(overrides = {}) {
   return {
     form: "subscription",
     provider: "anthropic",
-    label: "Anthropic 订阅 (5h)",
+    label: "Anthropic Subscription (5h)",
     level: "green",
     pacing: "ok",
     cardTiming: "",
@@ -33,7 +33,7 @@ function session(id, advisorRows = []) {
 
 test("aggregateProviders: merges subscription + api rows", () => {
   const subscriptionRows = [
-    planRow({ provider: "anthropic", label: "Anthropic 订阅 (5h)" }),
+    planRow({ provider: "anthropic", label: "Anthropic Subscription (5h)" }),
   ];
   const sessions = {
     a: session("a", [
@@ -63,24 +63,24 @@ test("aggregateProviders: dedupes identical api rows across sessions", () => {
 
 test("aggregateProviders: keeps distinct subscription rows (5h vs weekly labels)", () => {
   const subscriptionRows = [
-    planRow({ provider: "anthropic", label: "Anthropic 订阅 (5h)" }),
-    planRow({ provider: "anthropic", label: "Anthropic 订阅 (weekly)" }),
+    planRow({ provider: "anthropic", label: "Anthropic Subscription (5h)" }),
+    planRow({ provider: "anthropic", label: "Anthropic Subscription (weekly)" }),
   ];
   const result = aggregateProviders(subscriptionRows, {});
   assert.equal(result.length, 2);
   assert.deepEqual(
     result.map(r => r.label).sort(),
-    ["Anthropic 订阅 (5h)", "Anthropic 订阅 (weekly)"],
+    ["Anthropic Subscription (5h)", "Anthropic Subscription (weekly)"],
   );
 });
 
 test("aggregateProviders: dedup key includes form (subscription + api of same provider/label both kept)", () => {
   const subscriptionRows = [
-    planRow({ provider: "anthropic", label: "Anthropic 订阅 (5h)" }),
+    planRow({ provider: "anthropic", label: "Anthropic Subscription (5h)" }),
   ];
   const sessions = {
     a: session("a", [
-      planRow({ form: "api", provider: "anthropic", label: "Anthropic 订阅 (5h)", remaining: 42.5 }),
+      planRow({ form: "api", provider: "anthropic", label: "Anthropic Subscription (5h)", remaining: 42.5 }),
     ]),
   };
   const result = aggregateProviders(subscriptionRows, sessions);
@@ -125,8 +125,8 @@ function apiRow(overrides = {}) {
 test("sessionAdvisorRows: session with api signal + matching subscription rows keeps both", () => {
   const codexSession = { ...session("codex-abc"), session_type: "Codex" };
   const subscriptionRows = [
-    planRow({ provider: "openai", label: "OpenAI ChatGPT 订阅" }),
-    planRow({ provider: "anthropic", label: "Anthropic 订阅 (5h)" }),
+    planRow({ provider: "openai", label: "OpenAI Subscription" }),
+    planRow({ provider: "anthropic", label: "Anthropic Subscription (5h)" }),
   ];
   const rows = sessionAdvisorRows(codexSession, [apiRow()], subscriptionRows);
   assert.equal(rows.length, 2);
@@ -138,8 +138,8 @@ test("sessionAdvisorRows: session with api signal + matching subscription rows k
 test("sessionAdvisorRows: session with no api signals but non-empty subscriptions gets subscription rows, not empty", () => {
   const claudeSession = session("claude-abc", []);
   const subscriptionRows = [
-    planRow({ provider: "anthropic", label: "Anthropic 订阅 (5h)" }),
-    planRow({ provider: "openai", label: "OpenAI ChatGPT 订阅" }),
+    planRow({ provider: "anthropic", label: "Anthropic Subscription (5h)" }),
+    planRow({ provider: "openai", label: "OpenAI Subscription" }),
   ];
   const rows = sessionAdvisorRows(claudeSession, [], subscriptionRows);
   assert.equal(rows.length, 1);
@@ -147,7 +147,7 @@ test("sessionAdvisorRows: session with no api signals but non-empty subscription
   assert.equal(rows[0].form, "subscription");
 });
 
-test("sessionAdvisorRows: no subscriptions and no api rows → empty (advisor tab shows 无额度数据)", () => {
+test("sessionAdvisorRows: no subscriptions and no api rows → empty (advisor tab shows No quota data)", () => {
   const rows = sessionAdvisorRows(session("claude-abc", []), [], []);
   assert.deepEqual(rows, []);
 });

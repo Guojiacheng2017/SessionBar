@@ -4,7 +4,7 @@ export interface PlanRow {
   form: PlanForm;
   provider: string;
   label: string;
-  // subscription 形态（有 limit → computeAdvice 全算）
+  // subscription form (has limit -> computeAdvice fully computes)
   level: "green" | "yellow" | "red";
   pacing: string;
   cardTiming: string;
@@ -12,7 +12,7 @@ export interface PlanRow {
   sustainableRate: number;
   actualVsSustainable: number | null;
   projectedCapHitAt: number | null;
-  // api 形态（余额式，只显示）
+  // api form (balance-style, display only)
   remaining?: number;
   used?: number;
   limit?: number;

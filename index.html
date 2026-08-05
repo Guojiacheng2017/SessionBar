@@ -538,7 +538,7 @@
         </header>
         <section class="provider-section" id="provider-section">
             <div class="provider-header">
-                <span class="provider-title">Provider 额度</span>
+                <span class="provider-title">Provider Quota</span>
                 <span class="provider-count" id="provider-count"></span>
             </div>
             <div id="provider-container"></div>
@@ -577,7 +577,7 @@
 
         function renderRow(row) {
             var label = row.label || row.provider || "?";
-            var form = row.form === "api" ? "API" : "订阅";
+            var form = row.form === "api" ? "API" : "Subscription";
             var levelCls = "";
             if (row.form === "subscription" && row.level) levelCls = " level-" + row.level;
 
@@ -618,7 +618,7 @@
         function render(rows) {
             if (countEl) countEl.textContent = rows.length ? String(rows.length) : "";
             if (!rows || rows.length === 0) {
-                container.innerHTML = '<div class="provider-empty">无额度数据</div>';
+                container.innerHTML = '<div class="provider-empty">No quota data</div>';
                 return;
             }
             var frag = document.createDocumentFragment();
@@ -637,7 +637,7 @@
                     render(data.providers || []);
                 })
                 .catch(function () {
-                    container.innerHTML = '<div class="provider-error">无法加载额度数据</div>';
+                    container.innerHTML = '<div class="provider-error">Failed to load quota data</div>';
                 });
         }
 

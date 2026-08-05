@@ -6,7 +6,7 @@ const USAGE_URL = "https://api.kimi.com/coding/v1/usages";
 const FETCH_TIMEOUT_MS = 10_000;
 const MS_PER_HOUR = 3_600_000;
 const WEEK_MS = 7 * 24 * MS_PER_HOUR;
-/** duration=300 (min) = 5h 滚动窗口 */
+/** duration=300 (min) = 5h rolling window */
 const FIVE_HOUR_DURATION = 300;
 
 interface KimiOpts {
@@ -44,19 +44,19 @@ export async function fetchKimiSubscription(opts: KimiOpts = {}): Promise<PlanRo
     const root = body as Record<string, unknown>;
     const rows: PlanRow[] = [];
 
-    // overall 行用 usage.limit/remaining
+    // overall row uses usage.limit/remaining
     const usage = sub(root, "usage");
     if (usage) {
       const limit = num(usage.limit);
       const remaining = num(usage.remaining);
       const resetAt = parseTs(usage.resetTime);
       if (limit !== undefined && remaining !== undefined) {
-        const row = buildRow("整体", "weekly", limit, remaining, resetAt, now);
+        const row = buildRow("overall", "weekly", limit, remaining, resetAt, now);
         if (row) rows.push(row);
       }
     }
 
-    // windowed 行用 limits[].detail；duration=300 → 5h 窗口
+    // windowed rows use limits[].detail; duration=300 -> 5h window
     const limits = Array.isArray(root.limits) ? root.limits : [];
     for (const w of limits) {
       if (!w || typeof w !== "object") continue;
@@ -70,7 +70,7 @@ export async function fetchKimiSubscription(opts: KimiOpts = {}): Promise<PlanRo
       const window = sub(entry, "window");
       const duration = num(window?.duration);
       const isFiveHour = duration === FIVE_HOUR_DURATION;
-      const row = buildRow(isFiveHour ? "5h" : "窗口", isFiveHour ? "5h" : "weekly", limit, remaining, resetAt, now);
+      const row = buildRow(isFiveHour ? "5h" : "window", isFiveHour ? "5h" : "weekly", limit, remaining, resetAt, now);
       if (row) rows.push(row);
     }
     return rows;
@@ -98,7 +98,7 @@ function buildRow(
   return {
     form: "subscription",
     provider: "kimi",
-    label: `Kimi 订阅 (${label})`,
+    label: `Kimi Subscription (${label})`,
     level: advice.level,
     pacing: advice.pacing,
     cardTiming: advice.cardTiming,

@@ -1,2 +1,2 @@
-// 各 provider 订阅适配器入口。逐步填充：whamAdapter, anthropicAdapter, kimiAdapter。
+// Entry point for per-provider subscription adapters. Filled in progressively: whamAdapter, anthropicAdapter, kimiAdapter.
 export {};

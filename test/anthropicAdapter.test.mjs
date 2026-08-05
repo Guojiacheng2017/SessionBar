@@ -43,8 +43,8 @@ test("builds 5h + weekly rows from oauth usage", async () => {
   assert.ok(sentHeaders);
   assert.equal(sentHeaders.Authorization, "Bearer test-oauth-token-abc");
   assert.equal(sentHeaders["anthropic-beta"], "oauth-2025-04-20");
-  const fiveHour = rows.find(r => r.label === "Anthropic 订阅 (5h)");
-  const weekly = rows.find(r => r.label === "Anthropic 订阅 (weekly)");
+  const fiveHour = rows.find(r => r.label === "Anthropic Subscription (5h)");
+  const weekly = rows.find(r => r.label === "Anthropic Subscription (weekly)");
   assert.ok(fiveHour && weekly);
   assert.equal(fiveHour.sustainableRate, 70 / 5); // 100-30 = 70 remaining over 5h
   assert.equal(weekly.sustainableRate, 50 / (3 * 24)); // 100-50 = 50 remaining over 3d

@@ -66,7 +66,7 @@ export async function fetchAnthropicSubscription(opts: AnthropicOpts = {}): Prom
 }
 
 function buildRow(windowName: "5h" | "weekly", utilization: number, resetAt: number, now: number): PlanRow | null {
-  // oauth usage 只给 utilization % + reset，无数值 limit → 用 100 作为抽象额度
+  // oauth usage only provides utilization % + reset, no numeric limit -> use 100 as an abstract quota
   const state: QuotaState = {
     window: windowName,
     limit: 100,
@@ -78,7 +78,7 @@ function buildRow(windowName: "5h" | "weekly", utilization: number, resetAt: num
   return {
     form: "subscription",
     provider: "anthropic",
-    label: `Anthropic 订阅 (${windowName})`,
+    label: `Anthropic Subscription (${windowName})`,
     level: advice.level,
     pacing: advice.pacing,
     cardTiming: advice.cardTiming,
@@ -96,12 +96,12 @@ function num(v: unknown): number | undefined {
 }
 
 /**
- * ~/.claude/.credentials.json 结构不固定：
- *   { tokens: [{ accessToken, refreshToken, ... }] }  (真实 Claude Code 形状：数组)
+ * ~/.claude/.credentials.json structure is not fixed:
+ *   { tokens: [{ accessToken, refreshToken, ... }] }  (real Claude Code shape: array)
  *   { tokens: { accessToken } }
  *   { oauth: { access_token } }
  *   { accessToken }
- * 按上述顺序返回第一个找到的 accessToken。
+ * Return the first accessToken found in that order.
  */
 function extractAccessToken(cred: any): string | undefined {
   if (!cred || typeof cred !== "object") return undefined;

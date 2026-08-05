@@ -37,15 +37,15 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
       ? usageBody as Record<string, unknown>
       : {};
 
-    // wham/usage 真实形状：周限额在 rate_limit.primary_window（used_percent / reset_at）。
-    // codex /status 的 "54% left (resets Aug 8)" 即来自 used_percent=46 + reset_at。
+    // wham/usage real shape: weekly quota lives in rate_limit.primary_window (used_percent / reset_at).
+    // codex /status "54% left (resets Aug 8)" derives from used_percent=46 + reset_at.
     const rateLimit = sub(usage, "rate_limit");
     const primary = sub(rateLimit, "primary_window");
     const utilization = num(primary?.used_percent ?? usage.utilization);    const resetRaw = primary?.reset_at ?? usage.reset_at;
     const resetAt = resetRaw ? parseTs(resetRaw) : undefined;
-    if (utilization === undefined) return null; // 无周限额数据 → 跳过
+    if (utilization === undefined) return null; // no weekly quota data -> skip
 
-    // wham/usage 只给 used_percent + reset，无数值额度 → 用 100 抽象百分比额度
+    // wham/usage only provides used_percent + reset, no numeric quota -> use 100 as an abstract percent quota
     const limit = 100;
     const remaining = Math.max(0, Math.round(limit * (1 - utilization / 100)));
     const state: QuotaState = {
@@ -60,7 +60,7 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
     return {
       form: "subscription",
       provider: "openai",
-      label: "OpenAI ChatGPT 订阅",
+      label: "OpenAI Subscription",
       level: advice.level,
       pacing: advice.pacing,
       cardTiming: advice.cardTiming,
@@ -68,7 +68,7 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
       sustainableRate: advice.sustainableRate,
       actualVsSustainable: advice.actualVsSustainable,
       projectedCapHitAt: advice.projectedCapHitAt,
-      // 百分比额度（wham 只给 used_percent，无数值 token）: remaining = 剩余百分比
+      // percent quota (wham only gives used_percent, no numeric tokens): remaining = remaining percent
       remaining,
       limit,
       unit: "%",
