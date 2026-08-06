@@ -41,7 +41,7 @@ test("builds subscription row from wham usage + credits", async () => {
   assert.ok(row);
   assert.equal(row.form, "subscription");
   assert.equal(row.provider, "openai");
-  assert.match(row.cardTiming, /save card|No cap hit/);
+  assert.match(row.cardTiming, /Card expires in/);
 });
 
 test("missing auth → null", async () => {

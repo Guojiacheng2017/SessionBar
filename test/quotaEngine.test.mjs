@@ -162,7 +162,7 @@ test("zero remaining → red, sustainable 0", () => {
   const advice = computeAdvice(state({ remaining: 0 }), NOW);
   assert.equal(advice.level, "red");
   assert.equal(advice.sustainableRate, 0);
-  assert.match(advice.pacing, /Quota exhausted/);
+  assert.match(advice.pacing, /Exhausted/);
 });
 
 test("resetAt in past → autoResetIn says resetting", () => {
@@ -173,7 +173,7 @@ test("resetAt in past → autoResetIn says resetting", () => {
 test("insufficient samples → no cap projection", () => {
   const advice = computeAdvice(state({ rateSamples: [] }), NOW);
   assert.equal(advice.projectedCapHitAt, null);
-  assert.match(advice.pacing, /Insufficient data/);
+  assert.match(advice.pacing, /Observing/);
 });
 
 test("card: spend when cap hit before reset and reset far", () => {
@@ -181,7 +181,7 @@ test("card: spend when cap hit before reset and reset far", () => {
     remaining: 100_000,
     cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
   }), NOW); // default 2x50k -> 2h cap hit, reset 168h out -> use card now
-  assert.match(advice.cardTiming, /Best time to use card|use now/);
+  assert.match(advice.cardTiming, /Use card now/);
 });
 
 test("card: expiring soon forces spend", () => {
@@ -193,7 +193,7 @@ test("card: expiring soon forces spend", () => {
     ],
     cards: [{ count: 1, expiresAt: NOW + 12 * 3_600_000 }], // expires in 12h
   }), NOW);
-  assert.match(advice.cardTiming, /use now/);
+  assert.match(advice.cardTiming, /Card expiring/);
 });
 
 test("card: no cap hit → save", () => {
@@ -205,7 +205,7 @@ test("card: no cap hit → save", () => {
     ],
     cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
   }), NOW);
-  assert.match(advice.cardTiming, /save card|No cap hit/);
+  assert.match(advice.cardTiming, /Save card/);
 });
 
 test("no divide by zero → finite numbers", () => {
@@ -222,16 +222,16 @@ test("card: remaining=0 with a valid card -> spend it now, not save", () => {
     remaining: 0,
     cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
   }), NOW);
-  assert.match(advice.cardTiming, /Best time to use card|use now/);
-  assert.doesNotMatch(advice.cardTiming, /save card/);
+  assert.match(advice.cardTiming, /Use card now/);
+  assert.doesNotMatch(advice.cardTiming, /Save card/);
 });
 
 test("card: already-expired card is not actionable", () => {
   const advice = computeAdvice(state({
     cards: [{ count: 1, expiresAt: NOW - 3_600_000 }], // expired 1h ago
   }), NOW);
-  assert.doesNotMatch(advice.cardTiming, /use now|Best time to use card/);
-  assert.match(advice.cardTiming, /No reset cards/);
+  assert.doesNotMatch(advice.cardTiming, /Use card now|Card expiring/);
+  assert.match(advice.cardTiming, /None/);
 });
 
 test("card: all-expired cards -> No reset cards", () => {
@@ -241,7 +241,7 @@ test("card: all-expired cards -> No reset cards", () => {
       { count: 1, expiresAt: NOW - 24 * 3_600_000 },
     ],
   }), NOW);
-  assert.match(advice.cardTiming, /No reset cards/);
+  assert.match(advice.cardTiming, /None/);
 });
 
 test("card: expires before reset in save branch → mentions it", () => {
@@ -253,7 +253,7 @@ test("card: expires before reset in save branch → mentions it", () => {
     ],
     cards: [{ count: 1, expiresAt: NOW + 3 * 24 * 3_600_000 }], // 3d < reset 7d
   }), NOW);
-  assert.match(advice.cardTiming, /before reset/);
+  assert.match(advice.cardTiming, /expires in/);
 });
 
 test("actualVsSustainable null/0 instead of Infinity", () => {
@@ -272,7 +272,7 @@ test("actualVsSustainable null/0 instead of Infinity", () => {
 test("resetAt in past → yellow level + window-reset pacing", () => {
   const advice = computeAdvice(state({ resetAt: NOW - 1_000 }), NOW);
   assert.equal(advice.level, "yellow");
-  assert.equal(advice.pacing, "Window reset, re-evaluate quota");
+  assert.equal(advice.pacing, "Resetting");
   assert.match(advice.autoResetIn, /Resetting|reset/);
 });
 
@@ -297,6 +297,6 @@ test("red from low remaining (not fast burn) -> Quota low copy", () => {
     ],
   }), NOW);
   assert.equal(advice.level, "red");
-  assert.match(advice.pacing, /Quota low/);
+  assert.match(advice.pacing, /<5% left/);
   assert.doesNotMatch(advice.pacing, /Burning too fast/);
 });

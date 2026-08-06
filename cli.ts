@@ -1227,6 +1227,7 @@ async function watch() {
         const resp = await fetch(`${API_BASE}/providers/live`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
+        if (data.initializing) throw new Error("Initializing...");
         return Array.isArray(data?.providers) ? data.providers : [];
       },
       openWebDashboard,
@@ -1730,8 +1731,7 @@ function teardownHooks(global: boolean, quiet = false) {
 async function injectHooksOnServerReady(global: boolean) {
   const reportPath = join(dirname(__dirname), "report.sh");
   // Only inject Claude hooks — Codex/Gemini/Copilot managed via explicit setup
-  const result = setupClaudeHooks(global, reportPath);
-  if (result.added > 0) console.log(`Injected hooks → ${result.path}`);
+  setupClaudeHooks(global, reportPath);
 }
 
 type SetupResult = { name: string; path: string; added: number };

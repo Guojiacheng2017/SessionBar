@@ -44,7 +44,7 @@ export function computeAdvice(state: QuotaState, now: number): Advice {
   if (windowReset) {
     // expired window: never report a normal green/OK pacing with sustainable 0
     level = "yellow";
-    pacing = "Window reset, re-evaluate quota";
+    pacing = "Resetting";
   }
 
   const cardTiming = cardTimingText(state.cards ?? [], projectedCapHitAt, resetAt, now, remaining);
@@ -54,15 +54,15 @@ export function computeAdvice(state: QuotaState, now: number): Advice {
 }
 
 function pacingText(remaining: number, measuredRate: number, sustainableRate: number, level: string): string {
-  if (remaining === 0) return "Quota exhausted, wait for reset or use reset card";
-  if (measuredRate <= 0) return "Insufficient data, observing burn rate";
+  if (remaining === 0) return "Exhausted";
+  if (measuredRate <= 0) return "Observing";
   const rate = Math.round(sustainableRate);
   if (level === "red") {
-    if (measuredRate > sustainableRate) return `Burning too fast: consume ≤ ${rate} tokens/h to reach reset`;
-    return "Quota low: <5% left, pause or use reset card";
+    if (measuredRate > sustainableRate) return `≤ ${rate} tokens/h`;
+    return "<5% left";
   }
-  if (level === "yellow") return `Slow down: target ≤ ${rate} tokens/h`;
-  return `Sustainable rate ${rate} tokens/h, current pace OK`;
+  if (level === "yellow") return `≤ ${rate} tokens/h`;
+  return `${rate}/h, OK`;
 }
 
 function cardTimingText(
@@ -77,21 +77,21 @@ function cardTimingText(
     c => c.count > 0 && (c.expiresAt === undefined || c.expiresAt - now >= 0),
   );
   const total = active.reduce((sum, c) => sum + c.count, 0);
-  if (total === 0) return "No reset cards";
+  if (total === 0) return "None";
   const expiringSoon = active.some(
     c => c.expiresAt !== undefined && c.expiresAt - now < CARD_EXPIRY_GRACE_MS,
   );
-  if (expiringSoon) return "Card expiring (<24h), use now to avoid waste";
+  if (expiringSoon) return "Card expiring, use";
   // remaining 0 counts as cap-hit even though projectedCapHitAt is null for it
   const capped = remaining === 0 || (projectedCapHitAt !== null && projectedCapHitAt < resetAt);
-  if (capped) return "Best time to use card: quota exhausted or cap imminent, natural reset far";
+  if (capped) return "Use card now";
   const expiresBeforeReset = active.find(
     c => c.expiresAt !== undefined && c.expiresAt < resetAt,
   );
   if (expiresBeforeReset) {
-    return `No cap hit, but card expires in ${formatDuration(expiresBeforeReset.expiresAt! - now)} (before reset), don't waste it`;
+    return `Card expires in ${formatDuration(expiresBeforeReset.expiresAt! - now)}`;
   }
-  return "No cap hit, save card (30d validity), re-evaluate after reset";
+  return "Save card";
 }
 
 function formatDuration(ms: number): string {

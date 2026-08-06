@@ -113,8 +113,11 @@ const sseClients = new Set<express.Response>();
 const rateBuffers = new Map<string, RateBuffer>();
 
 // Global subscription plan rows, refreshed on every provider poll cycle.
-let subscriptionRows: PlanRow[] = [];
-export function getSubscriptionRows(): PlanRow[] { return subscriptionRows; }
+// null means the first poll cycle hasn't completed yet — endpoints return
+// an initializing indicator so the TUI can show "Initializing..." instead
+// of "No quota data".
+let subscriptionRows: PlanRow[] | null = null;
+export function getSubscriptionRows(): PlanRow[] | null { return subscriptionRows; }
 
 /**
  * Merge global subscription rows with every session's display-only "api" rows
@@ -197,7 +200,7 @@ async function refreshProviderSignals() {
   const before = advisorFingerprint();
   for (const session of Object.values(sessions)) {
     const apiRows = await computeAdvisorRows(session, rateBuffers, now);
-    session.advisorRows = sessionAdvisorRows(session, apiRows, subscriptionRows);
+    session.advisorRows = sessionAdvisorRows(session, apiRows, subscriptionRows ?? []);
   }
   // Broadcast when provider signals OR advisor rows changed (card expiry / reset
   // countdowns move even when provider signals are stable).
@@ -583,6 +586,10 @@ app.get("/sessions/live", (_req, res) => {
 
 // GET: aggregated provider plan rows (subscription + per-session api rows)
 app.get("/providers/live", (_req, res) => {
+  if (subscriptionRows === null) {
+    res.json({ providers: [], initializing: true });
+    return;
+  }
   res.json({ providers: aggregateProviders(subscriptionRows, sessions) });
 });
 
