@@ -634,29 +634,23 @@ export function providerTableContent(rows: readonly PlanRow[], renderer: CliRend
   if (rows.length === 0) return [[cell("No quota data", PALETTE.muted)]];
   const compact = renderer.width < 100;
   const content: TextTableContent = compact
-    ? [[header("Provider"), header("Form"), header("Left"), header("Reset")]]
-    : [[header("Provider"), header("Form"), header("Left"), header("Level"), header("Reset"), header("Card")]];
-  const slots = Math.max(4, renderer.height - 17);
-  const visible = visibleWindow(rows, 0, slots);
+    ? [[header("Provider"), header("Left"), header("Reset")]]
+    : [[header("Provider"), header("Left"), header("Level"), header("Reset"), header("Card")]];
+  const visible = rows;
   for (const row of visible) {
     const rowFg = row.form === "api" ? PALETTE.cyan : levelColor(row.level);
     const providerCell = cell(row.label || row.provider || "?", PALETTE.fg);
-    const formCell = cell(providerFormLabel(row), rowFg);
     const leftCell = cell(providerLeftText(row), rowFg);
     const resetCell = cell(row.autoResetIn || "", PALETTE.muted);
     content.push(compact
-      ? [providerCell, formCell, leftCell, resetCell]
+      ? [providerCell, leftCell, resetCell]
       : [
           providerCell,
-          formCell,
           leftCell,
           cell(row.form === "api" ? "" : row.level, row.form === "api" ? PALETTE.muted : rowFg),
           resetCell,
           cell(row.form === "api" ? "" : row.cardTiming || "", PALETTE.muted),
         ]);
-  }
-  if (visible.length < rows.length) {
-    content.push([cell(`... ${rows.length - visible.length} more provider${rows.length - visible.length === 1 ? "" : "s"}`, PALETTE.muted)]);
   }
   return content;
 }

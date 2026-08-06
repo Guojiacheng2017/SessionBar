@@ -92,25 +92,24 @@ test("provider table renders a header plus one row per PlanRow with columns", ()
   const content = providerTableContent(rows, renderer);
   assert.equal(content.length, 3); // header + 2 rows
   assert.equal(content[0][0][0].text, "Provider");
-  assert.equal(content[0][1][0].text, "Form");
-  assert.equal(content[0][2][0].text, "Left");
+  assert.equal(content[0][1][0].text, "Left");
+  assert.equal(content[0][2][0].text, "Level");
+  assert.equal(content[0][3][0].text, "Reset");
+  assert.equal(content[0][4][0].text, "Card");
   assert.match(content[1][0][0].text, /Anthropic Subscription/);
-  assert.equal(content[1][1][0].text, "Subscription");
-  assert.equal(content[1][2][0].text, "—"); // subscription row has no numeric remaining
+  assert.equal(content[1][1][0].text, "—"); // subscription row has no numeric remaining
   assert.equal(content[2][0][0].text, "OpenAI");
-  assert.equal(content[2][1][0].text, "API");
-  assert.equal(content[2][2][0].text, "1.2M tokens left");
+  assert.equal(content[2][1][0].text, "1.2M tokens left");
 });
 
-test("provider table uses compact 4-column layout on narrow terminals", () => {
+test("provider table uses compact 3-column layout on narrow terminals", () => {
   const renderer = { width: 80, height: 40 };
   const content = providerTableContent([subscriptionRow()], renderer);
   assert.equal(content.length, 2); // header + 1 row
-  assert.equal(content[0].length, 4);
+  assert.equal(content[0].length, 3);
   assert.equal(content[0][0][0].text, "Provider");
-  assert.equal(content[0][1][0].text, "Form");
-  assert.equal(content[0][2][0].text, "Left");
-  assert.equal(content[0][3][0].text, "Reset");
-  assert.equal(content[1].length, 4);
+  assert.equal(content[0][1][0].text, "Left");
+  assert.equal(content[0][2][0].text, "Reset");
+  assert.equal(content[1].length, 3);
 });
 
