@@ -158,6 +158,11 @@ function render(sessions: SessionPayload[]) {
     filterHint.textContent = shown.length + "/" + sessions.length + " sessions";
   } else { filterHint.textContent = ""; }
 
+  if (focusedProject && !shown.some(s => extractProject(s) === focusedProject)) {
+    focusedProject = null;
+    selectedId = null;
+  }
+
   // Port
   portEl.textContent = ":" + location.port;
   portEl.className = UI.connection;
