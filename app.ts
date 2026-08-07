@@ -70,7 +70,7 @@ function detailHTML(s: SessionPayload): string {
     let d = detailListMarkup(rows);
     if (s.progress!==undefined) {
       const pct = Math.round(s.progress*100);
-      d+=`<div class="flex items-center gap-2.5 my-4"><span class="text-[10px] text-muted uppercase tracking-[0.4px] w-[74px] shrink-0">Progress</span><div class="flex-1 h-1 bg-white/5 rounded-sm overflow-hidden"><div class="h-full bg-gradient-to-r from-[#5b8def] to-accent rounded-sm" style="width:${pct}%"></div></div><span class="mono text-[11px] text-muted">${pct}%</span></div>`;
+      d+=`<div class="flex items-center gap-2.5 my-4"><span class="text-[10px] text-muted uppercase tracking-[0.4px] w-[74px] shrink-0">Progress</span><div class="flex-1 h-1 bg-track rounded-sm overflow-hidden"><div class="h-full bg-gradient-to-r from-[#5b8def] to-accent rounded-sm" style="width:${pct}%"></div></div><span class="mono text-[11px] text-muted">${pct}%</span></div>`;
     }
     d+=detailListMarkup([{ label: "Source", value: s.source || "—" }]);
     return d;
@@ -92,14 +92,14 @@ function detailHTML(s: SessionPayload): string {
     if (!rows||rows.length===0) return `<div class="${UI.empty}">No flow data</div>`;
     let d = '<div class="text-[11px] leading-[1.8]">';
     for (const r of rows) {
-      d+=`<div class="flex gap-2 py-1.5 border-b border-white/[0.04]"><span class="text-muted shrink-0">${escapeHtml(r.form||"?")}</span><span class="truncate">${escapeHtml(r.label||"?")}</span></div>`;
+      d+=`<div class="flex gap-2 py-1.5 border-b border-line-subtle"><span class="text-muted shrink-0">${escapeHtml(r.form||"?")}</span><span class="truncate">${escapeHtml(r.label||"?")}</span></div>`;
     }
     d+="</div>";
     return d;
   }
 
   if (detailTab === 4) { // Raw
-    return `<pre class="mono text-[10px] text-gray-200 whitespace-pre-wrap break-all leading-[1.5]">${escapeHtml(JSON.stringify(s,null,2))}</pre>`;
+    return `<pre class="mono text-[10px] text-ink whitespace-pre-wrap break-all leading-[1.5]">${escapeHtml(JSON.stringify(s,null,2))}</pre>`;
   }
 
   // Overview (0, default)
@@ -112,7 +112,7 @@ function detailHTML(s: SessionPayload): string {
   ]);
   if (s.progress!==undefined) {
     const pct = Math.round(s.progress*100);
-    d+=`<div class="flex items-center gap-2.5 my-4"><span class="text-[10px] text-muted uppercase tracking-[0.4px] w-[74px] shrink-0">Progress</span><div class="flex-1 h-1 bg-white/5 rounded-sm overflow-hidden"><div class="h-full bg-gradient-to-r from-[#5b8def] to-accent rounded-sm" style="width:${pct}%"></div></div><span class="mono text-[11px] text-muted">${pct}%</span></div>`;
+    d+=`<div class="flex items-center gap-2.5 my-4"><span class="text-[10px] text-muted uppercase tracking-[0.4px] w-[74px] shrink-0">Progress</span><div class="flex-1 h-1 bg-track rounded-sm overflow-hidden"><div class="h-full bg-gradient-to-r from-[#5b8def] to-accent rounded-sm" style="width:${pct}%"></div></div><span class="mono text-[11px] text-muted">${pct}%</span></div>`;
   }
   d+=detailListMarkup([{ label: "ID", value: s.session_id }], "mt-3");
   return d;
@@ -136,7 +136,7 @@ function showMobileDetail(s: SessionPayload) {
 function showBanner(msg: string) {
   if (!disconnectedBanner) {
     disconnectedBanner = document.createElement("div");
-    disconnectedBanner.className = "bg-red/90 text-white text-center text-[12px] font-semibold px-3.5 py-2 rounded-lg shrink-0 shadow-[0_8px_24px_rgba(217,74,62,0.18)]";
+    disconnectedBanner.className = "bg-red/90 text-ink-inverse text-center text-[12px] font-semibold px-3.5 py-2 rounded-lg shrink-0 shadow-[0_8px_24px_rgba(217,74,62,0.18)]";
     document.getElementById("app")!.prepend(disconnectedBanner);
   }
   disconnectedBanner.textContent = msg;

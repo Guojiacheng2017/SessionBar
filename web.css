@@ -1,11 +1,50 @@
 :root {
   --blink-duration: 1.2s;
-  --sb-canvas: #08080d;
-  --sb-surface: #0f0f17;
-  --sb-border: #1a1a26;
-  --sb-muted: #5c5c6e;
-  --sb-accent: #6289e0;
-  --sb-amber: #c59438;
+  color-scheme: light dark;
+  --sb-canvas: #f4f6fa;
+  --sb-surface: #ffffff;
+  --sb-surface-raised: #ffffff;
+  --sb-surface-hover: #f1f5fb;
+  --sb-surface-highlight: #f8fafc;
+  --sb-border: #dbe2ec;
+  --sb-line-subtle: #e8edf3;
+  --sb-muted: #637089;
+  --sb-ink: #334155;
+  --sb-ink-strong: #172033;
+  --sb-ink-inverse: #ffffff;
+  --sb-icon-bg: #e7edf5;
+  --sb-track: #e7edf5;
+  --sb-accent: #5d7dcc;
+  --sb-green: #1f9d6a;
+  --sb-amber: #a8751f;
+  --sb-red: #c84b43;
+  --sb-overlay: rgba(244,246,250,0.94);
+  --sb-overlay-border: rgba(148,163,184,0.28);
+  --sb-scrollbar: rgba(100,116,139,0.24);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sb-canvas: #08080d;
+    --sb-surface: #0f0f17;
+    --sb-surface-raised: #12121c;
+    --sb-surface-hover: rgba(255,255,255,0.04);
+    --sb-surface-highlight: rgba(255,255,255,0.015);
+    --sb-border: #1a1a26;
+    --sb-line-subtle: rgba(255,255,255,0.04);
+    --sb-muted: #5c5c6e;
+    --sb-ink: #e5e7eb;
+    --sb-ink-strong: #ffffff;
+    --sb-icon-bg: rgba(255,255,255,0.1);
+    --sb-track: rgba(255,255,255,0.05);
+    --sb-accent: #6289e0;
+    --sb-green: #3ea87a;
+    --sb-amber: #c59438;
+    --sb-red: #d94a3e;
+    --sb-overlay: rgba(0,0,0,0.86);
+    --sb-overlay-border: rgba(255,255,255,0.08);
+    --sb-scrollbar: rgba(255,255,255,0.08);
+  }
 }
 
 body {
@@ -17,7 +56,7 @@ body {
 }
 
 .thin-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
-.thin-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 999px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: var(--sb-scrollbar); border-radius: 999px; }
 
 .row-transition { transition: background-color 0.14s ease, box-shadow 0.14s ease; }
 
@@ -51,7 +90,7 @@ body {
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: rgba(0,0,0,0.86);
+  background: var(--sb-overlay);
   backdrop-filter: blur(8px);
   display: flex;
   flex-direction: column;
@@ -68,7 +107,7 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 14px 16px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  border-bottom: 1px solid var(--sb-overlay-border);
   color: var(--sb-muted);
   font-size: 11px;
   text-transform: uppercase;
@@ -78,7 +117,7 @@ body {
 .detail-overlay .overlay-close {
   background: none;
   border: none;
-  color: #fff;
+  color: var(--sb-ink-strong);
   font-size: 20px;
   cursor: pointer;
   line-height: 1;

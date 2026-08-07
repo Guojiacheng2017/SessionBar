@@ -3,29 +3,29 @@ import type { SessionPayload } from "./types.js";
 export const UI = {
   app: "flex flex-col h-screen px-6 py-5 gap-3.5 max-w-[1180px] mx-auto",
   topbar: "flex items-center justify-between gap-4 shrink-0",
-  brand: "text-[17px] font-bold tracking-[-0.3px] text-white",
+  brand: "text-[17px] font-bold tracking-[-0.3px] text-ink-strong",
   connection: "mono text-[11px] text-green bg-green/10 border border-green/20 rounded-full px-2.5 py-1",
   connectionOffline: "mono text-[11px] text-muted bg-muted/10 border border-muted/15 rounded-full px-2.5 py-1",
   statusSummary: "flex items-center gap-x-4 gap-y-2 shrink-0 min-h-6 flex-wrap text-[12px] text-muted",
   statusItem: "inline-flex items-center gap-2 whitespace-nowrap",
-  statusValue: "text-white font-semibold tabular-nums",
+  statusValue: "text-ink-strong font-semibold tabular-nums",
   statusDot: "w-[7px] h-[7px] rounded-full shrink-0",
   toolbar: "flex gap-2 items-center shrink-0",
-  filter: "flex-1 px-3 py-2 bg-surface border border-border rounded-lg text-[12px] text-gray-200 outline-none focus:border-accent/50 focus:ring-[3px] focus:ring-accent/10 transition",
+  filter: "flex-1 px-3 py-2 bg-surface border border-border rounded-lg text-[12px] text-ink outline-none focus:border-accent/50 focus:ring-[3px] focus:ring-accent/10 transition",
   filterHint: "text-[11px] text-muted whitespace-nowrap tabular-nums",
   panel: "border border-border rounded-xl bg-surface flex flex-col overflow-hidden shadow-[0_12px_32px_rgba(0,0,0,0.12)]",
-  panelHeader: "flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-border shrink-0 select-none bg-white/[0.015]",
+  panelHeader: "flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-border shrink-0 select-none bg-surface-highlight",
   panelTitle: "mono text-[10px] font-semibold text-muted uppercase tracking-[0.6px]",
   panelBody: "flex-1 overflow-y-auto thin-scroll",
-  row: "flex items-center gap-3 px-3.5 py-2 min-h-[42px] cursor-pointer border-b border-white/[0.04] text-[12px] row-transition hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50",
+  row: "flex items-center gap-3 px-3.5 py-2 min-h-[42px] cursor-pointer border-b border-line-subtle text-[12px] row-transition hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50",
   rowSelected: "bg-accent/[0.09]",
   rowBlocked: "row-blocked",
   empty: "text-center text-muted text-[12px] py-10 px-4",
   detailBody: "flex-1 overflow-y-auto thin-scroll px-4 py-4",
   detailList: "grid grid-cols-[74px_minmax(0,1fr)] gap-x-3 gap-y-2 text-[12px] leading-[1.6]",
   detailLabel: "text-[10px] text-muted uppercase tracking-[0.4px]",
-  detailValue: "mono text-[11px] text-gray-200 break-words",
-  tab: "detail-tab cursor-pointer text-[10px] px-2 py-1 rounded-md text-muted hover:text-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
+  detailValue: "mono text-[11px] text-ink break-words",
+  tab: "detail-tab cursor-pointer text-[10px] px-2 py-1 rounded-md text-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50",
   tabActive: "bg-accent/20 text-accent",
   footer: "text-[11px] text-muted shrink-0 truncate",
 } as const;
@@ -68,7 +68,7 @@ export function iconMarkup(type: string, cache = new Map<string, string>()): str
   const domain = FAVICONS[type];
   const html = domain
     ? `<img class="w-4 h-4 rounded-[3px] shrink-0" src="https://www.google.com/s2/favicons?domain=${domain}&sz=32" alt="${escapeHtml(type)}">`
-    : `<span class="w-4 h-4 rounded-[3px] shrink-0 bg-white/10 text-[8px] inline-flex items-center justify-center text-muted" aria-label="${escapeHtml(type)}">${escapeHtml(type.slice(0, 1))}</span>`;
+    : `<span class="w-4 h-4 rounded-[3px] shrink-0 bg-icon text-[8px] inline-flex items-center justify-center text-muted" aria-label="${escapeHtml(type)}">${escapeHtml(type.slice(0, 1))}</span>`;
   cache.set(type, html);
   return html;
 }

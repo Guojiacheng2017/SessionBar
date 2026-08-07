@@ -15,6 +15,7 @@
 - The status summary must not render a horizontal progress bar or proportional segment bar.
 - Keep per-session progress data in the detail inspector; only the global status summary bar is removed.
 - Preserve existing dark palette values initially; improve consistency and hierarchy before introducing new colors.
+- The Web UI must follow the operating system light/dark preference through `prefers-color-scheme`; do not add a manual theme toggle.
 - Do not overwrite unrelated uncommitted changes in the `0agentbar` worktree.
 
 ---
@@ -88,9 +89,9 @@ export function tabsMarkup(tabs: string[], activeIndex: number): string;
 
 `statusSummaryMarkup` must render the total and non-zero status counts as inline items separated by a text separator. It must not contain an element with `role="progressbar"`, `id="segments"`, `style="width:..."`, or a flex-based proportional segment.
 
-- [ ] **Step 2: Add shared non-utility CSS**
+- [ ] **Step 2: Add shared non-utility CSS and system theme tokens**
 
-Move the existing animation, scrollbar, overlay, and reduced-motion rules into `web.css`. Add only shared component behavior: focus-visible outlines, panel scroll regions, row transitions, status dot animation, mobile panel sizing, and overlay layout. Keep Tailwind utility composition in `UI`; do not create a second color system.
+Move the existing animation, scrollbar, overlay, and reduced-motion rules into `web.css`. Define light defaults and dark overrides in `@media (prefers-color-scheme: dark)` for canvas, panel, border, ink, muted, status, icon, track, and overlay tokens. Change the Tailwind config to use these variables and remove the permanent `dark` class from `<html>`. Add only shared component behavior: focus-visible outlines, panel scroll regions, row transitions, status dot animation, mobile panel sizing, and overlay layout. Keep Tailwind utility composition in `UI`; do not create a second color system.
 
 - [ ] **Step 3: Write focused helper tests**
 

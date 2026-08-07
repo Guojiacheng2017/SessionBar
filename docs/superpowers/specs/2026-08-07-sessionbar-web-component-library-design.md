@@ -4,6 +4,8 @@
 
 Improve the Web dashboard's visual clarity by first consolidating its hand-authored Tailwind implementation into a small, reusable component layer, then using that layer to strengthen the monitor-style hierarchy. The current SSE transport, session payload, filtering behavior, and detail tabs remain unchanged.
 
+The Web UI follows the operating system's light/dark preference through `prefers-color-scheme`; it must not be permanently pinned to a dark theme.
+
 ## Current context
 
 - Web entry point: `index.html`.
@@ -30,7 +32,7 @@ Create a local Web styling layer while keeping vanilla TypeScript. Component sty
 
 ### Tokens
 
-Centralize canvas, panel, elevated panel, border, primary text, muted text, accent, and status colors. Also define spacing, radius, row-height, focus-ring, and transition tokens. Existing dark palette values should be preserved initially; the goal is consistency before visual restyling.
+Centralize canvas, panel, elevated panel, border, primary text, muted text, accent, and status colors. Provide light defaults and dark overrides through `prefers-color-scheme`. Also define spacing, radius, row-height, focus-ring, and transition tokens. Existing dark palette values should be preserved initially; the goal is consistency before visual restyling.
 
 ### Reusable primitives
 
@@ -66,6 +68,7 @@ The TypeScript render functions should supply data and variants; repeated layout
 - No change to the server API, session schema, provider polling, or TUI.
 - No new provider features, charts, or workflow semantics.
 - No removal of per-session progress data from the detail inspector unless it is separately requested.
+- No manual theme toggle; the operating system preference is the source of truth.
 
 ## Verification
 
@@ -79,6 +82,7 @@ The TypeScript render functions should supply data and variants; repeated layout
 ## Acceptance criteria
 
 - The Web UI uses shared local component styles for panels, headers, rows, statuses, toolbar controls, and detail content.
+- The Web UI follows the system light/dark preference without hardcoded dark-only utility colors.
 - The visual hierarchy clearly prioritizes active sessions and selected context.
 - `7 sessions 1 working 6 idle` is readable as an inline summary without a progress bar.
 - Existing data and interactions continue to work.
