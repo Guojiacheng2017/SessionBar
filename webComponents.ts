@@ -99,11 +99,12 @@ function summaryItem(value: number, label: string, status?: string): string {
 
 export function statusSummaryMarkup(counts: SessionCounts): string {
   const items = [summaryItem(counts.total, counts.total === 1 ? "session" : "sessions")];
-  if (counts.working > 0) items.push(summaryItem(counts.working, "working", "working"));
-  if (counts.blocked > 0) items.push(summaryItem(counts.blocked, "blocked", "blocked"));
-  if (counts.error > 0) items.push(summaryItem(counts.error, counts.error === 1 ? "error" : "errors", "error"));
-  if (counts.idle > 0) items.push(summaryItem(counts.idle, "idle", "idle"));
-  return `<div class="${UI.statusSummary}" aria-label="${escapeHtml(items.map(() => "session status").join(", "))}">${items.join('<span class="text-muted/40" aria-hidden="true">·</span>')}</div>`;
+  const labels = [`${counts.total} ${counts.total === 1 ? "session" : "sessions"}`];
+  if (counts.working > 0) { items.push(summaryItem(counts.working, "working", "working")); labels.push(`${counts.working} working`); }
+  if (counts.blocked > 0) { items.push(summaryItem(counts.blocked, "blocked", "blocked")); labels.push(`${counts.blocked} blocked`); }
+  if (counts.error > 0) { items.push(summaryItem(counts.error, counts.error === 1 ? "error" : "errors", "error")); labels.push(`${counts.error} ${counts.error === 1 ? "error" : "errors"}`); }
+  if (counts.idle > 0) { items.push(summaryItem(counts.idle, "idle", "idle")); labels.push(`${counts.idle} idle`); }
+  return `<div class="${UI.statusSummary}" aria-label="${escapeHtml(labels.join(", "))}">${items.join('<span class="text-muted/40" aria-hidden="true">·</span>')}</div>`;
 }
 
 export function detailListMarkup(rows: Array<{ label: string; value: string }>, extraClass = ""): string {
