@@ -1,649 +1,79 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SessionBar Dashboard</title>
-    <style>
-        :root {
-            --bg: #000000;
-            --card-bg: #1a1a1a;
-            --text: #EBEBF5;
-            --text-dim: #8a8a8a;
-            --border: #2a2a2a;
-            --blue: #007AFF;
-            --green: #34C759;
-            --yellow: #FFCC00;
-            --red: #FF3B30;
-            --radius: 12px;
-        }
-
-        * { box-sizing: border-box; }
-
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: var(--bg);
-            color: var(--text);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            overflow-x: hidden;
-        }
-
-        #app {
-            max-width: 720px;
-            margin: 0 auto;
-            padding: 20px 16px;
-        }
-
-        /* ── Header ── */
-
-        .top-bar {
-            margin-bottom: 20px;
-            position: sticky;
-            top: 0;
-            background: var(--bg);
-            padding: 12px 0 8px 0;
-            z-index: 10;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .title {
-            margin: 0 0 10px 0;
-            font-size: 20px;
-            font-weight: 700;
-            letter-spacing: -0.3px;
-            background: linear-gradient(90deg, #FF3B30, #FF9500, #FFCC00, #34C759, #007AFF, #AF52DE);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .stats-row {
-            display: flex;
-            gap: 16px;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-        }
-
-        .stat {
-            font-size: 13px;
-            color: var(--text-dim);
-            font-weight: 500;
-        }
-
-        .stat .val { color: var(--text); font-weight: 600; }
-        .stat.working .val { color: var(--blue); }
-        .stat.error .val { color: var(--red); }
-        .stat.blocked .val { color: var(--yellow); }
-        .stat.idle .val { color: var(--green); }
-
-        .filter-input {
-            width: 100%;
-            padding: 8px 12px;
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text);
-            font-size: 14px;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        .filter-input:focus {
-            border-color: var(--blue);
-        }
-
-        .filter-input::placeholder {
-            color: var(--text-dim);
-        }
-
-        .filter-hint {
-            font-size: 12px;
-            color: var(--text-dim);
-            margin-top: 4px;
-            text-align: right;
-            display: none;
-        }
-
-        .filter-hint.visible { display: block; }
-
-        /* ── Empty state ── */
-
-        .empty-state {
-            text-align: center;
-            color: var(--text-dim);
-            padding: 60px 0;
-            font-size: 15px;
-        }
-
-        .empty-state .dot {
-            display: inline-block;
-            width: 8px; height: 8px;
-            border-radius: 50%;
-            background: var(--border);
-            margin: 0 2px;
-            animation: dotPulse 1.5s infinite;
-        }
-        .empty-state .dot:nth-child(2) { animation-delay: 0.2s; }
-        .empty-state .dot:nth-child(3) { animation-delay: 0.4s; }
-
-        @keyframes dotPulse {
-            0%, 60% { opacity: 0.2; }
-            100% { opacity: 0.6; }
-        }
-
-        /* ── Project groups ── */
-
-        .project-group {
-            margin-bottom: 20px;
-        }
-
-        .project-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 10px;
-            padding: 0 4px;
-        }
-
-        .project-icon {
-            font-size: 16px;
-        }
-
-        .project-name {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-        }
-
-        .project-count {
-            font-size: 12px;
-            color: var(--text-dim);
-            margin-left: 4px;
-        }
-
-        /* ── Cards ── */
-
-        .agent-card {
-            background-color: var(--card-bg);
-            border-radius: var(--radius);
-            padding: 14px 16px;
-            margin-bottom: 8px;
-            position: relative;
-            overflow: hidden;
-            transition: background-color 0.2s;
-            cursor: pointer;
-        }
-
-        .agent-card:hover {
-            background-color: #222222;
-        }
-
-        .agent-card:last-child {
-            margin-bottom: 0;
-        }
-
-        .card-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .status-indicator {
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            font-weight: 700;
-            color: #ffffff;
-            line-height: 1;
-            flex-shrink: 0;
-        }
-
-        .status-indicator.idle { background-color: var(--green); }
-        .status-indicator.working {
-            background-color: var(--blue);
-            animation: pulse 1.5s infinite;
-        }
-        .status-indicator.blocked {
-            background-color: var(--yellow);
-            animation: blink 1s infinite;
-        }
-        .status-indicator.error { background-color: var(--red); }
-
-        .info {
-            flex-grow: 1;
-            min-width: 0;
-        }
-
-        .info-row {
-            display: flex;
-            align-items: baseline;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .info-type {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-        }
-
-        .info-project {
-            font-size: 12px;
-            color: var(--text-dim);
-            background: rgba(255,255,255,0.06);
-            padding: 2px 8px;
-            border-radius: 4px;
-        }
-
-        .info-task {
-            font-size: 14px;
-            color: var(--text);
-            margin-top: 2px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .info-sid {
-            font-size: 11px;
-            color: var(--text-dim);
-            margin-top: 3px;
-            font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", monospace;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .card-meta {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-shrink: 0;
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .meta-age {
-            min-width: 36px;
-            text-align: right;
-        }
-
-        .meta-status {
-            font-weight: 600;
-            font-size: 11px;
-            padding: 2px 6px;
-            border-radius: 4px;
-            text-transform: uppercase;
-        }
-
-        .meta-status.working { color: var(--blue); background: rgba(0,122,255,0.12); }
-        .meta-status.idle { color: var(--green); background: rgba(52,199,89,0.12); }
-        .meta-status.blocked { color: var(--yellow); background: rgba(255,204,0,0.12); }
-        .meta-status.error { color: var(--red); background: rgba(255,59,48,0.12); }
-
-        /* ── Progress bar ── */
-
-        .progress-bar-container {
-            margin-top: 10px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .progress-track {
-            flex-grow: 1;
-            height: 5px;
-            background-color: #333333;
-            border-radius: 3px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--blue), #5AC8FA);
-            border-radius: 3px;
-            transition: width 0.4s ease;
-        }
-
-        .progress-pct {
-            font-size: 12px;
-            color: var(--text-dim);
-            min-width: 36px;
-            text-align: right;
-            font-variant-numeric: tabular-nums;
-        }
-
-        /* ── Detail expansion ── */
-
-        .card-detail {
-            display: none;
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px solid var(--border);
-            font-size: 13px;
-            color: var(--text-dim);
-        }
-
-        .card-detail.open { display: block; }
-
-        .detail-row {
-            display: flex;
-            gap: 6px;
-            margin-bottom: 4px;
-        }
-
-        .detail-label {
-            color: var(--text-dim);
-            min-width: 70px;
-        }
-
-        .detail-value {
-            color: var(--text);
-            font-family: "SF Mono", "Fira Code", monospace;
-            font-size: 12px;
-            word-break: break-all;
-        }
-
-        /* ── Disconnected banner ── */
-
-        .disconnected-banner {
-            background: var(--red);
-            color: #fff;
-            padding: 10px 16px;
-            border-radius: 8px;
-            text-align: center;
-            font-weight: 600;
-            margin-bottom: 12px;
-            animation: slideDown 0.3s ease;
-        }
-
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* ── Keyframes ── */
-
-        @keyframes pulse {
-            0% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(0, 122, 255, 0.6); }
-            70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(0, 122, 255, 0); }
-            100% { transform: scale(0.9); box-shadow: 0 0 0 0 rgba(0, 122, 255, 0); }
-        }
-
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-
-        /* WCAG 2.3.3: respect reduced-motion preference */
-        @media (prefers-reduced-motion: reduce) {
-            .status-indicator.working,
-            .status-indicator.blocked {
-                animation: none;
-            }
-            .progress-fill {
-                transition: none;
-            }
-        }
-
-        /* ── Provider overview ── */
-
-        .provider-section {
-            margin-bottom: 20px;
-        }
-
-        .provider-header {
-            display: flex;
-            align-items: baseline;
-            gap: 8px;
-            margin-bottom: 10px;
-            padding: 0 4px;
-        }
-
-        .provider-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-        }
-
-        .provider-count {
-            font-size: 12px;
-            color: var(--text-dim);
-            margin-left: 4px;
-        }
-
-        .provider-card {
-            background-color: var(--card-bg);
-            border-radius: var(--radius);
-            padding: 12px 16px;
-            margin-bottom: 8px;
-            border-left: 3px solid var(--border);
-        }
-
-        .provider-card:last-child {
-            margin-bottom: 0;
-        }
-
-        .provider-card.api { border-left-color: var(--blue); }
-        .provider-card.level-green { border-left-color: var(--green); }
-        .provider-card.level-yellow { border-left-color: var(--yellow); }
-        .provider-card.level-red { border-left-color: var(--red); }
-
-        .provider-main {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 6px;
-            flex-wrap: wrap;
-        }
-
-        .provider-label {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-        }
-
-        .provider-form {
-            font-size: 11px;
-            font-weight: 600;
-            padding: 2px 8px;
-            border-radius: 4px;
-            text-transform: uppercase;
-            color: var(--text-dim);
-            background: rgba(255,255,255,0.06);
-        }
-
-        .provider-form.api {
-            color: var(--blue);
-            background: rgba(0,122,255,0.12);
-        }
-
-        .provider-level {
-            font-size: 11px;
-            font-weight: 600;
-            padding: 2px 6px;
-            border-radius: 4px;
-            text-transform: uppercase;
-        }
-
-        .provider-level.level-green { color: var(--green); background: rgba(52,199,89,0.12); }
-        .provider-level.level-yellow { color: var(--yellow); background: rgba(255,204,0,0.12); }
-        .provider-level.level-red { color: var(--red); background: rgba(255,59,48,0.12); }
-
-        .provider-meta {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            font-size: 12px;
-            color: var(--text-dim);
-        }
-
-        .provider-meta .chip {
-            font-variant-numeric: tabular-nums;
-        }
-
-        .provider-meta .chip .k {
-            color: var(--text-dim);
-            margin-right: 3px;
-        }
-
-        .provider-meta .chip .v {
-            color: var(--text);
-            font-family: "SF Mono", "Fira Code", "JetBrains Mono", "Menlo", monospace;
-            font-size: 12px;
-        }
-
-        .provider-empty,
-        .provider-error {
-            text-align: center;
-            color: var(--text-dim);
-            padding: 24px 0;
-            font-size: 14px;
-        }
-
-        .provider-error {
-            color: var(--red);
-        }
-
-        /* ── Responsive ── */
-
-        @media (max-width: 500px) {
-            #app { padding: 12px 10px; }
-            .agent-card { padding: 12px; }
-            .card-meta { gap: 6px; }
-            .info-type { font-size: 13px; }
-        }
-    </style>
-</head>
-<body>
-    <div id="app">
-        <header class="top-bar">
-            <h1 class="title">SessionBar</h1>
-            <div class="stats-row" id="stats-row"></div>
-            <input
-                class="filter-input"
-                id="filter-input"
-                type="text"
-                placeholder="Filter by project, task, or type…"
-                autocomplete="off"
-                spellcheck="false"
-            />
-            <div class="filter-hint" id="filter-hint"></div>
-        </header>
-        <section class="provider-section" id="provider-section">
-            <div class="provider-header">
-                <span class="provider-title">Provider Quota</span>
-                <span class="provider-count" id="provider-count"></span>
-            </div>
-            <div id="provider-container"></div>
-        </section>
-        <div id="agent-container"></div>
-    </div>
-    <script type="module" src="./dist/app.js"></script>
+    <title>SessionBar</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <script>
-    (function () {
-        "use strict";
-
-        var container = document.getElementById("provider-container");
-        var countEl = document.getElementById("provider-count");
-        if (!container) return;
-
-        function fmtNum(n) {
-            var abs = Math.abs(n);
-            if (abs >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
-            if (abs >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
-            if (abs >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
-            return Number.isInteger(n) ? String(n) : n.toFixed(1);
-        }
-
-        function esc(s) {
-            return String(s)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;");
-        }
-
-        function chip(key, value) {
-            return '<span class="chip"><span class="k">' + esc(key) +
-                '</span><span class="v">' + value + "</span></span>";
-        }
-
-        function renderRow(row) {
-            var label = row.label || row.provider || "?";
-            var form = row.form === "api" ? "API" : "Subscription";
-            var levelCls = "";
-            if (row.form === "subscription" && row.level) levelCls = " level-" + row.level;
-
-            var levelBadge = "";
-            if (row.form === "subscription" && row.level) {
-                levelBadge = '<span class="provider-level level-' + row.level + '">' + row.level + "</span>";
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              bg:      '#08080d',
+              surface: '#0f0f17',
+              border:  '#1a1a26',
+              muted:   '#5c5c6e',
+              accent:  '#6289e0',
+              green:   '#3ea87a',
+              amber:   '#c59438',
+              red:     '#d94a3e',
             }
-
-            var main =
-                '<div class="provider-main">' +
-                '<span class="provider-label">' + esc(label) + "</span>" +
-                '<span class="provider-form' + (row.form === "api" ? " api" : "") + '">' + form + "</span>" +
-                levelBadge +
-                "</div>";
-
-            var meta = "";
-            if (row.form === "api") {
-                var unit = row.unit ? " " + esc(row.unit) : "";
-                var parts = [];
-                if (row.remaining !== undefined) parts.push(chip("remaining", fmtNum(row.remaining) + unit));
-                if (row.used !== undefined) parts.push(chip("used", fmtNum(row.used) + unit));
-                if (row.limit !== undefined) parts.push(chip("limit", fmtNum(row.limit) + unit));
-                meta = '<div class="provider-meta">' + parts.join("") + "</div>";
-            } else {
-                var sparts = [];
-                if (row.pacing) sparts.push(chip("pacing", esc(row.pacing)));
-                if (row.cardTiming) sparts.push(chip("card", esc(row.cardTiming)));
-                if (row.autoResetIn) sparts.push(chip("reset", esc(row.autoResetIn)));
-                meta = '<div class="provider-meta">' + sparts.join("") + "</div>";
-            }
-
-            var card = document.createElement("div");
-            card.className = "provider-card" + (row.form === "api" ? " api" : "") + levelCls;
-            card.innerHTML = main + meta;
-            return card;
+          }
         }
-
-        function render(rows) {
-            if (countEl) countEl.textContent = rows.length ? String(rows.length) : "";
-            if (!rows || rows.length === 0) {
-                container.innerHTML = '<div class="provider-empty">No quota data</div>';
-                return;
-            }
-            var frag = document.createDocumentFragment();
-            for (var i = 0; i < rows.length; i++) frag.appendChild(renderRow(rows[i]));
-            container.innerHTML = "";
-            container.appendChild(frag);
-        }
-
-        function load() {
-            fetch("/providers/live")
-                .then(function (res) {
-                    if (!res.ok) throw new Error("HTTP " + res.status);
-                    return res.json();
-                })
-                .then(function (data) {
-                    render(data.providers || []);
-                })
-                .catch(function () {
-                    container.innerHTML = '<div class="provider-error">Failed to load quota data</div>';
-                });
-        }
-
-        load();
-        setInterval(load, 60000);
-    })();
+      }
     </script>
+    <link rel="stylesheet" href="./web.css">
+</head>
+<body class="bg-bg text-gray-200 text-[13px] leading-relaxed overflow-hidden h-screen">
+
+<div id="app" class="flex flex-col h-screen px-6 py-5 gap-3.5 max-w-[1080px] mx-auto">
+
+    <!-- Header -->
+    <div class="flex items-center justify-between gap-4 shrink-0">
+        <h1 class="text-[17px] font-bold tracking-[-0.3px] text-white">SessionBar</h1>
+        <span id="port" class="mono text-[11px] text-green bg-green/10 border border-green/20 rounded-full px-2.5 py-1">offline</span>
+    </div>
+
+    <!-- Status summary -->
+    <div id="counts" aria-live="polite" aria-atomic="true"></div>
+
+    <!-- Filter -->
+    <div class="flex gap-2 items-center shrink-0">
+        <input id="filter" type="text" placeholder="Filter projects, tasks, or types…"
+            class="flex-1 px-3 py-2 bg-surface border border-border rounded-lg text-[12px] text-gray-200 outline-none focus:border-accent/40 focus:ring-[3px] focus:ring-accent/10 transition">
+        <span id="filter-hint" class="text-[11px] text-muted whitespace-nowrap"></span>
+    </div>
+
+    <!-- Projects panel -->
+    <div class="projects-panel border border-border rounded-xl bg-surface shrink-0 max-h-[180px] flex flex-col overflow-hidden shadow-[0_12px_32px_rgba(0,0,0,0.12)]">
+        <div id="projects-header" class="flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-border shrink-0 select-none bg-white/[0.015]">
+            <span class="mono text-[10px] font-semibold text-muted uppercase tracking-[0.6px]">Projects</span>
+        </div>
+        <div id="projects-body" class="flex-1 overflow-y-auto thin-scroll"></div>
+    </div>
+
+    <!-- Body -->
+    <div class="workspace flex flex-col gap-3.5 flex-1 min-h-0 lg:flex-row">
+        <!-- Sessions -->
+        <div class="flex-1 min-h-0 border border-border rounded-xl bg-surface flex flex-col overflow-hidden shadow-[0_12px_32px_rgba(0,0,0,0.12)]">
+            <div id="sessions-header" class="flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-border shrink-0 select-none bg-white/[0.015]"><span class="mono text-[10px] font-semibold text-muted uppercase tracking-[0.6px]">All Sessions</span></div>
+            <div id="sessions-body" class="flex-1 overflow-y-auto thin-scroll"></div>
+        </div>
+        <!-- Detail -->
+        <div id="detail-panel" class="hidden lg:flex flex-[1.15] min-w-0 border border-border rounded-xl bg-surface flex-col overflow-hidden shadow-[0_12px_32px_rgba(0,0,0,0.12)]">
+            <div id="detail-header" class="flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-border shrink-0 select-none bg-white/[0.015]"><span class="mono text-[10px] font-semibold text-muted uppercase tracking-[0.6px]">Details</span></div>
+            <div id="detail-body" class="flex-1 overflow-y-auto thin-scroll px-4 py-4"></div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div id="footer" class="text-[11px] text-muted shrink-0 truncate"></div>
+    <div class="text-[10px] text-muted/40 text-center shrink-0">&copy; 2026 SessionBar</div>
+
+</div>
+
+<script type="module" src="./dist/app.js"></script>
 </body>
 </html>

@@ -69,6 +69,7 @@ export const UI: {
 export function cx(...parts: Array<string | false | null | undefined>): string;
 export function escapeHtml(value: string): string;
 export function statusLabel(status: string): string;
+export function statusDotMarkup(status: string): string;
 export function iconMarkup(type: string, cache?: Map<string, string>): string;
 
 export interface SessionCounts {
@@ -142,7 +143,7 @@ git commit -m "refactor: add web component primitives"
 
 - [ ] **Step 1: Replace duplicated utilities and icon rendering**
 
-Remove local `FAVICONS`, `_iconCache`, `icon`, `h`, and `slabel` implementations from `app.ts`. Import `iconMarkup`, `escapeHtml`, and `statusLabel`; keep a local `iconCache` map and pass it to `iconMarkup`.
+Remove local `FAVICONS`, `_iconCache`, `icon`, `h`, and `slabel` implementations from `app.ts`. Import `iconMarkup`, `escapeHtml`, `statusLabel`, and `statusDotMarkup`; keep a local `iconCache` map and pass it to `iconMarkup`.
 
 - [ ] **Step 2: Replace detail list markup**
 
@@ -223,4 +224,3 @@ Confirm:
 - [ ] **Step 6: Remove temporary QA artifacts and report remaining deviations**
 
 Delete temporary screenshots created only for QA, preserve no generated artifacts in the repository unless explicitly requested, and record any intentional visual deviation in the final handoff.
-

@@ -1,0 +1,103 @@
+:root {
+  --blink-duration: 1.2s;
+  --sb-canvas: #08080d;
+  --sb-surface: #0f0f17;
+  --sb-border: #1a1a26;
+  --sb-muted: #5c5c6e;
+  --sb-accent: #6289e0;
+  --sb-amber: #c59438;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.mono {
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", Menlo, monospace;
+}
+
+.thin-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
+.thin-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 999px; }
+
+.row-transition { transition: background-color 0.14s ease, box-shadow 0.14s ease; }
+
+.dot-working {
+  animation: breathe 2s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(98,137,224,0.5);
+}
+
+.dot-blocked { animation: blink var(--blink-duration) ease-in-out infinite; }
+
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(98,137,224,0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(98,137,224,0); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.row-blocked {
+  animation: blockedGlow var(--blink-duration) ease-in-out infinite;
+}
+
+@keyframes blockedGlow {
+  0%, 100% { box-shadow: inset 0 0 12px 2px rgba(197,148,56,0.22); }
+  50% { box-shadow: inset 0 0 0 0 rgba(197,148,56,0); }
+}
+
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0,0,0,0.86);
+  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.detail-overlay .overlay-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  color: var(--sb-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detail-overlay .overlay-close {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px 8px;
+}
+
+.detail-overlay .overlay-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+@media (max-width: 1023px) {
+  #app { padding: 12px 10px; gap: 10px; }
+  .projects-panel { max-height: 132px; }
+  .workspace { gap: 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-working, .dot-blocked, .row-blocked, .detail-overlay { animation: none; }
+  .row-transition { transition: none; }
+}
