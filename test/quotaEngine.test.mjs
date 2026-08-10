@@ -205,7 +205,7 @@ test("card: no cap hit → save", () => {
     ],
     cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
   }), NOW);
-  assert.match(advice.cardTiming, /Save card/);
+  assert.match(advice.cardTiming, /Card available/);
 });
 
 test("no divide by zero → finite numbers", () => {
@@ -231,7 +231,7 @@ test("card: already-expired card is not actionable", () => {
     cards: [{ count: 1, expiresAt: NOW - 3_600_000 }], // expired 1h ago
   }), NOW);
   assert.doesNotMatch(advice.cardTiming, /Use card now|Card expiring/);
-  assert.match(advice.cardTiming, /None/);
+  assert.match(advice.cardTiming, /No cards/);
 });
 
 test("card: all-expired cards -> No reset cards", () => {
@@ -241,7 +241,7 @@ test("card: all-expired cards -> No reset cards", () => {
       { count: 1, expiresAt: NOW - 24 * 3_600_000 },
     ],
   }), NOW);
-  assert.match(advice.cardTiming, /None/);
+  assert.match(advice.cardTiming, /No cards/);
 });
 
 test("card: expires before reset in save branch → mentions it", () => {

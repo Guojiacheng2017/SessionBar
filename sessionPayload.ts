@@ -37,6 +37,7 @@ export function validateSessionPayload(body: unknown): body is SessionReportPayl
   }
   if (payload.quota_reset !== undefined && (typeof payload.quota_reset !== "string" || payload.quota_reset.length > 64)) return false;
   if (payload.hook_event !== undefined && !isShortNonEmptyString(payload.hook_event, 128)) return false;
+  if (payload.session_name !== undefined && !isShortNonEmptyString(payload.session_name, 128)) return false;
   if (payload.activity_tail !== undefined && (
     !Array.isArray(payload.activity_tail) ||
     payload.activity_tail.length > 8 ||

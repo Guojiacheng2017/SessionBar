@@ -69,9 +69,19 @@ test("session sidebar line is a compact monitor summary, not a repeated table ro
     width: 42,
     now: baseSession.timestamp + 37_000,
   });
-  assert.equal(line, "> WORK 019ed3a2-a7...afd0 37s");
-  assert.doesNotMatch(line, /Vision-Dash|Codex|running:|Project|Agent|Status/);
+  assert.equal(line, "> WORK Vision-Dash 37s");
+  assert.doesNotMatch(line, /019ed3a2|Codex|running:|Project|Agent|Status/);
   assert.ok(line.length <= 42);
+});
+
+test("session sidebar prefers an explicit session name over the project", () => {
+  const line = buildSessionSidebarLine({ ...baseSession, session_name: "Refactor dashboard" }, {
+    selected: true,
+    unread: false,
+    width: 42,
+    now: baseSession.timestamp + 37_000,
+  });
+  assert.equal(line, "> WORK Refactor dashboard 37s");
 });
 
 test("overview renders compact current state without activity history or workflow graph", () => {

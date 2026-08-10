@@ -5,6 +5,7 @@ import { nativePayloadToHookEvents, sessionSnapshotToHookEvents } from "../dist/
 const snapshot = {
   session_id: "codex-demo__Vision-Dash",
   session_type: "Codex",
+  session_name: "Build dashboard",
   status: "working",
   task_name: "running: npm test",
   activity_tail: ["tool: npm test", "done: npm test"],
@@ -29,6 +30,7 @@ test("snapshot payload normalizes into status, activity, and usage hook events",
   ]);
   assert.equal(events[0].agent_type, "Codex");
   assert.equal(events[0].session_id, snapshot.session_id);
+  assert.equal(events[0].session_name, snapshot.session_name);
   assert.equal(events[0].project_path, snapshot.project_path);
   assert.equal(events[0].timestamp, 1_700_000_000_000);
 

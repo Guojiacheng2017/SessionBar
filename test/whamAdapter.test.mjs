@@ -51,3 +51,24 @@ test("missing auth → null", async () => {
   });
   assert.equal(row, null);
 });
+
+test("reads account id from the current nested Codex auth shape", async () => {
+  writeFileSync(authJsonPath, JSON.stringify({
+    tokens: { access_token: "test-token-abc", account_id: "nested-account" },
+  }));
+  const seenAccountIds = [];
+  const row = await fetchOpenAISubscription({
+    authJsonPath,
+    fetchImpl: async (url, init) => {
+      seenAccountIds.push(init?.headers?.["ChatGPT-Account-Id"]);
+      if (url.includes("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify({ credits: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        rate_limit: { primary_window: { used_percent: 40, reset_at: Date.now() + 3 * 86400000 } },
+      }), { status: 200 });
+    },
+  });
+  assert.ok(row);
+  assert.deepEqual(seenAccountIds, ["nested-account", "nested-account"]);
+});

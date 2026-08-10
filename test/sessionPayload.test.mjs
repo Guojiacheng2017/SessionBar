@@ -5,6 +5,7 @@ import { mergeSessionPayload, validateSessionPayload } from "../dist/sessionPayl
 const basePayload = {
   session_id: "codex-demo__Vision-Dash",
   session_type: "Codex",
+  session_name: "Build dashboard",
   status: "working",
   task_name: "running: npm test",
   timestamp: 1_700_000_000_000,
@@ -116,6 +117,7 @@ test("merge preserves previous usage fields when hook omits them", () => {
   }, 1_700_000_010_000);
 
   assert.equal(merged.status, "idle");
+  assert.equal(merged.session_name, "Build dashboard");
   assert.equal(merged.task_name, "Ready");
   assert.equal(merged.timestamp, 1_700_000_010_000);
   assert.equal(merged.input_tokens, 48200);

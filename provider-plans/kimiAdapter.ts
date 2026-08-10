@@ -1,6 +1,7 @@
 import { computeAdvice } from "../quota-engine/quotaEngine.js";
 import type { QuotaState } from "../quota-engine/types.js";
 import type { PlanRow } from "../planTypes.js";
+import { num, parseTs, sub } from "./adapterUtils.js";
 
 const USAGE_URL = "https://api.kimi.com/coding/v1/usages";
 const FETCH_TIMEOUT_MS = 10_000;
@@ -109,26 +110,4 @@ function buildRow(
     limit,
     remaining: Math.max(0, remaining),
   };
-}
-
-function sub(obj: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
-  const v = obj[key];
-  return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
-}
-
-function num(v: unknown): number | undefined {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") { const n = Number(v); return Number.isFinite(n) ? n : undefined; }
-  return undefined;
-}
-
-function parseTs(v: unknown): number | undefined {
-  if (typeof v === "number") return v < 1_000_000_000_000 ? v * 1000 : v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    if (Number.isFinite(n)) return n < 1_000_000_000_000 ? n * 1000 : n;
-    const d = Date.parse(v);
-    return Number.isFinite(d) ? d : undefined;
-  }
-  return undefined;
 }

@@ -12,7 +12,7 @@ export interface PlanRow {
   sustainableRate: number;
   actualVsSustainable: number | null;
   projectedCapHitAt: number | null;
-  // api form (balance-style, display only)
+  // Live usage/balance values. API rows and subscription rows may both expose them.
   remaining?: number;
   used?: number;
   limit?: number;

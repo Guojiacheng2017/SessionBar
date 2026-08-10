@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { computeAdvice } from "../quota-engine/quotaEngine.js";
 import type { QuotaState } from "../quota-engine/types.js";
 import type { PlanRow } from "../planTypes.js";
+import { num, parseTs } from "./adapterUtils.js";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const FETCH_TIMEOUT_MS = 10_000;
@@ -89,12 +90,6 @@ function buildRow(windowName: "5h" | "weekly", utilization: number, resetAt: num
   };
 }
 
-function num(v: unknown): number | undefined {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") { const n = Number(v); return Number.isFinite(n) ? n : undefined; }
-  return undefined;
-}
-
 /**
  * ~/.claude/.credentials.json structure is not fixed:
  *   { tokens: [{ accessToken, refreshToken, ... }] }  (real Claude Code shape: array)
@@ -113,16 +108,5 @@ function extractAccessToken(cred: any): string | undefined {
   }
   if (typeof cred.oauth?.access_token === "string") return cred.oauth.access_token;
   if (typeof cred.accessToken === "string") return cred.accessToken;
-  return undefined;
-}
-
-function parseTs(v: unknown): number | undefined {
-  if (typeof v === "number") return v < 1_000_000_000_000 ? v * 1000 : v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    if (Number.isFinite(n)) return n < 1_000_000_000_000 ? n * 1000 : n;
-    const d = Date.parse(v);
-    return Number.isFinite(d) ? d : undefined;
-  }
   return undefined;
 }

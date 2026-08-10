@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -85,4 +85,32 @@ exit 1
     status: "ok",
     label: "Codex API",
   }]);
+});
+
+test("report.sh reuses the hook session id when hook invocations have different parents", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-report-hook-id-"));
+  const home = join(root, "home");
+  const project = join(root, "Vision-Dash");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(project, { recursive: true });
+
+  const env = {
+    ...process.env,
+    HOME: home,
+    SESSIONBAR_HOME: join(home, ".sessionbar"),
+    SESSIONBAR_AGENT: "codex",
+    SESSIONBAR_SESSION_TYPE: "Codex",
+    SESSIONBAR_PROJECT_DIR: project,
+    SESSIONBAR_SERVER_PORT: "1",
+  };
+  const hookInput = `${JSON.stringify({ session_id: "019fdb88-8209-7b32-8816-cf684186fde1" })}\n`;
+  const args = ["-c", "sleep 0.2 & cat | bash /Users/jcus/Documents/Jcus/Vision-Dash/0agentbar/report.sh working probe 1"];
+
+  execFileSync("bash", args, { cwd: new URL("..", import.meta.url), env, input: hookInput });
+  execFileSync("bash", args, { cwd: new URL("..", import.meta.url), env, input: hookInput });
+
+  const markerDir = join(home, ".sessionbar", "sessions");
+  const markers = readdirSync(markerDir).filter(file => file.startsWith("sessionbar-id-"));
+  assert.equal(markers.length, 1);
+  assert.equal(readFileSync(join(markerDir, markers[0]), "utf8"), "019fdb88-8209-7b32-8816-cf684186fde1__Vision-Dash\n");
 });

@@ -1,6 +1,7 @@
 import { fetchOpenAISubscription } from "./provider-plans/whamAdapter.js";
 import { fetchAnthropicSubscription } from "./provider-plans/anthropicAdapter.js";
 import { fetchKimiSubscription } from "./provider-plans/kimiAdapter.js";
+import { fetchGitHubCopilotSubscription } from "./provider-plans/githubCopilotAdapter.js";
 import type { PlanRow } from "./planTypes.js";
 
 export interface PlanOpts {
@@ -8,6 +9,8 @@ export interface PlanOpts {
   openaiAuthPath?: string;
   anthropicCredentialsPath?: string;
   kimiAccessToken?: string;
+  githubCopilotCredentialsPath?: string;
+  githubCopilotToken?: string;
 }
 
 /**
@@ -27,6 +30,11 @@ export async function computePlanRows(opts: PlanOpts = {}): Promise<PlanRow[]> {
     fetchOpenAISubscription({ authJsonPath: opts.openaiAuthPath, now }),
     fetchAnthropicSubscription({ credentialsPath: opts.anthropicCredentialsPath, now }),
     fetchKimiSubscription({ accessToken: kimiAccessToken, now }),
+    fetchGitHubCopilotSubscription({
+      credentialsPath: opts.githubCopilotCredentialsPath,
+      accessToken: opts.githubCopilotToken,
+      now,
+    }),
   ]);
   const rows: PlanRow[] = [];
   for (const r of results) {

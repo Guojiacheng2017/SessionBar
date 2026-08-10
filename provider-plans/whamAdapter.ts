@@ -4,6 +4,7 @@ import { homedir } from "os";
 import { computeAdvice } from "../quota-engine/quotaEngine.js";
 import type { QuotaState, ResetCard } from "../quota-engine/types.js";
 import type { PlanRow } from "../planTypes.js";
+import { num, parseTs, sub } from "./adapterUtils.js";
 
 const WHAM_USAGE = "https://chatgpt.com/backend-api/wham/usage";
 const WHAM_CREDITS = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
@@ -22,7 +23,9 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
     if (!existsSync(authPath)) return null;
     const auth = JSON.parse(readFileSync(authPath, "utf-8"));
     const token = auth?.tokens?.access_token;
-    const accountId = auth?.account_id;
+    // Codex has used both top-level account_id and tokens.account_id.
+    // The latter is the current auth.json shape and is required by Wham.
+    const accountId = auth?.account_id ?? auth?.tokens?.account_id;
     if (!token) return null;
     const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
     if (accountId) headers["ChatGPT-Account-Id"] = String(accountId);
@@ -78,11 +81,6 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
   }
 }
 
-function sub(obj: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
-  const v = obj?.[key];
-  return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
-}
-
 function parseCredits(body: unknown, now: number): ResetCard[] {
   const obj: Record<string, unknown> = body && typeof body === "object"
     ? body as Record<string, unknown>
@@ -93,23 +91,6 @@ function parseCredits(body: unknown, now: number): ResetCard[] {
     .map((c: any) => ({ expiresAt: parseTs(c.expires_at) }))
     .filter((c: any) => c.expiresAt !== undefined && c.expiresAt > now);
   return active.map(c => ({ count: 1, expiresAt: c.expiresAt }));
-}
-
-function parseTs(v: unknown): number | undefined {
-  if (typeof v === "number") return v < 1_000_000_000_000 ? v * 1000 : v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    if (Number.isFinite(n)) return n < 1_000_000_000_000 ? n * 1000 : n;
-    const d = Date.parse(v);
-    return Number.isFinite(d) ? d : undefined;
-  }
-  return undefined;
-}
-
-function num(v: unknown): number | undefined {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") { const n = Number(v); return Number.isFinite(n) ? n : undefined; }
-  return undefined;
 }
 
 async function fetchJson(fetchImpl: typeof fetch, url: string, headers: Record<string, string>): Promise<unknown> {

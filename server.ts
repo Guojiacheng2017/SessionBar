@@ -10,8 +10,9 @@ import { syncToICloud } from "./icloud.js";
 import { removeSessionMarkerFiles, scopedSessionId } from "./sessionMarkers.js";
 import { mergeCodexDiscovery } from "./codexSessionMerge.js";
 import { pollProvider, providerConfigsFromEnv } from "./providerAdapters.js";
+import { readCCSwitchDeepSeekConfig } from "./ccSwitchAdapter.js";
 import { applyProviderPollResults } from "./providerMonitor.js";
-import { computeAdvisorRows } from "./quotaAdvisor.js";
+import { agentSignalToApiRow, computeAdvisorRows } from "./quotaAdvisor.js";
 import { computePlanRows } from "./planAdvisor.js";
 import type { PlanRow } from "./planTypes.js";
 import { RateBuffer } from "./rateBuffer.js";
@@ -32,6 +33,9 @@ app.use(cors({
     callback(null, isAllowedOrigin(origin));
   },
 }));
+
+// Track last activity for idle shutdown — every HTTP request resets the timer.
+app.use((_req, _res, next) => { resetIdleTimer(); next(); });
 
 function isAllowedOrigin(origin?: string): boolean {
   if (!origin) return true;
@@ -64,8 +68,35 @@ const CODEX_ACTIVE_MS = parseInt(process.env.SESSIONBAR_CODEX_ACTIVE_MS || Strin
 const ACTIVITY_TAIL_BYTES = parseInt(process.env.SESSIONBAR_ACTIVITY_TAIL_BYTES || String(192 * 1024), 10);
 const PROVIDER_POLL_ENABLED = process.env.SESSIONBAR_PROVIDER_POLL !== "0";
 const PROVIDER_POLL_MS = Math.max(30_000, parseInt(process.env.SESSIONBAR_PROVIDER_POLL_MS || String(5 * 60 * 1000), 10));
-const providerConfigs = PROVIDER_POLL_ENABLED ? providerConfigsFromEnv(process.env) : [];
+const CCSWITCH_ENABLED = process.env.SESSIONBAR_CCSWITCH !== "0";
+const envProviderConfigs = PROVIDER_POLL_ENABLED ? providerConfigsFromEnv(process.env) : [];
 let providerPollInterval: NodeJS.Timeout | undefined;
+
+// ---- idle auto-shutdown -------------------------------------------------
+// When no client (SSE or HTTP poll) touches the server for
+// IDLE_SHUTDOWN_MS, the process exits cleanly. A fresh "sessionbar" CLI
+// invocation spawns a new server automatically, so the user never notices.
+const IDLE_SHUTDOWN_MS = parseInt(process.env.SESSIONBAR_IDLE_SHUTDOWN_MS || "30000", 10);
+let lastActivity = Date.now();
+let idleTimer: NodeJS.Timeout | undefined;
+
+function resetIdleTimer() {
+  lastActivity = Date.now();
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = undefined; }
+}
+
+function scheduleIdleCheck() {
+  if (idleTimer || sseClients.size > 0) return;
+  const elapsed = Date.now() - lastActivity;
+  const delay = Math.max(1000, IDLE_SHUTDOWN_MS - elapsed);
+  idleTimer = setTimeout(() => {
+    if (sseClients.size > 0) { idleTimer = undefined; return; }
+    if (Date.now() - lastActivity < IDLE_SHUTDOWN_MS) { idleTimer = undefined; scheduleIdleCheck(); return; }
+    console.log(`[idle] no clients for ${Math.round(IDLE_SHUTDOWN_MS / 1000)}s, shutting down`);
+    cleanup();
+    process.exit(0);
+  }, delay);
+}
 
 if (!existsSync(HOME)) mkdirSync(HOME, { recursive: true });
 if (!existsSync(SESSION_ID_DIR)) mkdirSync(SESSION_ID_DIR, { recursive: true });
@@ -74,6 +105,7 @@ function cleanup() {
   clearInterval(heartbeatInterval);
   clearInterval(purgeInterval);
   if (providerPollInterval) clearInterval(providerPollInterval);
+  if (idleTimer) clearTimeout(idleTimer);
   removeClaudeHooks();
   try { unlinkSync(PID_FILE); } catch { /* ignore */ }
 }
@@ -119,9 +151,15 @@ const rateBuffers = new Map<string, RateBuffer>();
 let subscriptionRows: PlanRow[] | null = null;
 export function getSubscriptionRows(): PlanRow[] | null { return subscriptionRows; }
 
+// Account-level API rows come directly from provider polling. They are kept
+// separate from sessions so a provider balance does not need a matching
+// session_type, and is not duplicated onto every session.
+let providerApiRows: PlanRow[] = [];
+
 /**
- * Merge global subscription rows with every session's display-only "api" rows
- * (advisorRows entries where form === "api"). Rows are deduped by
+ * Merge global subscription rows, account-level provider API rows, and every
+ * session's display-only "api" rows (advisorRows entries where form === "api").
+ * Rows are deduped by
  * `${provider}:${form}:${label}` — keep the first occurrence — so the same
  * provider/form/label reported by multiple sessions collapses to one row, while
  * distinct subscription rows (e.g. Anthropic 5h vs weekly, different labels)
@@ -130,11 +168,12 @@ export function getSubscriptionRows(): PlanRow[] | null { return subscriptionRow
 export function aggregateProviders(
   subscriptionRows: PlanRow[],
   sessions: Record<string, SessionPayload>,
+  globalApiRows: PlanRow[] = [],
 ): PlanRow[] {
-  const apiRows = Object.values(sessions)
+  const sessionApiRows = Object.values(sessions)
     .flatMap(s => s.advisorRows?.filter(r => r.form === "api") ?? []);
   const seen = new Map<string, PlanRow>();
-  for (const row of [...subscriptionRows, ...apiRows]) {
+  for (const row of [...subscriptionRows, ...globalApiRows, ...sessionApiRows]) {
     const key = `${row.provider}:${row.form}:${row.label}`;
     if (!seen.has(key)) seen.set(key, row);
   }
@@ -186,9 +225,15 @@ function advisorFingerprint(): string {
 async function refreshProviderSignals() {
   const now = Date.now();
   let changed = false;
+  const providerConfigs = await activeProviderConfigs();
   if (providerConfigs.length > 0) {
     const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
+    providerApiRows = results
+      .flatMap(result => result.signals.map(agentSignalToApiRow))
+      .filter((row): row is PlanRow => row !== undefined);
     changed = applyProviderPollResults(sessions, results);
+  } else {
+    providerApiRows = [];
   }
   // Refresh global subscription rows every poll — adapters read their own
   // credential files, so rows appear regardless of providerConfigs.
@@ -209,9 +254,19 @@ async function refreshProviderSignals() {
   if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
 }
 
+async function activeProviderConfigs() {
+  if (!PROVIDER_POLL_ENABLED) return [];
+  const configs = [...envProviderConfigs];
+  if (CCSWITCH_ENABLED && !configs.some(config => config.provider === "deepseek")) {
+    const ccSwitchConfig = await readCCSwitchDeepSeekConfig();
+    if (ccSwitchConfig) configs.push(ccSwitchConfig);
+  }
+  return configs;
+}
+
 function startProviderPolling() {
-  // Start unconditionally — refreshProviderSignals gates the provider poll on
-  // providerConfigs internally, so the advisor still ticks (card expiry / reset
+  // Start unconditionally — refreshProviderSignals resolves optional provider
+  // sources internally, so the advisor still ticks (card expiry / reset
   // countdowns) even when no provider API keys are configured.
   void refreshProviderSignals();
   providerPollInterval = setInterval(() => void refreshProviderSignals(), PROVIDER_POLL_MS);
@@ -292,6 +347,57 @@ function dedupeSessions() {
     delete sessions[dropId];
     bestByKey.set(key, keepId);
   }
+}
+
+type SessionIdentity = Pick<SessionPayload, "session_id" | "session_type"> &
+  Partial<Pick<SessionPayload, "project" | "project_path" | "source">>;
+
+function projectNameFromIdentity(s: SessionIdentity): string {
+  if (s.project) return s.project;
+  if (s.project_path) return basename(s.project_path);
+  const sep = s.session_id.indexOf("__");
+  return sep === -1 ? "" : s.session_id.slice(sep + 2);
+}
+
+function sameSessionProject(a: SessionIdentity, b: SessionIdentity): boolean {
+  if (a.project_path && b.project_path) return a.project_path === b.project_path;
+  return projectNameFromIdentity(a).toLowerCase() === projectNameFromIdentity(b).toLowerCase();
+}
+
+function sessionAgentSlug(sessionType: string): string {
+  const type = sessionType.toLowerCase();
+  if (type.includes("claude")) return "claude";
+  if (type.includes("codex")) return "codex";
+  if (type.includes("gemini")) return "gemini";
+  if (type.includes("copilot")) return "copilot";
+  return type.replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
+}
+
+function isStableSessionId(sessionId: string): boolean {
+  const raw = sessionId.split("__")[0] || sessionId;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw);
+}
+
+export function migrateLegacyHookSessions(
+  sessions: Record<string, SessionPayload>,
+  incoming: SessionIdentity,
+): string[] {
+  if (!isStableSessionId(incoming.session_id)) return [];
+  const project = projectNameFromIdentity(incoming).toLowerCase();
+  const fallbackPrefix = `${sessionAgentSlug(incoming.session_type)}-${project}-`;
+  const removed: string[] = [];
+
+  for (const id of Object.keys(sessions)) {
+    if (id === incoming.session_id) continue;
+    const candidate = sessions[id];
+    const raw = candidate.session_id.split("__")[0].toLowerCase();
+    if (candidate.source !== "hook" || candidate.session_type.toLowerCase() !== incoming.session_type.toLowerCase()) continue;
+    if (!sameSessionProject(candidate, incoming) || !raw.startsWith(fallbackPrefix)) continue;
+    delete sessions[id];
+    removeSessionMarkerFiles(SESSION_ID_DIR, candidate.session_id);
+    removed.push(candidate.session_id);
+  }
+  return removed;
 }
 
 function collectJsonlFiles(dir: string, depth: number, out: string[]) {
@@ -533,6 +639,7 @@ if (isDirectRun) {
         sseClients.delete(c);
       }
     }
+    scheduleIdleCheck();
   }, 15_000);
 
   // Auto-purge: only remove sessions whose owning CLI session has ended.
@@ -571,6 +678,7 @@ app.post("/session/status", (req, res) => {
     return;
   }
   const data = req.body;
+  migrateLegacyHookSessions(sessions, data);
   const prev = sessions[data.session_id];
   sessions[data.session_id] = mergeSessionPayload(prev, data, Date.now());
   console.log(`[session] ${data.session_id} → ${data.status}`);
@@ -584,13 +692,13 @@ app.get("/sessions/live", (_req, res) => {
   res.json(sorted());
 });
 
-// GET: aggregated provider plan rows (subscription + per-session api rows)
+// GET: aggregated provider plan rows (subscription + account/session API rows)
 app.get("/providers/live", (_req, res) => {
   if (subscriptionRows === null) {
     res.json({ providers: [], initializing: true });
     return;
   }
-  res.json({ providers: aggregateProviders(subscriptionRows, sessions) });
+  res.json({ providers: aggregateProviders(subscriptionRows, sessions, providerApiRows) });
 });
 
 // GET: SSE stream
@@ -601,9 +709,9 @@ app.get("/sessions/stream", (req, res) => {
     Connection: "keep-alive",
     "Access-Control-Allow-Origin": "*",
   });
-  res.on("error", () => { sseClients.delete(res); });
+  res.on("error", () => { sseClients.delete(res); scheduleIdleCheck(); });
   sseClients.add(res);
-  req.on("close", () => sseClients.delete(res));
+  req.on("close", () => { sseClients.delete(res); scheduleIdleCheck(); });
   // Controlled reconnection: retry every 5s with jitter (EventSource spec)
   res.write("retry: 5000\n\n");
   res.write(`data: ${JSON.stringify(sorted())}\n\n`);

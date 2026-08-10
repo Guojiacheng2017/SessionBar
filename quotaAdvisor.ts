@@ -1,4 +1,4 @@
-import type { SessionAgentSignal, SessionPayload } from "./types.js";
+import type { SessionAgentSignalInput, SessionPayload } from "./types.js";
 import { RateBuffer } from "./rateBuffer.js";
 import type { PlanRow } from "./planTypes.js";
 
@@ -20,7 +20,7 @@ export async function computeAdvisorRows(
     .map(signalToApiRow);
 }
 
-function isApiSignal(signal: SessionAgentSignal): boolean {
+function isApiSignal(signal: SessionAgentSignalInput): boolean {
   if (!API_KINDS.has(signal.kind ?? "")) return false;
   return signal.used !== undefined
     || signal.remaining !== undefined
@@ -28,7 +28,12 @@ function isApiSignal(signal: SessionAgentSignal): boolean {
     || signal.balance !== undefined;
 }
 
-function signalToApiRow(signal: SessionAgentSignal): PlanRow {
+/** Convert a provider signal to a display-only API plan row when it carries data. */
+export function agentSignalToApiRow(signal: SessionAgentSignalInput): PlanRow | undefined {
+  return isApiSignal(signal) ? signalToApiRow(signal) : undefined;
+}
+
+function signalToApiRow(signal: SessionAgentSignalInput): PlanRow {
   const provider = (signal.signal || "").split(".")[0] || signal.source || "unknown";
   const remaining = signal.remaining
     ?? signal.balance

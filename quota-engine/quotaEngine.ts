@@ -77,11 +77,11 @@ function cardTimingText(
     c => c.count > 0 && (c.expiresAt === undefined || c.expiresAt - now >= 0),
   );
   const total = active.reduce((sum, c) => sum + c.count, 0);
-  if (total === 0) return "None";
+  if (total === 0) return "No cards";
   const expiringSoon = active.some(
     c => c.expiresAt !== undefined && c.expiresAt - now < CARD_EXPIRY_GRACE_MS,
   );
-  if (expiringSoon) return "Card expiring, use";
+  if (expiringSoon) return "Card expiring soon";
   // remaining 0 counts as cap-hit even though projectedCapHitAt is null for it
   const capped = remaining === 0 || (projectedCapHitAt !== null && projectedCapHitAt < resetAt);
   if (capped) return "Use card now";
@@ -91,7 +91,7 @@ function cardTimingText(
   if (expiresBeforeReset) {
     return `Card expires in ${formatDuration(expiresBeforeReset.expiresAt! - now)}`;
   }
-  return "Save card";
+  return "Card available";
 }
 
 function formatDuration(ms: number): string {
@@ -104,7 +104,7 @@ function formatDuration(ms: number): string {
 }
 
 function autoResetText(resetAt: number, now: number): string {
-  if (resetAt <= now) return "Resetting / reset imminent";
+  if (resetAt <= now) return "Resetting...";
   const diffMs = resetAt - now;
   if (diffMs < 24 * MS_PER_HOUR) {
     const resetDate = new Date(resetAt);

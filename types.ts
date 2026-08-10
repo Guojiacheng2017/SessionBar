@@ -69,6 +69,7 @@ export interface SessionWorkflowEvent {
 export interface SessionPayload {
   session_id: string;    // unique per session, e.g. "vision-dash-40393"
   session_type: string;  // label, e.g. "Claude Code", "Gemini CLI"
+  session_name?: string; // human-readable session name, when reported by the agent
   source?: "hook" | "codex_jsonl";
   status: SessionStatus;
   task_name: string;

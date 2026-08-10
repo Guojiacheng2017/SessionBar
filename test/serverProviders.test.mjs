@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { aggregateProviders, matchesSessionProvider, sessionAdvisorRows } from "../dist/server.js";
+import { aggregateProviders, matchesSessionProvider, migrateLegacyHookSessions, sessionAdvisorRows } from "../dist/server.js";
 
 function planRow(overrides = {}) {
   return {
@@ -28,6 +28,46 @@ function session(id, advisorRows = []) {
     advisorRows,
   };
 }
+
+test("migrateLegacyHookSessions removes only the old fallback for a stable session", () => {
+  const sessions = {
+    legacy: {
+      session_id: "codex-Vision-Dash-f75de08f__Vision-Dash",
+      session_type: "Codex",
+      source: "hook",
+      status: "working",
+      task_name: "running",
+      timestamp: 1_700_000_000_000,
+      project: "Vision-Dash",
+      project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+    },
+    otherStable: {
+      session_id: "019ee93e-56d1-7f13-9624-c84bdaf7c97a__Vision-Dash",
+      session_type: "Codex",
+      source: "hook",
+      status: "working",
+      task_name: "running",
+      timestamp: 1_700_000_001_000,
+      project: "Vision-Dash",
+      project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+    },
+  };
+
+  const removed = migrateLegacyHookSessions(sessions, {
+    session_id: "019fdb88-8209-7b32-8816-cf684186fde1__Vision-Dash",
+    session_type: "Codex",
+    source: "hook",
+    status: "working",
+    task_name: "running",
+    timestamp: 1_700_000_002_000,
+    project: "Vision-Dash",
+    project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+  });
+
+  assert.deepEqual(removed, ["codex-Vision-Dash-f75de08f__Vision-Dash"]);
+  assert.ok(sessions.otherStable);
+  assert.equal(sessions.legacy, undefined);
+});
 
 // --- aggregateProviders ---
 
@@ -98,6 +138,21 @@ test("aggregateProviders: keeps distinct api rows for same provider when labels 
   const result = aggregateProviders([], sessions);
   assert.equal(result.length, 2);
   assert.deepEqual(result.map(r => r.label).sort(), ["openai.balance", "openai.usage"]);
+});
+
+test("aggregateProviders: includes global provider api rows without a matching session", () => {
+  const globalApiRows = [
+    planRow({
+      form: "api",
+      provider: "deepseek",
+      label: "DeepSeek API CNY",
+      remaining: 110,
+      unit: "CNY",
+    }),
+  ];
+  const result = aggregateProviders([], { a: session("a") }, globalApiRows);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0], globalApiRows[0]);
 });
 
 // --- sessionAdvisorRows (session detail advisor tab: api + matching subscriptions) ---

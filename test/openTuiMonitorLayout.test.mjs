@@ -72,6 +72,21 @@ test("provider summary line renders api rows with remaining/used/limit/unit", ()
   assert.match(line, /tokens/);
 });
 
+test("provider summary and table show usage for a subscription with a live limit", () => {
+  const row = subscriptionRow({
+    provider: "github",
+    label: "GitHub Copilot Pro+",
+    used: 2325,
+    remaining: 4674.5,
+    limit: 7000,
+    unit: "AI credits",
+  });
+  const line = providerSummaryLine(row);
+  assert.match(line, /used 2.3K\/7K AI credits/);
+  const content = providerTableContent([row], { width: 120, height: 40 });
+  assert.equal(content[1][1][0].text, "2.3K\/7K AI credits");
+});
+
 test("provider table shows No quota data when there are no rows", () => {
   const renderer = { width: 120, height: 40 };
   const content = providerTableContent([], renderer);
@@ -112,4 +127,3 @@ test("provider table uses compact 3-column layout on narrow terminals", () => {
   assert.equal(content[0][2][0].text, "Reset");
   assert.equal(content[1].length, 3);
 });
-

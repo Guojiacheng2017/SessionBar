@@ -58,7 +58,10 @@ export async function pollProvider(
     let signals: SessionAgentSignalInput[];
     switch (config.provider) {
       case "deepseek":
-        signals = parseDeepSeekBalance(await getJson(fetchImpl, urlFor(config, "/user/balance"), bearerHeaders(config)));
+        signals = parseDeepSeekBalance(
+          await getJson(fetchImpl, urlFor(config, "/user/balance"), bearerHeaders(config)),
+          config.label,
+        );
         break;
       case "minimax":
         signals = parseMiniMaxTokenPlan(await getJson(fetchImpl, urlFor(config, "/v1/token_plan/remains"), bearerHeaders(config)));

@@ -14,6 +14,7 @@ export function reduceSessionEvents(prev: SessionPayload | undefined, events: re
       session.task_name = event.task_name;
       session.progress = event.progress;
       session.timestamp = event.timestamp;
+      session.session_name = event.session_name || session.session_name;
       session.project = event.project || session.project;
       session.project_path = event.project_path || session.project_path;
     } else if (event.type === "activity_event") {
@@ -85,6 +86,7 @@ function ensureSession(session: SessionPayload | undefined, event: HookEvent): S
   return {
     session_id: event.session_id ?? `${event.agent_type}-unknown`,
     session_type: event.agent_type,
+    session_name: event.session_name,
     source: event.source === "codex_jsonl" ? "codex_jsonl" : "hook",
     status: "working",
     task_name: "Working",

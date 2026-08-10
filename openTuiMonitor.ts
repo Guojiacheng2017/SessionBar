@@ -12,7 +12,6 @@ import {
   type TextChunk,
   type TextTableContent,
 } from "@opentui/core";
-import { homedir } from "os";
 import type { PlanRow } from "./planTypes.js";
 import type { SessionPayload } from "./types.js";
 import {
@@ -23,6 +22,21 @@ import {
   updateUnreadSessionState,
   type DetailTab,
 } from "./sessionInspector.js";
+import {
+  age,
+  compactNumber,
+  truncatePlain,
+  agentName,
+  firstFiniteNumber,
+  clampNumber,
+} from "./displayUtils.js";
+import {
+  projectName,
+  compactPath,
+  rawProjectPath,
+  projectPathSummary,
+  groupByProject as groupSessionsByProject,
+} from "./projectUtils.js";
 
 type Session = SessionPayload;
 type FetchSessions = () => Promise<{ sessions: Session[]; error?: string }>;
@@ -147,76 +161,9 @@ function header(text: string): TextChunk[] {
   return cell(text, PALETTE.fg, TextAttributes.BOLD);
 }
 
-function projectName(s: Session): string {
-  if (s.project) return s.project;
-  if (s.project_path) return s.project_path.split("/").filter(Boolean).at(-1) || s.project_path;
-  const sid = s.session_id || "";
-  const sep = sid.indexOf("__");
-  if (sep !== -1) return sid.slice(sep + 2);
-  return sid || "unknown";
-}
-
 function projectKey(s: Session): string {
   const path = rawProjectPath(s);
   return path ? `path:${compactPath(path)}` : `name:${projectName(s)}`;
-}
-
-function compactPath(path: string): string {
-  const home = homedir();
-  return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
-}
-
-function pathTail(path: string): string {
-  const parts = path.replace(/\/+$/, "").split("/").filter(Boolean);
-  return parts.at(-1) || path;
-}
-
-function rawProjectPath(s: Session): string {
-  return typeof s.project_path === "string" ? s.project_path.trim() : "";
-}
-
-function uniqueProjectPathsByName(sessions: readonly Session[]): Map<string, string> {
-  const paths = new Map<string, Set<string>>();
-  for (const s of sessions) {
-    const path = rawProjectPath(s);
-    if (!path) continue;
-    const name = s.project || pathTail(path);
-    if (!paths.has(name)) paths.set(name, new Set());
-    paths.get(name)!.add(compactPath(path));
-  }
-  const unique = new Map<string, string>();
-  for (const [name, values] of paths.entries()) {
-    if (values.size === 1) unique.set(name, [...values][0]!);
-  }
-  return unique;
-}
-
-function projectGroupKey(s: Session, uniquePaths: Map<string, string>): string {
-  const path = rawProjectPath(s);
-  if (path) return `path:${compactPath(path)}`;
-  const name = projectName(s);
-  const inferred = uniquePaths.get(name);
-  return inferred ? `path:${inferred}` : `name:${name}`;
-}
-
-function projectPathSummary(sessions: readonly Session[]): string {
-  if (sessions.length === 0) return "unknown";
-  const name = projectName(sessions[0]!);
-  const unique = [...new Set(sessions.map(rawProjectPath).filter(Boolean).map(compactPath))];
-  if (unique.length === 0) return name;
-  return unique.length === 1 ? unique[0]! : `${unique[0]} +${unique.length - 1}`;
-}
-
-function age(ts: number): string {
-  const seconds = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (seconds < 10) return "now";
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  return `${Math.floor(seconds / 3600)}h`;
-}
-
-function agentName(type: string): string {
-  return (type || "?").replace(/\s+Code$/i, "").replace(/\s+CLI$/i, "").replace(/\s+/g, " ");
 }
 
 function statusLabel(status: string): string {
@@ -242,7 +189,7 @@ function defaultActivity(status: string): string {
 
 function activityText(s: Session): string {
   const detail = (s.task_name || "").trim() || defaultActivity(s.status);
-  const progress = firstNumber(s.progress);
+  const progress = firstFiniteNumber(s.progress);
   if (progress === undefined) return detail;
   const pct = progress <= 1 && progress >= 0 ? progress * 100 : progress;
   return `${detail} ${Math.round(Math.max(0, Math.min(100, pct)))}%`;
@@ -278,19 +225,7 @@ function latestTimestamp(sessions: readonly Session[]): number {
 }
 
 function groupByProject(sessions: readonly Session[]): Map<string, Session[]> {
-  const groups = new Map<string, Session[]>();
-  const uniquePaths = uniqueProjectPathsByName(sessions);
-  for (const session of sessions) {
-    const key = projectGroupKey(session, uniquePaths);
-    const list = groups.get(key) || [];
-    list.push(session);
-    groups.set(key, list);
-  }
-  return new Map(
-    [...groups.entries()].sort((a, b) =>
-      projectName(a[1][0]!).localeCompare(projectName(b[1][0]!)) || a[0].localeCompare(b[0])
-    )
-  );
+  return groupSessionsByProject(sessions) as unknown as Map<string, Session[]>;
 }
 
 function applyFilter(sessions: readonly Session[], filterText: string): Session[] {
@@ -299,6 +234,7 @@ function applyFilter(sessions: readonly Session[], filterText: string): Session[
   return sessions.filter(s =>
     projectName(s).toLowerCase().includes(q) ||
     (s.project_path || "").toLowerCase().includes(q) ||
+    (s.session_name || "").toLowerCase().includes(q) ||
     (s.task_name || "").toLowerCase().includes(q) ||
     (s.session_type || "").toLowerCase().includes(q)
   );
@@ -420,26 +356,10 @@ function clearProjectFocus(state: Readonly<MonitorState>): MonitorState {
   });
 }
 
-function firstNumber(...values: unknown[]): number | undefined {
-  for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
-}
-
 function contextPercent(s: Session): number | undefined {
-  const raw = firstNumber(s.context_percent, (s as any).context_pct, (s as any).context);
+  const raw = firstFiniteNumber(s.context_percent, (s as any).context_pct, (s as any).context);
   if (raw === undefined) return undefined;
   return Math.max(0, Math.min(100, raw <= 1 && raw >= 0 ? raw * 100 : raw));
-}
-
-function truncatePlain(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return max <= 3 ? text.slice(0, max) : `${text.slice(0, max - 3)}...`;
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }
 
 export function monitorBodyLayout(rendererWidth: number): MonitorBodyLayout {
@@ -573,18 +493,6 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
   return content;
 }
 
-function compactNumber(value: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000_000) return `${trimZero((value / 1_000_000_000).toFixed(1))}B`;
-  if (abs >= 1_000_000) return `${trimZero((value / 1_000_000).toFixed(1))}M`;
-  if (abs >= 1_000) return `${trimZero((value / 1_000).toFixed(1))}K`;
-  return Number.isInteger(value) ? String(value) : value.toFixed(1);
-}
-
-function trimZero(text: string): string {
-  return text.replace(/\.0$/, "");
-}
-
 export function providerSummaryLine(row: PlanRow): string {
   const form = providerFormLabel(row);
   const label = row.label || row.provider || "?";
@@ -597,8 +505,10 @@ export function providerSummaryLine(row: PlanRow): string {
     ].filter(Boolean);
     return parts.length ? `${label} ${form} | ${parts.join(" · ")}` : `${label} ${form}`;
   }
+  const unit = row.unit ? ` ${row.unit}` : "";
   const parts = [
-    row.remaining !== undefined && row.limit !== undefined ? `${Math.round(row.remaining)}% left` : "",
+    row.used !== undefined && row.limit !== undefined ? `used ${compactNumber(row.used)}/${compactNumber(row.limit)}${unit}` : "",
+    row.remaining !== undefined && row.limit !== undefined && row.used === undefined ? `${Math.round(row.remaining)}% left` : "",
     row.level ? `level ${row.level}` : "",
     row.pacing ? `pacing ${row.pacing}` : "",
     row.cardTiming ? `card ${row.cardTiming}` : "",
@@ -619,6 +529,10 @@ function providerLeftText(row: PlanRow): string {
     if (row.used !== undefined) return `${compactNumber(row.used)} used`;
     if (row.limit !== undefined) return `${compactNumber(row.limit)} limit`;
     return "—";
+  }
+  const unit = row.unit ? ` ${row.unit}` : "";
+  if (row.used !== undefined && row.limit !== undefined) {
+    return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit}`;
   }
   return row.remaining !== undefined ? `${Math.round(row.remaining)}%` : "—";
 }

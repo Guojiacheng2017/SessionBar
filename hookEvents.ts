@@ -6,6 +6,7 @@ export interface HookEventBase {
   type: string;
   agent_type: string;
   session_id?: string;
+  session_name?: string;
   project?: string;
   project_path?: string;
   timestamp: number;
@@ -229,6 +230,7 @@ function eventBase(snapshot: SessionSnapshotInput, timestamp: number): Omit<Hook
   return {
     agent_type: snapshot.session_type,
     session_id: snapshot.session_id,
+    session_name: snapshot.session_name,
     project: snapshot.project,
     project_path: snapshot.project_path,
     timestamp,

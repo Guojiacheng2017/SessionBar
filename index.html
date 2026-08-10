@@ -36,9 +36,9 @@
     </script>
     <link rel="stylesheet" href="./web.css">
 </head>
-<body class="bg-bg text-ink text-[13px] leading-relaxed overflow-hidden h-screen">
+<body class="bg-bg text-ink text-[14px] leading-relaxed overflow-x-hidden min-h-screen">
 
-<div id="app" class="flex flex-col h-screen px-6 py-5 gap-3.5 max-w-[1080px] mx-auto">
+<div id="app" class="flex flex-col min-h-screen px-6 py-5 gap-3.5 max-w-[1180px] mx-auto">
 
     <!-- Header -->
     <div class="flex items-center justify-between gap-4 shrink-0">
@@ -52,10 +52,14 @@
     <!-- Filter -->
     <div class="flex gap-2 items-center shrink-0">
         <input id="filter" type="text" placeholder="Filter projects, tasks, or types…"
-            class="flex-1 px-3 py-2 bg-surface border border-border rounded-lg text-[12px] text-ink outline-none focus:border-accent/40 focus:ring-[3px] focus:ring-accent/10 transition">
-        <span id="filter-hint" class="text-[11px] text-muted whitespace-nowrap"></span>
+            class="flex-1 px-3.5 py-2.5 bg-surface border border-border rounded-lg text-[13px] text-ink outline-none focus:border-accent/40 focus:ring-[3px] focus:ring-accent/10 transition">
+        <span id="filter-hint" class="text-[12px] text-muted whitespace-nowrap"></span>
     </div>
 
+    <section id="session-scene" class="session-scene shrink-0" aria-label="Sessions workspace">
+      <div id="session-shell" class="session-shell">
+        <div id="session-compact" class="session-compact" aria-live="polite" aria-label="Collapsed session summary"></div>
+        <div id="session-content" class="session-content">
     <!-- Projects panel -->
     <div class="projects-panel border border-border rounded-xl bg-surface shrink-0 max-h-[180px] flex flex-col overflow-hidden shadow-[0_12px_32px_rgba(0,0,0,0.12)]">
         <div id="projects-header" class="flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-border shrink-0 select-none bg-surface-highlight">
@@ -65,7 +69,7 @@
     </div>
 
     <!-- Body -->
-    <div class="workspace flex flex-col gap-3.5 flex-1 min-h-0 lg:flex-row">
+    <div class="workspace session-workspace flex flex-col gap-3.5 flex-1 min-h-0 lg:flex-row">
         <!-- Sessions -->
         <div class="flex-1 min-h-0 border border-border rounded-xl bg-surface flex flex-col overflow-hidden shadow-[0_12px_32px_rgba(0,0,0,0.12)]">
             <div id="sessions-header" class="flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-border shrink-0 select-none bg-surface-highlight"><span class="mono text-[10px] font-semibold text-muted uppercase tracking-[0.6px]">All Sessions</span></div>
@@ -77,10 +81,25 @@
             <div id="detail-body" class="flex-1 overflow-y-auto thin-scroll px-4 py-4"></div>
         </div>
     </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Providers -->
+    <section id="providers-panel" class="providers-panel" aria-labelledby="providers-heading">
+        <div id="providers-session-bar" class="providers-session-bar" aria-hidden="true"></div>
+        <div id="providers-header" class="providers-header">
+            <div>
+                <h2 id="providers-heading" class="providers-heading">Providers</h2>
+            </div>
+            <span id="providers-status" class="providers-status">Loading</span>
+        </div>
+        <div id="providers-body" class="providers-body"></div>
+    </section>
 
     <!-- Footer -->
     <div id="footer" class="text-[11px] text-muted shrink-0 truncate"></div>
-    <div class="text-[10px] text-muted/40 text-center shrink-0">&copy; 2026 SessionBar</div>
+    <div id="copyright" class="text-[11px] text-muted/50 text-center shrink-0">&copy; 2026 SessionBar</div>
 
 </div>
 

@@ -227,6 +227,8 @@ const sourceCaches: Record<string, string> = {
   OpenCode: "/tmp/sessionbar-opencode-plugins.html",
   Pi: "/tmp/sessionbar-pi-hooks.md",
   Antigravity: "/tmp/sessionbar-antigravity-hooks.html; /tmp/sessionbar-antigravity-hooks-decoded.html; /tmp/sessionbar-antigravity-chunk.js",
+  Workbuddy: "/tmp/sessionbar-workbuddy-hooks.html",
+  Minimax: "/tmp/sessionbar-minimax-hooks.html",
 };
 
 const agentAliases: Record<string, string> = {
@@ -235,6 +237,8 @@ const agentAliases: Record<string, string> = {
   Gemini: "Gemini CLI",
   Copilot: "GitHub Copilot",
   "Pi Agent": "Pi",
+  Workbuddy: "Workbuddy",
+  Minimax: "Minimax",
 };
 
 export const hookEventMappings: HookEventMapping[] = Object.entries(agentEvents).flatMap(([agent, events]) => {

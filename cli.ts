@@ -8,6 +8,20 @@ import { fileURLToPath } from "url";
 import { createInterface } from "readline";
 import { runOpenTuiMonitor } from "./openTuiMonitor.js";
 import { pruneSessionMarkerFiles } from "./sessionMarkers.js";
+import {
+  setupHooks,
+  teardownHooks,
+  injectHooksOnServerReady,
+} from "./hookManager.js";
+import { sessionDisplayName, stripAnsi, truncateAnsi } from "./displayUtils.js";
+import {
+  createRainbow,
+  panelTop as _panelTop,
+  panelBot as _panelBot,
+  panelRow as _panelRow,
+  runLandingMenu,
+  type LandingMenuDeps,
+} from "./landingMenu.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.SESSIONBAR_HOME || process.env.AGENTBAR_HOME || join(homedir(), ".sessionbar");
@@ -220,12 +234,8 @@ const S = {
   error:   { c: _RD, icon: "▲", label: "ERROR" },
 };
 
-function strip(s: string): number {
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
 function pad(s: string, n: number): string {
-  return s + " ".repeat(Math.max(0, n - strip(s)));
+  return s + " ".repeat(Math.max(0, n - stripAnsi(s)));
 }
 
 function truncateText(s: string, max: number): string {
@@ -242,48 +252,12 @@ function tailText(s: string, max: number): string {
   return "…" + s.slice(-(max - 1));
 }
 
-function truncateAnsi(s: string, max: number): string {
-  if (max <= 0) return "";
-  if (strip(s) <= max) return s;
-  let out = "";
-  let visible = 0;
-  for (let i = 0; i < s.length && visible < Math.max(0, max - 1); i++) {
-    if (s[i] === "\x1b" && s[i + 1] === "[") {
-      const end = s.indexOf("m", i);
-      if (end === -1) break;
-      out += s.slice(i, end + 1);
-      i = end;
-      continue;
-    }
-    out += s[i];
-    visible++;
-  }
-  return out + "…" + _D;
-}
-
 function age(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 10) return `${CC.CY}now`;  // caller appends _D
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   return `${Math.floor(s / 3600)}h`;
-}
-
-function typeIcon(t: string): string {
-  const m: Record<string, string> = {
-    "Claude Code": "♆",
-    "Gemini CLI": "◇",
-    "Codex": "▷",
-    "Copilot": "◎",
-    "OpenCode": "□",
-    "Pi": "π",
-    "Kimi CLI": "❖",
-    "Qwen CLI": "⬡",
-    "DeepSeek CLI": "◆",
-    "Windsurf": "♒",
-    "Cursor": "➤",
-  };
-  return m[t] || "○";
 }
 
 function extractProject(s: any): string {
@@ -299,7 +273,7 @@ function extractProject(s: any): string {
   const sep = sid.indexOf("__");
   if (sep !== -1) return sid.slice(sep + 2);
   // Legacy format: "{type}-{project}-{pid}-{random}"
-  const cleaned = sid.replace(/^(claude|gemini|codex|copilot|opencode|pi|kimi|qwen|deepseek|windsurf|cursor)-/, "");
+  const cleaned = sid.replace(/^(claude|gemini|codex|copilot|opencode|pi-agent|pi|kimi|qwen|deepseek|windsurf|cursor|workbuddy|minimax)-/, "");
   const parsed = cleaned.replace(/-\d+-\d+$/, "");
   // If parsed is a UUID (contains only hex + dashes), project is unknown
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(parsed)) {
@@ -401,12 +375,12 @@ function inlineStatus(sessions: any[]): string {
 }
 
 function cell(s: string, w: number): string {
-  return pad(truncateAnsi(s, w), w);
+  return pad(truncateAnsi(s, w, _D), w);
 }
 
 function rightCell(s: string, w: number): string {
-  const clipped = truncateAnsi(s, w);
-  return " ".repeat(Math.max(0, w - strip(clipped))) + clipped;
+  const clipped = truncateAnsi(s, w, _D);
+  return " ".repeat(Math.max(0, w - stripAnsi(clipped))) + clipped;
 }
 
 function displayPath(p: string, max: number): string {
@@ -428,7 +402,7 @@ function rawSessionId(s: any): string {
 }
 
 function sessionShortId(s: any, max = 8): string {
-  const cleaned = rawSessionId(s).replace(/^(claude|codex|gemini|copilot|opencode|pi|kimi|qwen|deepseek|windsurf|cursor)-/i, "");
+  const cleaned = rawSessionId(s).replace(/^(claude|codex|gemini|copilot|opencode|pi-agent|pi|kimi|qwen|deepseek|windsurf|cursor|workbuddy|minimax)-/i, "");
   const scoped = /-([0-9a-f]{8})$/i.exec(cleaned);
   if (scoped) {
     if (max <= 12) return scoped[1].slice(0, max);
@@ -467,7 +441,7 @@ function sessionStatsText(s: any, max = 18): string {
     tokens === undefined ? `${_K}tok --${_D}` : `${compactNumber(tokens)} tok`,
     turns === undefined ? `${_K}turn --${_D}` : `${Math.round(turns)} turn`,
   ];
-  return truncateAnsi(parts.join(` ${_K}·${_D} `), max);
+  return truncateAnsi(parts.join(` ${_K}·${_D} `), max, _D);
 }
 
 function sessionHealth(sessions: any[]) {
@@ -499,7 +473,7 @@ function agentIcons(sessions: any[], max = 10): string {
   }
   const out = [...counts.entries()]
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([type, count]) => `${typeIcon(type)}${count > 1 ? count : ""}`)
+    .map(([_type, count]) => `${count > 1 ? count : ""}`)
     .join(" ");
   return truncateText(out, max);
 }
@@ -658,7 +632,7 @@ function sessionTableLayout(w: number) {
 
 function sessionTableHeader(w: number): string {
   const c = sessionTableLayout(w);
-  return `${cell("", c.marker)}${cell(`${_B}Project${_D}`, c.project)} ${cell(`${_B}Agent${_D}`, c.agent)} ${cell(`${_B}Session${_D}`, c.session)} ${cell(`${_B}Task${_D}`, c.task)} ${cell(`${_B}Status${_D}`, c.status)} ${cell(`${_B}Stats${_D}`, c.stats)} ${rightCell(`${_B}Age${_D}`, c.age)}`;
+  return `${cell("", c.marker)}${cell(`${_B}Project${_D}`, c.project)} ${cell(`${_B}Agent${_D}`, c.agent)} ${cell(`${_B}Name${_D}`, c.session)} ${cell(`${_B}Task${_D}`, c.task)} ${cell(`${_B}Status${_D}`, c.status)} ${cell(`${_B}Stats${_D}`, c.stats)} ${rightCell(`${_B}Age${_D}`, c.age)}`;
 }
 
 function sessionTableRow(s: any, frame: number, w: number, idx: number, selected: boolean): string {
@@ -667,11 +641,11 @@ function sessionTableRow(s: any, frame: number, w: number, idx: number, selected
   const pulse = s.status === "working" ? PULSE(frame + idx) : style.icon;
   const marker = selected ? `${_BL}>${_D}` : " ";
   const project = projectLabel(s);
-  const agent = `${typeIcon(s.session_type || "?")} ${agentName(s.session_type || "?", c.agent - 2)}`;
+  const agent = `${agentName(s.session_type || "?", c.agent - 2)}`;
   const task = s.task_name || `${_K}no task reported${_D}`;
   const status = `${style.c}${pulse} ${statusShort(s.status)}${_D}`;
   const stats = sessionStatsText(s, c.stats);
-  const row = `${cell(marker, c.marker)}${cell(project, c.project)} ${cell(agent, c.agent)} ${cell(sessionShortId(s, c.session), c.session)} ${cell(task, c.task)} ${cell(status, c.status)} ${cell(stats, c.stats)} ${rightCell(`${_K}${age(s.timestamp || Date.now())}${_D}`, c.age)}`;
+  const row = `${cell(marker, c.marker)}${cell(project, c.project)} ${cell(agent, c.agent)} ${cell(sessionDisplayName(s), c.session)} ${cell(task, c.task)} ${cell(status, c.status)} ${cell(stats, c.stats)} ${rightCell(`${_K}${age(s.timestamp || Date.now())}${_D}`, c.age)}`;
   return panelRow(selected ? `${_B}${row}${_D}` : row, w);
 }
 
@@ -680,8 +654,8 @@ function renderSelectedSessionLines(s: any, frame: number, w: number): string[] 
   const pulse = s.status === "working" ? PULSE(frame) : style.icon;
   return [
     `${_B}PROJECT${_D} ${projectLabel(s)}  ${_K}·${_D}  ${displayPath(projectPathLabel(s), Math.max(10, w - 38))}`,
-    `${_B}SESSION${_D} ${sessionShortId(s, 22)}  ${_K}·${_D}  ${typeIcon(s.session_type || "?")} ${agentName(s.session_type || "?", 16)}  ${_K}·${_D}  ${style.c}${pulse} ${statusShort(s.status)}${_D}  ${_K}updated${_D} ${age(s.timestamp || Date.now())}${_D}`,
-    `${_K}task${_D} ${truncateAnsi(s.task_name || "no task reported", Math.max(8, w - 13))}`,
+    `${_B}SESSION${_D} ${sessionShortId(s, 22)}  ${_K}·${_D}  ${agentName(s.session_type || "?", 16)}  ${_K}·${_D}  ${style.c}${pulse} ${statusShort(s.status)}${_D}  ${_K}updated${_D} ${age(s.timestamp || Date.now())}${_D}`,
+    `${_K}task${_D} ${truncateAnsi(s.task_name || "no task reported", Math.max(8, w - 13), _D)}`,
     `${_K}stats${_D} ${sessionStatsText(s, Math.max(8, w - 10))}`,
     `${_K}id${_D} ${truncateText(String(s.session_id || "?"), Math.max(8, w - 9))}`,
   ];
@@ -730,10 +704,6 @@ function renderSessionsPanel(
   while (lines.length < totalRows - 1) lines.push(panelRow("", w));
   lines.push(panelBot(w));
   return lines.slice(0, totalRows);
-}
-
-function shellEscape(s: string): string {
-  return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
 // ── TUI helpers ──
@@ -821,14 +791,13 @@ function layoutBudget(
 
 function renderDetailLines(s: any, frame: number, w: number): string[] {
   const proj = extractProject(s);
-  const ico = typeIcon(s.session_type || "?");
   const style = S[s.status as keyof typeof S] || S.idle;
   const statusLabel = style.label || s.status;
   const pulseChar = s.status === "working" ? PULSE(frame % 4) : style.icon;
   const pathDisplay = tailText(s.project_path || proj, Math.max(8, w - 12));
 
   const lines: string[] = [
-    `${ico}  ${_B}${s.session_type || "?"}${_D}`,
+    `${_B}${s.session_type || "?"}${_D}`,
     `${_K}Project:${_D} ${proj}`,
     `${_K}Path:${_D} ${pathDisplay}`,
     `${pulseChar}  ${style.c}${statusLabel}${_D}  ${_K}·${_D}  ${s.task_name || ""}`,
@@ -876,6 +845,7 @@ function renderFrame(
     const q = filterText.toLowerCase();
     shown = sessions.filter((s: any) =>
       extractProject(s).toLowerCase().includes(q) ||
+      sessionDisplayName(s).toLowerCase().includes(q) ||
       (s.task_name || "").toLowerCase().includes(q) ||
       (s.session_type || "").toLowerCase().includes(q)
     );
@@ -915,8 +885,8 @@ function renderFrame(
   if (desktop) {
     // Right-align server info on the title row to save space
     const rightInfo = `${_GN}●${_D} online ${_K}:${PORT}${_D}`;
-    const titleVis = strip(title);
-    const rightVis = strip(rightInfo);
+    const titleVis = stripAnsi(title);
+    const rightVis = stripAnsi(rightInfo);
     const pad = Math.max(1, totalW - titleVis - rightVis + 1);
     write(title + " ".repeat(pad) + rightInfo);
   } else {
@@ -1002,7 +972,7 @@ function renderFrame(
 	        if (rowIdx >= listRows) break;
 	        const projectMarker = proj === projectFocusKey ? `${_BL}●${_D}` : proj === projectCursorKey ? `${_BL}>${_D}` : " ";
 	        lines.push(panelRow(
-	          `${projectMarker} ${typeIcon(ss[0]?.session_type || "?")} ${_B}${projectLabel(ss[0])}${_D} ${_K}─ ${ss.length} session${ss.length !== 1 ? "s" : ""}${_D}`,
+	          `${projectMarker} ${_B}${projectLabel(ss[0])}${_D} ${_K}─ ${ss.length} session${ss.length !== 1 ? "s" : ""}${_D}`,
 	          totalW
 	        ));
 	        rowIdx++;
@@ -1125,25 +1095,6 @@ function render(sessions: any[], frame: number, errorMsg?: string) {
 
 // ── watch() — full-screen interactive TUI ──
 
-function applyFilter(sessions: any[], q: string): any[] {
-  if (!q) return sessions;
-  const lower = q.toLowerCase();
-  return sessions.filter((s: any) =>
-    extractProject(s).toLowerCase().includes(lower) ||
-    (s.task_name || "").toLowerCase().includes(lower) ||
-    (s.session_type || "").toLowerCase().includes(lower)
-  );
-}
-
-function selectionIndex(filtered: any[], selectedId: string | null, fallbackIdx: number): number {
-  if (filtered.length === 0) return 0;
-  if (selectedId) {
-    const byId = filtered.findIndex((s: any) => s.session_id === selectedId);
-    if (byId !== -1) return byId;
-  }
-  return Math.max(0, Math.min(fallbackIdx, filtered.length - 1));
-}
-
 // ── SSE stream reader ──
 
 async function startSSE(): Promise<ReadableStreamDefaultReader<string> | null> {
@@ -1246,634 +1197,6 @@ async function watch() {
     process.exitCode = 1;
   }
   return;
-
-  // Enter alternate screen, disable cursor
-  process.stdout.write("\x1b[?1049h\x1b[?25l");
-
-  let stdinRaw = false;
-  if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    stdinRaw = true;
-  }
-
-  let running = true;
-  let frame = 0;
-  let selectedIdx = 0;
-  let selectedId: string | null = null;
-  let detailId: string | null = null;
-  let projectIdx = 0;
-  let projectCursorKey: string | null = null;
-  let projectFocusKey: string | null = null;
-  let filterText = "";
-  let filterActive = false;
-  let sessions: any[] = [];
-  let stats = computeStats(sessions);
-  let errorMsg: string | undefined;
-  let pendingFetch = true;
-  let forceRefresh = false;
-  let lastFingerprint = "";
-  let lastCols = 0;
-  let lastRows = 0;
-
-  const stop = () => {
-    if (!running) return;
-    running = false;
-    process.stdout.write("\x1b[?25h\x1b[?1049l");
-    if (stdinRaw) {
-      try { process.stdin.setRawMode(false); } catch { /* */ }
-      process.stdin.pause();
-    }
-  };
-
-  // Parse ANSI escape sequences and key presses
-  let escapeBuf = "";
-  const currentShown = () => applyFilter(sessions, filterText);
-  const currentGroups = () => groupByProject(currentShown());
-  const currentProjectKeys = () => [...currentGroups().keys()];
-  const setProjectFromKeys = (idx: number) => {
-    const keys = currentProjectKeys();
-    if (keys.length === 0) {
-      projectIdx = 0;
-      projectCursorKey = null;
-      projectFocusKey = null;
-      selectedIdx = 0;
-      selectedId = null;
-      detailId = null;
-      return;
-    }
-    projectIdx = Math.max(0, Math.min(keys.length - 1, idx));
-    projectCursorKey = keys[projectIdx] || null;
-  };
-  const moveProject = (delta: number) => {
-    const keys = currentProjectKeys();
-    const byKey = projectCursorKey ? keys.indexOf(projectCursorKey) : -1;
-    const base = byKey === -1 ? projectIdx : byKey;
-    setProjectFromKeys(base + delta);
-    forceRefresh = true;
-  };
-  const focusedSessions = () => {
-    if (!projectFocusKey) return currentShown();
-    return currentGroups().get(projectFocusKey) || [];
-  };
-  const setSelectedFromFocused = (idx: number) => {
-    const filtered = focusedSessions();
-    if (filtered.length === 0) {
-      selectedIdx = 0;
-      selectedId = null;
-      detailId = null;
-      return;
-    }
-    selectedIdx = Math.max(0, Math.min(filtered.length - 1, idx));
-    selectedId = filtered[selectedIdx]?.session_id || null;
-  };
-  const moveSelection = (delta: number) => {
-    if (!projectFocusKey) {
-      moveProject(delta);
-      return;
-    }
-    const filtered = focusedSessions();
-    if (filtered.length === 0) {
-      selectedIdx = 0;
-      selectedId = null;
-    } else {
-      selectedIdx = Math.max(0, Math.min(filtered.length - 1, selectionIndex(filtered, selectedId, selectedIdx) + delta));
-      selectedId = filtered[selectedIdx]?.session_id || null;
-    }
-    forceRefresh = true;
-  };
-  const focusProject = () => {
-    const groups = currentGroups();
-    const keys = [...groups.keys()];
-    if (keys.length === 0) return;
-    if (!projectCursorKey || !groups.has(projectCursorKey)) setProjectFromKeys(projectIdx);
-    projectFocusKey = projectCursorKey || keys[0] || null;
-    const ss = projectFocusKey ? groups.get(projectFocusKey) || [] : [];
-    selectedIdx = 0;
-    selectedId = ss[0]?.session_id || null;
-    detailId = null;
-    forceRefresh = true;
-  };
-  const clearProjectFocus = () => {
-    projectFocusKey = null;
-    selectedIdx = -1;
-    selectedId = null;
-    detailId = null;
-    forceRefresh = true;
-  };
-
-  const onKey = (buf: Buffer) => {
-    const raw = buf.toString();
-
-    if (filterActive) {
-      // Filter input mode
-      if (raw === "\x1b" || raw === "\x03") {
-        // Esc or Ctrl+C: clear filter
-        filterActive = false;
-        filterText = "";
-        selectedIdx = 0;
-        selectedId = null;
-        detailId = null;
-        projectFocusKey = null;
-        projectIdx = 0;
-        projectCursorKey = null;
-        forceRefresh = true;
-        return;
-      }
-      if (raw === "\r" || raw === "\n") {
-        // Enter: accept filter
-        filterActive = false;
-        selectedIdx = 0;
-        selectedId = null;
-        detailId = null;
-        projectFocusKey = null;
-        projectIdx = 0;
-        projectCursorKey = null;
-        forceRefresh = true;
-        return;
-      }
-      if (raw === "\x7f" || raw === "\b") {
-        // Backspace
-        filterText = filterText.slice(0, -1);
-        selectedIdx = 0;
-        selectedId = null;
-        detailId = null;
-        projectFocusKey = null;
-        projectIdx = 0;
-        projectCursorKey = null;
-        forceRefresh = true;
-        return;
-      }
-      // Printable chars
-      if (raw.length === 1 && raw >= " " && raw <= "~") {
-        filterText += raw;
-        selectedIdx = 0;
-        selectedId = null;
-        detailId = null;
-        projectFocusKey = null;
-        projectIdx = 0;
-        projectCursorKey = null;
-        forceRefresh = true;
-        return;
-      }
-      return; // ignore other keys in filter mode
-    }
-
-    // Normal mode
-    if (raw === "q" || raw === "Q" || raw === "\x03") {
-      stop();
-      return;
-    }
-
-    if (raw === "\x1b[A" || raw === "\x1bOA") {
-      escapeBuf = "";
-      moveSelection(-1);
-      return;
-    }
-    if (raw === "\x1b[B" || raw === "\x1bOB") {
-      escapeBuf = "";
-      moveSelection(1);
-      return;
-    }
-
-    if (raw === "\x1b") {
-      escapeBuf = "\x1b";
-      return;
-    }
-
-    if (escapeBuf) {
-      escapeBuf += raw;
-      // Arrow up: \x1b[A, Arrow down: \x1b[B
-      if (escapeBuf === "\x1b[A" || escapeBuf === "\x1bOA") {
-        moveSelection(-1);
-      } else if (escapeBuf === "\x1b[B" || escapeBuf === "\x1bOB") {
-        moveSelection(1);
-      }
-      escapeBuf = "";
-      return;
-    }
-
-    // Single-key commands
-    if (raw === "k" || raw === "K") {
-      moveSelection(-1);
-      return;
-    }
-    if (raw === "j" || raw === "J") {
-      moveSelection(1);
-      return;
-    }
-    if (raw === "g") {
-      if (projectFocusKey) setSelectedFromFocused(0);
-      else setProjectFromKeys(0);
-      forceRefresh = true;
-      return;
-    }
-    if (raw === "G") {
-      if (projectFocusKey) {
-        const f2 = focusedSessions();
-        setSelectedFromFocused(Math.max(0, f2.length - 1));
-      } else {
-        const keys = currentProjectKeys();
-        setProjectFromKeys(Math.max(0, keys.length - 1));
-      }
-      forceRefresh = true;
-      return;
-    }
-    if (raw === "a" || raw === "A" || raw === "\x7f" || raw === "\b") {
-      clearProjectFocus();
-      return;
-    }
-    if (raw === "\r" || raw === "\n") {
-      // Enter first opens a project. Inside a project it toggles session detail.
-      if (!projectFocusKey) {
-        focusProject();
-        return;
-      }
-      const filtered = focusedSessions();
-      selectedIdx = selectionIndex(filtered, selectedId, selectedIdx);
-      const s = filtered[selectedIdx];
-      if (s) {
-        selectedId = s.session_id || null;
-        detailId = detailId === s.session_id ? null : s.session_id;
-        forceRefresh = true;
-      }
-      return;
-    }
-    if (raw === "/") {
-      filterActive = true;
-      filterText = "";
-      clearProjectFocus();
-      forceRefresh = true;
-      return;
-    }
-    if (raw === "r" || raw === "R") {
-      pendingFetch = true;
-      forceRefresh = true;
-      return;
-    }
-    if (raw === "w" || raw === "W") {
-      void openWebDashboard();
-      return;
-    }
-  };
-  process.stdin.on("data", onKey);
-
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
-  process.once("SIGHUP", stop);
-  // SIGCONT: restore terminal state after Ctrl+Z / fg resume
-  process.on("SIGCONT", () => {
-    process.stdout.write("\x1b[?1049h\x1b[?25l"); // re-enter alt screen, re-hide cursor
-    pendingFetch = true;
-    forceRefresh = true;
-  });
-  process.once("uncaughtException", (err) => {
-    stop();
-    console.error("Fatal:", err);
-    process.exit(1);
-  });
-
-  // Render loop: monitor-style split cadence. Render remains smooth even when
-  // collection is slower, and collection cannot make layout timing jitter.
-  const renderDelay = tuiRenderMs;
-  const pollDelay = tuiPollMs;
-  let lastFetch = 0;
-  let lastRender = 0;
-
-  while (running) {
-    const now = Date.now();
-
-    // Fetch if needed
-    if (pendingFetch || now - lastFetch >= pollDelay || forceRefresh) {
-        try {
-          const result = await fetchSessions();
-          const newStats = computeStats(result.sessions);
-          if (newStats.fingerprint !== stats.fingerprint || forceRefresh) {
-            sessions = result.sessions;
-            stats = newStats;
-            errorMsg = result.error;
-          }
-          lastFetch = now;
-          pendingFetch = false;
-        } catch { /* keep old sessions on fetch error */ }
-    }
-
-	    // Clamp project/session selection independently.
-	    const filtered = applyFilter(sessions, filterText);
-	    const groups = groupByProject(filtered);
-	    const keys = [...groups.keys()];
-	    if (keys.length === 0) {
-	      projectIdx = 0;
-	      projectCursorKey = null;
-	      projectFocusKey = null;
-	      selectedIdx = -1;
-	      selectedId = null;
-	      detailId = null;
-	    } else {
-	      const byProjectKey = projectCursorKey ? keys.indexOf(projectCursorKey as string) : -1;
-	      projectIdx = byProjectKey === -1 ? Math.max(0, Math.min(projectIdx, keys.length - 1)) : byProjectKey;
-	      projectCursorKey = keys[projectIdx] || null;
-	      if (projectFocusKey && !groups.has(projectFocusKey as string)) {
-	        projectFocusKey = null;
-	        selectedIdx = -1;
-	        selectedId = null;
-	        detailId = null;
-	      }
-	      if (projectFocusKey) {
-	        const projectSessions = groups.get(projectFocusKey as string) || [];
-	        selectedIdx = selectionIndex(projectSessions, selectedId, selectedIdx);
-	        selectedId = projectSessions[selectedIdx]?.session_id || null;
-	      } else {
-	        selectedIdx = -1;
-	        selectedId = null;
-	        detailId = null;
-	      }
-	    }
-	    if (detailId && !sessions.some((s: any) => s.session_id === detailId)) detailId = null;
-
-    const cols = process.stdout.columns || 80;
-    const rows = process.stdout.rows || 24;
-    const sizeChanged = cols !== lastCols || rows !== lastRows;
-    const needsAnim = animateTui && stats.working > 0;
-    const cadenceDue = now - lastRender >= renderDelay;
-    const shouldRender = forceRefresh || sizeChanged || stats.fingerprint !== lastFingerprint || needsAnim || cadenceDue;
-
-    // Render
-    if (shouldRender) {
-      try {
-	        renderFrame(sessions, frame, {
-	          selectedIdx,
-	          detailId,
-	          projectIdx,
-	          projectCursorKey,
-	          projectFocusKey,
-	          filterText: filterActive ? filterText : (filterText || ""),
-	          errorMsg,
-	          stats,
-        });
-      } catch { /* skip frame on render error */ }
-      lastFingerprint = stats.fingerprint;
-      lastCols = cols;
-      lastRows = rows;
-      lastRender = now;
-    }
-    frame++;
-
-    if (forceRefresh) {
-      forceRefresh = false;
-      await new Promise(r => setTimeout(r, 50));
-    } else {
-      await new Promise(r => setTimeout(r, renderDelay));
-    }
-  }
-
-  // Cleanup
-  process.stdin.removeListener("data", onKey);
-  if (stdinRaw) {
-    try { process.stdin.setRawMode(false); } catch { /* */ }
-  }
-}
-
-async function setupHooks(global: boolean) {
-  const reportPath = join(dirname(__dirname), "report.sh");
-  const targets = [
-    setupClaudeHooks(global, reportPath),
-    setupCodexHooks(global, reportPath),
-    setupGeminiHooks(global, reportPath),
-    setupCopilotHooks(global, reportPath),
-  ];
-  for (const target of targets) {
-    console.log(`${target.added > 0 ? "Installed" : "Already configured"} ${target.name} → ${target.path}`);
-  }
-}
-
-function teardownClaudeHooks(global: boolean): number {
-  const settingsPath = global
-    ? join(homedir(), ".claude", "settings.json")
-    : join(process.cwd(), ".claude", "settings.json");
-  const settings = readJsonFile(settingsPath);
-  if (!settings.hooks) return 0;
-  let removed = 0;
-  for (const event of Object.keys(settings.hooks)) {
-    const before = settings.hooks[event].length;
-    settings.hooks[event] = settings.hooks[event].filter((d: any) =>
-      !d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "claude"))
-    );
-    removed += before - settings.hooks[event].length;
-    if (settings.hooks[event].length === 0) delete settings.hooks[event];
-  }
-  if (removed > 0) writeJsonFile(settingsPath, settings);
-  return removed;
-}
-
-function teardownCodexHooks(global: boolean): number {
-  const hooksPath = global
-    ? join(homedir(), ".codex", "hooks.json")
-    : join(process.cwd(), ".codex", "hooks.json");
-  const config = readJsonFile(hooksPath);
-  if (!config.hooks) return 0;
-  let removed = 0;
-  for (const event of Object.keys(config.hooks)) {
-    const before = config.hooks[event].length;
-    config.hooks[event] = config.hooks[event].filter((d: any) =>
-      !d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "codex"))
-    );
-    removed += before - config.hooks[event].length;
-    if (config.hooks[event].length === 0) delete config.hooks[event];
-  }
-  if (removed > 0) writeJsonFile(hooksPath, config);
-  return removed;
-}
-
-function teardownGeminiHooks(global: boolean): number {
-  const settingsPath = global
-    ? join(homedir(), ".gemini", "settings.json")
-    : join(process.cwd(), ".gemini", "settings.json");
-  const settings = readJsonFile(settingsPath);
-  if (!settings.hooks) return 0;
-  let removed = 0;
-  for (const event of Object.keys(settings.hooks)) {
-    const before = settings.hooks[event].length;
-    settings.hooks[event] = settings.hooks[event].filter((d: any) =>
-      !d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "gemini"))
-    );
-    removed += before - settings.hooks[event].length;
-    if (settings.hooks[event].length === 0) delete settings.hooks[event];
-  }
-  if (removed > 0) writeJsonFile(settingsPath, settings);
-  return removed;
-}
-
-function teardownCopilotHooks(global: boolean): number {
-  const hooksPath = global
-    ? join(homedir(), ".copilot", "hooks", "agentbar.json")
-    : join(process.cwd(), ".github", "hooks", "agentbar.json");
-  const config = readJsonFile(hooksPath);
-  if (!config.hooks) return 0;
-  let removed = 0;
-  for (const event of Object.keys(config.hooks)) {
-    const before = config.hooks[event].length;
-    config.hooks[event] = config.hooks[event].filter((h: any) =>
-      !isSessionbarCommandFor(h.command || "", "copilot")
-    );
-    removed += before - config.hooks[event].length;
-    if (config.hooks[event].length === 0) delete config.hooks[event];
-  }
-  if (removed > 0) writeJsonFile(hooksPath, config);
-  return removed;
-}
-
-function teardownHooks(global: boolean, quiet = false) {
-  const removed = teardownClaudeHooks(global) + teardownCodexHooks(global) + teardownGeminiHooks(global) + teardownCopilotHooks(global);
-  if (removed > 0 && !quiet) console.log(`Removed ${removed} hook${removed === 1 ? "" : "s"}.`);
-}
-
-async function injectHooksOnServerReady(global: boolean) {
-  const reportPath = join(dirname(__dirname), "report.sh");
-  // Only inject Claude hooks — Codex/Gemini/Copilot managed via explicit setup
-  setupClaudeHooks(global, reportPath);
-}
-
-type SetupResult = { name: string; path: string; added: number };
-
-function commandFor(agent: string, label: string, reportPath: string, status: string, task: string, hookEvent: string): string {
-  return `SESSIONBAR_AGENT=${agent} SESSIONBAR_SESSION_TYPE=${shellEscape(label)} SESSIONBAR_HOOK_EVENT=${shellEscape(hookEvent)} ${shellEscape(reportPath)} ${status} ${task} ${String(PORT)}`;
-}
-
-function isSessionbarCommandFor(command: string, agent: string): boolean {
-  return /(^|\/)report\.sh(\s|$)/.test(command || "") && new RegExp(`\\b(SESSIONBAR_AGENT|AGENTBAR_AGENT)=${agent}\\b`).test(command || "");
-}
-
-function readJsonFile(path: string): any {
-  try { return JSON.parse(readFileSync(path, "utf-8")); } catch { return {}; }
-}
-
-function writeJsonFile(path: string, value: any) {
-  const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(value, null, 2));
-}
-
-function setupClaudeHooks(global: boolean, reportPath: string): SetupResult {
-  const settingsPath = global
-    ? join(homedir(), ".claude", "settings.json")
-    : join(process.cwd(), ".claude", "settings.json");
-
-  const settings = readJsonFile(settingsPath);
-  if (!settings.hooks) settings.hooks = {};
-
-  type HookDef = { matcher: string; hooks: Array<{ type: string; command: string }> };
-  const hookDefs: Record<string, HookDef[]> = {
-    SessionStart: [{ matcher: "", hooks: [{ type: "command", command: commandFor("claude", "Claude Code", reportPath, "working", "'Working'", "SessionStart") }] }],
-    PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: commandFor("claude", "Claude Code", reportPath, "working", "\"${CLAUDE_TOOL_NAME:-Working}\"", "PreToolUse") }] }],
-    Stop: [{ matcher: "", hooks: [{ type: "command", command: commandFor("claude", "Claude Code", reportPath, "idle", "'Ready'", "Stop") }] }],
-    SessionEnd: [{ matcher: "", hooks: [{ type: "command", command: commandFor("claude", "Claude Code", reportPath, "idle", "'Session ended'", "SessionEnd") }] }],
-  };
-
-  let added = 0;
-  for (const [event, defs] of Object.entries(hookDefs)) {
-    if (!settings.hooks[event]) settings.hooks[event] = [];
-    const already = settings.hooks[event].some((d: any) =>
-      d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "claude"))
-    );
-    if (!already) {
-      settings.hooks[event].push(...(defs as any));
-      added += defs.length;
-    }
-  }
-
-  writeJsonFile(settingsPath, settings);
-  return { name: "Claude Code", path: settingsPath, added };
-}
-
-function setupCodexHooks(global: boolean, reportPath: string): SetupResult {
-  const hooksPath = global
-    ? join(homedir(), ".codex", "hooks.json")
-    : join(process.cwd(), ".codex", "hooks.json");
-  const config = readJsonFile(hooksPath);
-  if (!config.hooks) config.hooks = {};
-
-  const hookDefs: Record<string, any[]> = {
-    SessionStart: [{ matcher: "", hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "working", "'Working'", "SessionStart") }] }],
-    PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "working", "\"${CODEX_TOOL_NAME:-Working}\"", "PreToolUse") }] }],
-    PermissionRequest: [{ matcher: "", hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "blocked", "'Waiting for permission'", "PermissionRequest") }] }],
-    Stop: [{ hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "idle", "'Ready'", "Stop") }] }],
-  };
-
-  let added = 0;
-  for (const [event, defs] of Object.entries(hookDefs)) {
-    if (!config.hooks[event]) config.hooks[event] = [];
-    const already = config.hooks[event].some((d: any) =>
-      d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "codex"))
-    );
-    if (!already) {
-      config.hooks[event].push(...defs);
-      added += defs.length;
-    }
-  }
-
-  writeJsonFile(hooksPath, config);
-  return { name: "Codex", path: hooksPath, added };
-}
-
-function setupGeminiHooks(global: boolean, reportPath: string): SetupResult {
-  const settingsPath = global
-    ? join(homedir(), ".gemini", "settings.json")
-    : join(process.cwd(), ".gemini", "settings.json");
-  const settings = readJsonFile(settingsPath);
-  if (!settings.hooks) settings.hooks = {};
-
-  const hookDefs: Record<string, any[]> = {
-    BeforeModel: [{ matcher: ".*", hooks: [{ type: "command", command: commandFor("gemini", "Gemini CLI", reportPath, "working", "'Thinking'", "BeforeModel") }] }],
-    BeforeTool: [{ matcher: ".*", hooks: [{ type: "command", command: commandFor("gemini", "Gemini CLI", reportPath, "working", "'Using tool'", "BeforeTool") }] }],
-    AfterTool: [{ matcher: ".*", hooks: [{ type: "command", command: commandFor("gemini", "Gemini CLI", reportPath, "working", "'Analyzing tool results'", "AfterTool") }] }],
-    SessionEnd: [{ matcher: ".*", hooks: [{ type: "command", command: commandFor("gemini", "Gemini CLI", reportPath, "idle", "'Session ended'", "SessionEnd") }] }],
-  };
-
-  let added = 0;
-  for (const [event, defs] of Object.entries(hookDefs)) {
-    if (!settings.hooks[event]) settings.hooks[event] = [];
-    const already = settings.hooks[event].some((d: any) =>
-      d.hooks?.some?.((h: any) => isSessionbarCommandFor(h.command || "", "gemini"))
-    );
-    if (!already) {
-      settings.hooks[event].push(...defs);
-      added += defs.length;
-    }
-  }
-
-  writeJsonFile(settingsPath, settings);
-  return { name: "Gemini CLI", path: settingsPath, added };
-}
-
-function setupCopilotHooks(global: boolean, reportPath: string): SetupResult {
-  const hooksPath = global
-    ? join(homedir(), ".copilot", "hooks", "agentbar.json")
-    : join(process.cwd(), ".github", "hooks", "agentbar.json");
-  const config = readJsonFile(hooksPath);
-  config.version = config.version || 1;
-  if (!config.hooks) config.hooks = {};
-
-  const hookDefs: Record<string, any[]> = {
-    SessionStart: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "working", "'Working'", "sessionStart") }],
-    PreToolUse: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "working", "\"${COPILOT_TOOL_NAME:-Working}\"", "preToolUse") }],
-    PermissionRequest: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "blocked", "'Waiting for permission'", "PermissionRequest") }],
-    AgentStop: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "idle", "'Ready'", "AgentStop") }],
-    SessionEnd: [{ type: "command", command: commandFor("copilot", "Copilot", reportPath, "idle", "'Session ended'", "sessionEnd") }],
-  };
-
-  let added = 0;
-  for (const [event, defs] of Object.entries(hookDefs)) {
-    if (!config.hooks[event]) config.hooks[event] = [];
-    const already = config.hooks[event].some((h: any) => isSessionbarCommandFor(h.command || "", "copilot"));
-    if (!already) {
-      config.hooks[event].push(...defs);
-      added += defs.length;
-    }
-  }
-
-  writeJsonFile(hooksPath, config);
-  return { name: "Copilot", path: hooksPath, added };
 }
 
 async function ask(q: string): Promise<string> {
@@ -1897,350 +1220,65 @@ async function setup() {
   await setupHooks(global);
 }
 
+// ---- Terminal UI theme wrappers (bind cli.ts ANSI constants) ----
+
 function panelTop(title: string, w: number, right?: string): string {
-  const boxW = Math.max(2, w - 2);
-  const innerW = Math.max(0, boxW - 2);
-  const titleText = `─ ${truncateAnsi(title, Math.max(0, innerW - 1))} `;
-  const rightMax = Math.max(0, innerW - strip(titleText) - 1);
-  const rightText = right && rightMax > 0 ? ` ${truncateAnsi(right, Math.max(0, rightMax - 2))} ` : "";
-  const fill = Math.max(0, innerW - strip(titleText) - strip(rightText));
-  return `  ${_K}╭${titleText}${"─".repeat(fill)}${rightText}╮${_D}`;
+  return _panelTop(title, w, _K, _D, right);
 }
 function panelBot(w: number): string {
-  return `  ${_K}╰${"─".repeat(Math.max(0, w - 4))}╯${_D}`;
+  return _panelBot(w, _K, _D);
 }
 function panelRow(content: string, w: number): string {
-  const available = Math.max(0, w - 8);
-  const clipped = truncateAnsi(content, available);
-  const vis = strip(clipped);
-  return `  ${_K}│${_D}  ${clipped}${" ".repeat(Math.max(0, available - vis))}  ${_K}│${_D}`;
+  return _panelRow(content, w, _K, _D);
 }
 
-const RAINBOW: string[] = _COLOR ? [
-  "\x1b[1;31m",  // red
-  "\x1b[1;91m",  // orange
-  "\x1b[1;33m",  // yellow
-  "\x1b[1;93m",  // gold
-  "\x1b[1;32m",  // green
-  "\x1b[1;92m",  // lime
-  "\x1b[1;36m",  // cyan
-  "\x1b[1;94m",  // blue
-  "\x1b[1;35m",  // magenta
-  "\x1b[1;95m",  // pink
-] : ["", "", "", "", "", "", "", "", "", ""];
+const RAINBOW = createRainbow(_COLOR);
 
-// ANSI Shadow figlet font — compact enough for the landing page.
-const BLOCK: Record<string, string[]> = {
-  S: ["███████╗", "██╔════╝", "███████╗", "╚════██║", "███████║", "╚══════╝"],
-  E: ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "███████╗", "╚══════╝"],
-  I: ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
-  O: [" ██████╗ ", "██╔═══██╗", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝ "],
-  N: ["███╗   ██╗", "████╗  ██║", "██╔██╗ ██║", "██║╚██╗██║", "██║ ╚████║", "╚═╝  ╚═══╝"],
-  B: ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██████╔╝", "╚═════╝ "],
-  A: [" █████╗ ", "██╔══██╗", "███████║", "██╔══██║", "██║  ██║", "╚═╝  ╚═╝"],
-  R: ["██████╗ ", "██╔══██╗", "██████╔╝", "██╔══██╗", "██║  ██║", "╚═╝  ╚═╝"],
-};
+// ---- Landing menu wiring -----------------------------------------------
 
-function logoLines(w: number): string[] {
-  if (w < 65) {
-    const text = "SessionBar";
-    let line = "  ";
-    for (let i = 0; i < text.length; i++) line += `${RAINBOW[i % RAINBOW.length]}${text[i]}${_D}`;
-    return ["", line, ""];
-  }
-  const topRow = "SESSION";
-  const botRow = "BAR";
-  const gap = "  ";
-  const lines: string[] = ["", ""];
-  for (let r = 0; r < 6; r++) {
-    let line = "  ";
-    for (let i = 0; i < topRow.length; i++) line += `${RAINBOW[i]}${BLOCK[topRow[i]][r]}${_D}${gap}`;
-    lines.push(line);
-  }
-  lines.push("");
-  for (let r = 0; r < 6; r++) {
-    let line = "  ";
-    for (let i = 0; i < botRow.length; i++) line += `${RAINBOW[i + 7]}${BLOCK[botRow[i]][r]}${_D}${gap}`;
-    lines.push(line);
-  }
-  lines.push("");
-  lines.push(`  ${_K}AI CLI Session Monitor${_D}`);
-  lines.push("");
-  return lines;
-}
-
-async function menu() {
-  // Opening SessionBar should bring the local service up. Setup only controls
-  // hook focus, not whether the background service exists.
-  await ensureAppRunning(true);
-
-  let menuRunning = true;
-  let menuSessions: any[] = [];
-  let menuServerRunning = false;
-  let needsRender = true;
-  let selectedAction = 0;
-  let menuRaw = false;
-  let menuScreen = false;
-  let menuFrameLines = 0;
-  const menuKeyQueue: string[] = [];
-
-  const setMenuRaw = (enabled: boolean) => {
-    if (!process.stdin.isTTY) return;
-    if (enabled && !menuRaw) {
-      process.stdin.setRawMode(true);
-      process.stdin.resume();
-      menuRaw = true;
-    } else if (!enabled && menuRaw) {
-      try { process.stdin.setRawMode(false); } catch { /* */ }
-      process.stdin.pause();
-      menuRaw = false;
-    }
-  };
-
-  const setMenuScreen = (enabled: boolean) => {
-    if (!_TTY) return;
-    if (enabled && !menuScreen) {
-      process.stdout.write("\x1b[?25l");
-      menuScreen = true;
-    } else if (!enabled && menuScreen) {
-      process.stdout.write("\x1b[?25h");
-      menuScreen = false;
-      menuFrameLines = 0;
-    }
-  };
-
-  const clearMenuFrame = () => {
-    if (!_TTY || menuFrameLines <= 0) return;
-    process.stdout.write(`\x1b[${menuFrameLines}F\x1b[J`);
-    menuFrameLines = 0;
-  };
-
-  const suspendLandingForAction = () => {
-    clearMenuFrame();
-    setMenuScreen(false);
-  };
-
-  const menuCleanup = () => {
-    menuRunning = false;
-    setMenuRaw(false);
-    setMenuScreen(false);
-    teardownHooks(true, true);
-    if (!menuScreen) process.stdout.write("\x1b[?25h"); // ensure cursor visible
-    process.exit(0);
-  };
-  process.once("SIGINT", menuCleanup);
-  process.once("SIGTERM", menuCleanup);
-
-  const menuActions = () => [
-    { key: "1", label: "monitor", desc: "Open live TUI dashboard", enabled: true },
-    { key: "2", label: "setup", desc: "Choose local/global hook focus", enabled: true },
-    { key: "3", label: "status", desc: "Print current sessions", enabled: true },
-    { key: "w", label: "web", desc: "Open browser dashboard", enabled: true },
-  ];
-
-  const renderLanding = async () => {
-    setMenuScreen(true);
-    const result = await fetchSessions();
-    menuSessions = result.error ? [] : result.sessions;
-    menuServerRunning = !result.error || pidAlive();
-
-    if (_TTY && menuFrameLines > 0) process.stdout.write(`\x1b[${menuFrameLines}F\x1b[J`);
-    else console.log("");
-    let printed = _TTY && menuFrameLines > 0 ? 0 : 1;
-    const out = (line = "") => {
-      console.log(line);
-      printed++;
-    };
-
-    const working = menuSessions.filter((s: any) => s.status === "working").length;
-    const errored = menuSessions.filter((s: any) => s.status === "error").length;
-    const blocked = menuSessions.filter((s: any) => s.status === "blocked").length;
-    const idle = menuSessions.filter((s: any) => s.status === "idle").length;
-    const status = menuServerRunning ? `${_GN}online${_D}` : `${_K}offline${_D}`;
-    const activity = [
-      working > 0 ? `${_BL}${working} working${_D}` : "",
-      blocked > 0 ? `${_YL}${blocked} blocked${_D}` : "",
-      errored > 0 ? `${_RD}${errored} error${_D}` : "",
-      idle > 0 ? `${_K}${idle} idle${_D}` : "",
-    ].filter(Boolean).join(` ${_K}|${_D} `);
-
-    const w = Math.min((process.stdout.columns || 80) - 4, 76);
-    const canShowLogo = (process.stdout.rows || 24) >= 28 && w >= 65;
-    if (canShowLogo) {
-      for (const line of logoLines(w)) out(line);
-    } else {
-      const title = "SessionBar";
-      let line = "";
-      for (let i = 0; i < title.length; i++) line += `${RAINBOW[i % RAINBOW.length]}${_B}${title[i]}${_D}`;
-      out(`  ${line} ${_K}local multi-agent session monitor${_D}`);
-      out(`  ${_K}${"─".repeat(Math.max(20, w))}${_D}`);
-    }
-
-    const dot = menuServerRunning ? `${_GN}●${_D}` : `${_K}○${_D}`;
-    out(`${panelTop("Status", w)}`);
-    let statusLine = `${dot} ${status}    ${_K}:${PORT}${_D}    ${_B}${menuSessions.length}${_D} session${menuSessions.length !== 1 ? "s" : ""}`;
-    if (activity) statusLine += `    ${activity}`;
-    out(panelRow(statusLine, w));
-    if (result.error) out(panelRow(`${_RD}${result.error}${_D}`, w));
-    out(panelBot(w));
-
-    if (menuSessions.length > 0) {
-      out("");
-      out(panelTop("Sessions", w));
-      for (const s of menuSessions.slice(0, 4)) {
-        const style = S[s.status as keyof typeof S] || S.idle;
-        const sd = `${style.c}${style.icon}${_D}`;
-        const ai = `${typeIcon(s.session_type || "?")} ${agentName(s.session_type || "?", 12)}`;
-        const line = `${sd} ${ai.padEnd(14)} ${projectLabel(s).padEnd(16)} ${statusShort(s.status).padEnd(5)} ${age(s.timestamp || Date.now()).padStart(4)}`;
-        out(panelRow(line, w));
-      }
-      if (menuSessions.length > 4) out(panelRow(`${_K}+${menuSessions.length - 4} more sessions${_D}`, w));
-      out(panelBot(w));
-    }
-
-    out("");
-    out(panelTop("Commands", w));
-    const actions = menuActions();
-    selectedAction = Math.max(0, Math.min(selectedAction, actions.length - 1));
-    for (let i = 0; i < actions.length; i++) {
-      const action = actions[i];
-      const marker = i === selectedAction ? `${_B}${_BL}>${_D}` : " ";
-      const key = action.key.toUpperCase();
-      const label = `${key}. ${action.label}`.padEnd(12);
-      const row = action.enabled
-        ? `${marker} ${_B}${label}${_D} ${_K}${action.desc}${_D}`
-        : `${marker} ${_K}${label} ${action.desc}${_D}`;
-      out(panelRow(row, w));
-    }
-    out(panelRow(`${_K}↑↓/jk select  Enter run  R refresh  Q quit${_D}`, w));
-    out(panelBot(w));
-    out("");
-    if (_TTY) process.stdout.write("\x1b[J");
-    menuFrameLines = printed;
-  };
-
-  const parseMenuKeys = (raw: string): string[] => {
-    const keys: string[] = [];
-    for (let i = 0; i < raw.length; i++) {
-      if (raw.startsWith("\x1b[A", i) || raw.startsWith("\x1bOA", i)) {
-        keys.push("up");
-        i += raw[i + 1] === "[" ? 2 : 2;
-        continue;
-      }
-      if (raw.startsWith("\x1b[B", i) || raw.startsWith("\x1bOB", i)) {
-        keys.push("down");
-        i += raw[i + 1] === "[" ? 2 : 2;
-        continue;
-      }
-      const ch = raw[i];
-      if (ch === "\x03") keys.push("q");
-      else if (ch === "\r" || ch === "\n") keys.push("enter");
-      else if (ch === "k" || ch === "K") keys.push("up");
-      else if (ch === "j" || ch === "J") keys.push("down");
-      else if ("123qrRwW".includes(ch)) keys.push(ch.toLowerCase());
-    }
-    return keys;
-  };
-
-  const readMenuKey = async (): Promise<string> => {
-    const queued = menuKeyQueue.shift();
-    if (queued) return queued;
-    if (!process.stdin.isTTY) return (await ask("> ")).trim().toLowerCase();
-    setMenuRaw(true);
-    return new Promise(resolve => {
-      const onData = (buf: Buffer) => {
-        menuKeyQueue.push(...parseMenuKeys(buf.toString()));
-        resolve(menuKeyQueue.shift() || "");
-      };
-      process.stdin.once("data", onData);
-    });
-  };
-
-  const runAction = async (key: string) => {
-    setMenuRaw(false);
-    if (key === "1") {
-      suspendLandingForAction();
-      await watch();
-      needsRender = true;
-      return;
-    }
-    if (key === "2") {
-      suspendLandingForAction();
+function buildLandingDeps(): LandingMenuDeps {
+  return {
+    tty: _TTY,
+    colorEnabled: _COLOR,
+    formatAge: (ts) => age(ts),
+    agentName,
+    projectLabel,
+    statusShort,
+    statusStyle: (status) => S[status as keyof typeof S] || S.idle,
+    ensureAppRunning,
+    fetchSessions,
+    pidAlive,
+    launchMonitor: watch,
+    launchSetup: async () => {
       console.log("\nSessionBar service starts automatically when the app opens.");
       console.log("Setup only chooses which Claude Code sessions report into it.\n");
       const a = await ask("[l] Local focus  |  [g] Global focus\n> ");
       await setupHooks(a.toLowerCase().startsWith("g"));
       await ask("\nPress enter...");
-      needsRender = true;
-      return;
-    }
-    if (key === "3") {
-      suspendLandingForAction();
+    },
+    launchStatus: async (sessions) => {
       console.log();
-      try { render(menuSessions, 0); } catch { /* render failed */ }
+      try { render(sessions, 0); } catch { /* render failed */ }
       await ask("");
-      needsRender = true;
-      return;
-    }
-    if (key === "w" || key === "web") {
-      suspendLandingForAction();
+    },
+    launchWeb: async (serverRunning) => {
       useWeb = true;
-      if (menuServerRunning) stopServer();
+      if (serverRunning) stopServer();
       await delay(300);
       if (!startServer() || !(await waitForReady())) {
         console.log("\nServer failed to start.");
         await ask("\nPress enter...");
-        needsRender = true;
         return;
       }
       await injectHooksOnServerReady(true);
       console.log(`\nDashboard: ${API_BASE}`);
       spawn("open", [API_BASE], { detached: true, stdio: "ignore" }).unref();
       await ask("\nPress enter...");
-      needsRender = true;
-      return;
-    }
+    },
+    teardownHooks,
+    port: PORT,
   };
-
-  while (menuRunning) {
-    if (needsRender) {
-      await renderLanding();
-      needsRender = false;
-    }
-
-    const c = await readMenuKey();
-    if (!c) continue;
-    if (c === "q" || c === "quit") { menuRunning = false; break; }
-    if (c === "up") {
-      selectedAction = (selectedAction + menuActions().length - 1) % menuActions().length;
-      needsRender = true;
-      continue;
-    }
-    if (c === "down") {
-      selectedAction = (selectedAction + 1) % menuActions().length;
-      needsRender = true;
-      continue;
-    }
-    if (c === "enter") {
-      await runAction(menuActions()[selectedAction].key);
-      continue;
-    }
-    if (c === "r" || c === "refresh") {
-      needsRender = true;
-      continue;
-    }
-    if (["1", "2", "3", "w", "web"].includes(c)) {
-      await runAction(c);
-      continue;
-    }
-    // Ignore unbound keys in the landing menu. This keeps the inline frame stable
-    // even if a key repeats or multiple bytes arrive in one terminal read.
-  }
-  setMenuRaw(false);
-  setMenuScreen(false);
-  teardownHooks(true, true);
 }
-
 async function status() {
   ensureDir();
   let result = await fetchSessions();
@@ -2339,7 +1377,7 @@ async function main() {
       teardownHooks(true, true);
       break;
     default:
-      await menu();
+      await runLandingMenu(buildLandingDeps());
   }
 }
 

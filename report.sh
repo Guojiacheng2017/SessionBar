@@ -22,6 +22,50 @@ esac
 SESSION_TYPE="${SESSIONBAR_SESSION_TYPE:-${AGENTBAR_SESSION_TYPE:-$DEFAULT_SESSION_TYPE}}"
 PROJECT_DIR="${SESSIONBAR_PROJECT_DIR:-${AGENTBAR_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}}"
 EXPLICIT_SESSION_ID="${SESSIONBAR_SESSION_ID:-${AGENTBAR_SESSION_ID:-}}"
+
+# Codex and Claude hook commands receive the stable agent session id as one
+# JSON object on stdin. Prefer it over the fallback scope so each hook event
+# updates the same marker even when the hook runner's parent process changes.
+read_hook_session_id() {
+  local hook_input=""
+  if [ -t 0 ]; then
+    return
+  fi
+  if command -v python3 &>/dev/null; then
+    hook_input="$(python3 -c 'import select,sys
+ready,_,_=select.select([sys.stdin],[],[],0.2)
+if ready:
+    sys.stdout.write(sys.stdin.readline().rstrip("\\n"))' 2>/dev/null)"
+  else
+    # Bash 3.2 (the macOS system shell) accepts only integer `read -t` values.
+    if ! IFS= read -r -t 1 hook_input 2>/dev/null; then
+      return
+    fi
+  fi
+  if [ -z "$hook_input" ]; then
+    return
+  fi
+  if command -v python3 &>/dev/null; then
+    python3 -c 'import json,sys
+try:
+    payload=json.loads(sys.argv[1])
+    value=payload.get("session_id") or payload.get("sessionId") or ""
+    if isinstance(value, str): print(value)
+except Exception:
+    pass' "$hook_input" 2>/dev/null
+  elif command -v node &>/dev/null; then
+    node -e 'try { const payload=JSON.parse(process.argv[1]); const value=payload.session_id || payload.sessionId; if (typeof value === "string") process.stdout.write(value); } catch {}' "$hook_input" 2>/dev/null
+  fi
+}
+
+if [ -z "$EXPLICIT_SESSION_ID" ]; then
+  # Hook stdin is the session identity for this invocation. Only fall back to
+  # process-level Codex variables when the hook did not provide one.
+  EXPLICIT_SESSION_ID="$(read_hook_session_id)"
+fi
+if [ -z "$EXPLICIT_SESSION_ID" ]; then
+  EXPLICIT_SESSION_ID="${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}"
+fi
 PROJ_NAME=$(basename "$PROJECT_DIR" | tr -d '\n')
 STATE_HOME="${SESSIONBAR_HOME:-${AGENTBAR_HOME:-${HOME}/.sessionbar}}"
 SESSION_DIR="${STATE_HOME}/sessions"
@@ -38,7 +82,10 @@ my_hash() {
 }
 
 HASH=$(echo "$PROJECT_DIR" | my_hash)
-if TTY=$(tty 2>/dev/null); then
+if [ -n "$EXPLICIT_SESSION_ID" ]; then
+  SESSION_SCOPE=$(printf '%s' "$EXPLICIT_SESSION_ID" | my_hash | cut -c1-16)
+  TTY_ID="session-${SESSION_SCOPE}"
+elif TTY=$(tty 2>/dev/null); then
   TTY_ID=$(echo "$TTY" | my_hash)
 else
   TTY_ID="notty-${PPID:-$$}"
@@ -120,6 +167,7 @@ if [ -z "$EXPLICIT_SESSION_ID" ]; then
 fi
 touch "$ID_FILE" 2>/dev/null || true
 PROJ_PATH="${SESSIONBAR_PROJECT_DIR:-${AGENTBAR_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PROJECT_DIR}}}"
+SESSION_NAME="${SESSIONBAR_SESSION_NAME:-${AGENTBAR_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}}"
 
 # Cleanup on session end
 if [ "$STATUS" = "idle" ] && [ "${TASK}" = "Session ended" ]; then
@@ -192,6 +240,7 @@ append_number_field "token_rate" "${SESSIONBAR_TOKEN_RATE:-${AGENTBAR_TOKEN_RATE
 append_number_field "quota_percent" "${SESSIONBAR_QUOTA_PERCENT:-${AGENTBAR_QUOTA_PERCENT:-}}"
 append_string_field "quota_reset" "${SESSIONBAR_QUOTA_RESET:-${AGENTBAR_QUOTA_RESET:-}}"
 append_string_field "hook_event" "${SESSIONBAR_HOOK_EVENT:-${AGENTBAR_HOOK_EVENT:-}}"
+append_string_field "session_name" "$SESSION_NAME"
 
 AGENT_SIGNAL="${SESSIONBAR_AGENT_SIGNAL:-${AGENTBAR_AGENT_SIGNAL:-}}"
 AGENT_SIGNAL_FIELDS=""

@@ -12,6 +12,7 @@ Each reported session is identified by:
 
 - `session_id`: stable ID for one running agent session
 - `session_type`: human label, such as `Claude Code`, `Codex`, or `OpenCode`
+- `session_name`: optional human-readable session name; displays fall back to `project`, then `session_id`
 - `project_path`: absolute project directory
 - `project`: project directory basename
 - `status`: `working`, `idle`, `blocked`, or `error`
@@ -129,8 +130,26 @@ Supported credentialed sources:
   the organization messages usage report for the last 24 hours. A Claude
   subscription or Claude Code login does not expose an equivalent balance API.
 
-Provider signals are attached to matching agent sessions so the existing
-`Usage` inspector can show them. Override the default target with
+Personal GitHub Copilot usage is read separately from the local Copilot client
+credential at `~/.config/github-copilot/apps.json`. SessionBar calls the
+Copilot entitlement endpoint used by the local client and displays the live
+personal plan name, AI credit `used/remaining/entitlement`, and the reset time.
+The plan allowance is never hardcoded or requested as user input. This uses a
+private, undocumented client endpoint rather than the public GitHub Billing
+API, so a schema or authentication change makes the row disappear instead of
+showing guessed quota data. Copilot Business and Enterprise organization pools
+remain separate subscription sources and are not mixed with this personal row.
+
+When no explicit DeepSeek API key is configured, SessionBar also checks the
+active Claude provider in CC Switch's local `~/.cc-switch/cc-switch.db` and
+uses its DeepSeek credential as a read-only fallback. The credential is held
+only in memory for the request and is never written to SessionBar state or
+logs. Disable this integration with `SESSIONBAR_CCSWITCH=0`.
+
+The provider overview displays account-level API rows directly from the poll,
+so a provider does not need a matching session to appear there. Provider
+signals are also attached to matching agent sessions so the existing `Usage`
+inspector can show them. Override the default target with
 `SESSIONBAR_<PROVIDER>_TARGET`, for example
 `SESSIONBAR_DEEPSEEK_TARGET=Codex`. Use a comma-separated target list or `*` to
 match all sessions. Optional `SESSIONBAR_<PROVIDER>_BASE_URL` and

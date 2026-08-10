@@ -1,5 +1,6 @@
 import { StyledText, TextAttributes, type TextChunk } from "@opentui/core";
 import type { SessionPayload } from "./types.js";
+import { sessionDisplayName } from "./displayUtils.js";
 
 export type DetailTab = "overview" | "activity" | "usage" | "flow" | "raw";
 
@@ -32,6 +33,7 @@ export function sessionFingerprint(session: SessionPayload): string {
   return JSON.stringify([
     session.session_id,
     session.session_type,
+    session.session_name ?? null,
     session.status,
     session.task_name,
     session.activity_tail ?? [],
@@ -121,8 +123,8 @@ export function buildSessionSidebarLine(session: SessionPayload, opts: SessionSi
   const ageText = age(session.timestamp, opts.now ?? Date.now());
   const suffix = ` ${ageText}`;
   const prefix = `${marker} ${statusLabel(session.status)} `;
-  const handleWidth = Math.max(4, width - prefix.length - suffix.length);
-  return truncatePlain(`${prefix}${sessionHandle(session, handleWidth)}${suffix}`, width);
+  const nameWidth = Math.max(4, width - prefix.length - suffix.length);
+  return truncatePlain(`${prefix}${truncatePlain(sessionDisplayName(session), nameWidth)}${suffix}`, width);
 }
 
 export function buildSessionDetailContent(
