@@ -67,7 +67,10 @@ export async function pollProvider(
         signals = parseMiniMaxTokenPlan(await getJson(fetchImpl, urlFor(config, "/v1/token_plan/remains"), bearerHeaders(config)));
         break;
       case "kimi":
-        signals = parseKimiBalance(await getJson(fetchImpl, urlFor(config, "/v1/users/me/balance"), bearerHeaders(config)));
+        signals = parseKimiBalance(
+          await getJson(fetchImpl, urlFor(config, "/v1/users/me/balance"), bearerHeaders(config)),
+          config.label,
+        );
         break;
       case "xai":
         signals = parseXaiPrepaidBalance(await getJson(

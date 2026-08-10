@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   parseCCSwitchProviderOutput,
+  parseCCSwitchKimiProviderOutput,
   readCCSwitchDeepSeekConfig,
+  readCCSwitchKimiConfig,
 } from "../dist/ccSwitchAdapter.js";
 import { pollProvider } from "../dist/providerAdapters.js";
 
@@ -42,6 +44,46 @@ test("CC Switch provider output ignores non-DeepSeek or non-Claude rows", () => 
   }])), null);
 });
 
+test("CC Switch Kimi provider output becomes a Kimi balance config", () => {
+  const config = parseCCSwitchKimiProviderOutput(JSON.stringify([{
+    id: "kimi-id",
+    name: "Kimi",
+    app_type: "claude-desktop",
+    api_key: "ccswitch-kimi-secret",
+    base_url: "https://api.moonshot.cn/anthropic",
+  }]));
+
+  assert.deepEqual(config, {
+    id: "ccswitch-kimi",
+    provider: "kimi",
+    api_key: "ccswitch-kimi-secret",
+    label: "Kimi API (CC Switch)",
+    target: "Kimi",
+    base_url: "https://api.moonshot.cn",
+  });
+});
+
+test("CC Switch Kimi provider output requires a Kimi app and token", () => {
+  assert.equal(parseCCSwitchKimiProviderOutput(JSON.stringify([{
+    name: "DeepSeek",
+    app_type: "claude",
+    api_key: "secret",
+    base_url: "https://api.deepseek.com",
+  }])), null);
+  assert.equal(parseCCSwitchKimiProviderOutput(JSON.stringify([{
+    name: "Kimi",
+    app_type: "codex",
+    api_key: "secret",
+    base_url: "https://api.moonshot.ai",
+  }])), null);
+  assert.equal(parseCCSwitchKimiProviderOutput(JSON.stringify([{
+    name: "Kimi",
+    app_type: "claude-desktop",
+    api_key: "",
+    base_url: "https://api.moonshot.ai",
+  }])), null);
+});
+
 test("CC Switch provider output requires a usable auth token", () => {
   assert.equal(parseCCSwitchProviderOutput(JSON.stringify([{
     id: "deepseek-id",
@@ -55,6 +97,7 @@ test("CC Switch provider output requires a usable auth token", () => {
 
 test("missing CC Switch database is an optional source", async () => {
   assert.equal(await readCCSwitchDeepSeekConfig("/definitely/missing/sessionbar-home"), null);
+  assert.equal(await readCCSwitchKimiConfig("/definitely/missing/sessionbar-home"), null);
 });
 
 test("DeepSeek poll keeps the CC Switch source label", async () => {
@@ -70,4 +113,24 @@ test("DeepSeek poll keeps the CC Switch source label", async () => {
     balance_infos: [{ currency: "CNY", total_balance: "298.87" }],
   })));
   assert.equal(result.signals[0].label, "DeepSeek API (CC Switch) CNY");
+});
+
+test("Kimi poll keeps the CC Switch source label", async () => {
+  const config = parseCCSwitchKimiProviderOutput(JSON.stringify([{
+    name: "Kimi",
+    app_type: "claude-desktop",
+    api_key: "ccswitch-kimi-secret",
+    base_url: "https://api.moonshot.cn/anthropic",
+  }]));
+  assert.ok(config);
+  const result = await pollProvider(config, async (url, init) => {
+    assert.equal(String(url), "https://api.moonshot.cn/v1/users/me/balance");
+    assert.equal(init.headers.Authorization, "Bearer ccswitch-kimi-secret");
+    return new Response(JSON.stringify({
+      code: 0,
+      data: { available_balance: 42.5 },
+      status: true,
+    }));
+  });
+  assert.equal(result.signals[0].label, "Kimi API (CC Switch)");
 });

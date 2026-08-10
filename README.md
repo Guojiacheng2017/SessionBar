@@ -140,11 +140,12 @@ API, so a schema or authentication change makes the row disappear instead of
 showing guessed quota data. Copilot Business and Enterprise organization pools
 remain separate subscription sources and are not mixed with this personal row.
 
-When no explicit DeepSeek API key is configured, SessionBar also checks the
-active Claude provider in CC Switch's local `~/.cc-switch/cc-switch.db` and
-uses its DeepSeek credential as a read-only fallback. The credential is held
-only in memory for the request and is never written to SessionBar state or
-logs. Disable this integration with `SESSIONBAR_CCSWITCH=0`.
+When no explicit DeepSeek or Kimi API key is configured, SessionBar also checks
+the active Claude/Claude Desktop providers in CC Switch's local
+`~/.cc-switch/cc-switch.db` and uses matching DeepSeek or Kimi credentials as
+read-only fallbacks. The credentials are held only in memory for the request
+and are never written to SessionBar state or logs. Disable this integration
+with `SESSIONBAR_CCSWITCH=0`.
 
 The provider overview displays account-level API rows directly from the poll,
 so a provider does not need a matching session to appear there. Provider

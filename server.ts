@@ -10,7 +10,7 @@ import { syncToICloud } from "./icloud.js";
 import { removeSessionMarkerFiles, scopedSessionId } from "./sessionMarkers.js";
 import { mergeCodexDiscovery } from "./codexSessionMerge.js";
 import { pollProvider, providerConfigsFromEnv } from "./providerAdapters.js";
-import { readCCSwitchDeepSeekConfig } from "./ccSwitchAdapter.js";
+import { readCCSwitchDeepSeekConfig, readCCSwitchKimiConfig } from "./ccSwitchAdapter.js";
 import { applyProviderPollResults } from "./providerMonitor.js";
 import { agentSignalToApiRow, computeAdvisorRows } from "./quotaAdvisor.js";
 import { computePlanRows } from "./planAdvisor.js";
@@ -259,6 +259,10 @@ async function activeProviderConfigs() {
   const configs = [...envProviderConfigs];
   if (CCSWITCH_ENABLED && !configs.some(config => config.provider === "deepseek")) {
     const ccSwitchConfig = await readCCSwitchDeepSeekConfig();
+    if (ccSwitchConfig) configs.push(ccSwitchConfig);
+  }
+  if (CCSWITCH_ENABLED && !configs.some(config => config.provider === "kimi")) {
+    const ccSwitchConfig = await readCCSwitchKimiConfig();
     if (ccSwitchConfig) configs.push(ccSwitchConfig);
   }
   return configs;
