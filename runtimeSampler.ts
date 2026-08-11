@@ -42,7 +42,7 @@ export function parseProcessTable(text: string): ProcessRecord[] {
     if (!Number.isInteger(pid) || pid <= 0) continue;
     if (!Number.isInteger(ppid) || ppid < 0) continue;
     if (!Number.isFinite(cpuPercent) || cpuPercent < 0) continue;
-    if (!Number.isFinite(rssKib) || rssKib < 0) continue;
+    if (!Number.isInteger(rssKib) || rssKib < 0) continue;
 
     records.push({
       pid,

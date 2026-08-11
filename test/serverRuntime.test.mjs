@@ -14,7 +14,7 @@ import {
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { applyRuntimeSamples } from "../dist/server.js";
+import { applyRuntimeSamples, parseRuntimeSampleMs } from "../dist/server.js";
 
 function session(id, overrides = {}) {
   return {
@@ -26,6 +26,14 @@ function session(id, overrides = {}) {
     ...overrides,
   };
 }
+
+test("runtime sample interval accepts only finite positive numbers", () => {
+  for (const value of [undefined, "", "invalid", "Infinity", "NaN", "0", "-20"]) {
+    assert.equal(parseRuntimeSampleMs(value), 2000, String(value));
+  }
+  assert.equal(parseRuntimeSampleMs("2500"), 2500);
+  assert.equal(parseRuntimeSampleMs("12.5"), 12.5);
+});
 
 test("applies host samples only to active sessions without changing activity timestamps", () => {
   const sessions = {

@@ -71,10 +71,15 @@ const PROVIDER_POLL_ENABLED = process.env.SESSIONBAR_PROVIDER_POLL !== "0";
 const PROVIDER_POLL_MS = Math.max(30_000, parseInt(process.env.SESSIONBAR_PROVIDER_POLL_MS || String(5 * 60 * 1000), 10));
 const CCSWITCH_ENABLED = process.env.SESSIONBAR_CCSWITCH !== "0";
 const envProviderConfigs = PROVIDER_POLL_ENABLED ? providerConfigsFromEnv(process.env) : [];
-const RUNTIME_SAMPLE_MS = parseInt(process.env.SESSIONBAR_RUNTIME_SAMPLE_MS || "2000", 10);
+const RUNTIME_SAMPLE_MS = parseRuntimeSampleMs(process.env.SESSIONBAR_RUNTIME_SAMPLE_MS);
 let providerPollInterval: NodeJS.Timeout | undefined;
 let runtimeSampleInterval: NodeJS.Timeout | undefined;
 let runtimeSampleInFlight = false;
+
+export function parseRuntimeSampleMs(value: string | undefined): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
+}
 
 // ---- idle auto-shutdown -------------------------------------------------
 // When no client (SSE or HTTP poll) touches the server for

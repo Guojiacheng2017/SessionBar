@@ -46,6 +46,17 @@ test("ignores malformed process-table rows and handles zero host memory", () => 
   });
 });
 
+test("accepts only non-negative integer RSS KiB values", () => {
+  assert.deepEqual(parseProcessTable([
+    "100 1 1.5 0",
+    "101 100 2.5 12",
+    "102 100 3.5 12.5",
+  ].join("\n")), [
+    { pid: 100, ppid: 1, cpu_percent: 1.5, rss_kib: 0 },
+    { pid: 101, ppid: 100, cpu_percent: 2.5, rss_kib: 12 },
+  ]);
+});
+
 test("does not double-count descendants when the process table contains a cycle", () => {
   const records = parseProcessTable(`100 200 1 100\n200 100 2 200\n300 200 3 300\n`);
 

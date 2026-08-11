@@ -1,13 +1,16 @@
 import type { SessionPayload, SessionRuntimeSnapshot } from "./types.js";
 
-export type RuntimeSession = Pick<SessionPayload, "session_id" | "status" | "session_name" | "project"> & {
+export type RuntimeSession = Pick<SessionPayload, "session_id" | "status" | "session_name" | "project" | "process_pid"> & {
   runtime?: SessionRuntimeSnapshot;
 };
 
 export interface RuntimeContribution {
   sessionId: string;
+  sessionIds: string[];
   sessionName?: string;
   project?: string;
+  processPid?: number;
+  sharedProcess: boolean;
   cpuPercent?: number;
   gpuPercent?: number;
   memoryPercent?: number;
@@ -37,11 +40,12 @@ const ACTIVE_STATUSES = new Set(["working", "blocked"]);
 export function aggregateRuntimeUsage(sessions: readonly RuntimeSession[]): RuntimeUsage {
   const active = sessions.filter(session => ACTIVE_STATUSES.has(session.status));
   const sampled = active.filter(session => hasRuntimeValue(session.runtime));
-  const cpuPercent = sum(sampled.map(session => session.runtime?.cpu_percent));
-  const gpuPercent = sum(sampled.map(session => session.runtime?.gpu_percent));
-  const memoryPercent = sum(sampled.map(session => session.runtime?.memory_percent));
-  const memoryBytes = sum(sampled.map(session => session.runtime?.memory_bytes));
-  const processCount = sum(sampled.map(session => session.runtime?.process_count));
+  const sources = runtimeSources(active);
+  const cpuPercent = sum(sources.map(source => source.runtime.cpu_percent));
+  const gpuPercent = sum(sources.map(source => source.runtime.gpu_percent));
+  const memoryPercent = sum(sources.map(source => source.runtime.memory_percent));
+  const memoryBytes = sum(sources.map(source => source.runtime.memory_bytes));
+  const processCount = sum(sources.map(source => source.runtime.process_count));
   const sampledAt = max(sampled.map(session => session.runtime?.sampled_at));
 
   return {
@@ -54,21 +58,71 @@ export function aggregateRuntimeUsage(sessions: readonly RuntimeSession[]): Runt
     memoryBytes,
     processCount,
     hasGpuData: gpuPercent !== undefined,
-    contributions: sampled.map(session => ({
-      sessionId: session.session_id,
-      sessionName: session.session_name,
-      project: session.project,
-      cpuPercent: session.runtime?.cpu_percent,
-      gpuPercent: session.runtime?.gpu_percent,
-      memoryPercent: session.runtime?.memory_percent,
-      memoryBytes: session.runtime?.memory_bytes,
-      processCount: session.runtime?.process_count,
-      cpuShare: share(session.runtime?.cpu_percent, cpuPercent),
-      gpuShare: share(session.runtime?.gpu_percent, gpuPercent),
-      memoryShare: share(session.runtime?.memory_percent, memoryPercent),
-      processShare: share(session.runtime?.process_count, processCount),
+    contributions: sources.map(source => ({
+      sessionId: source.sessions[0].session_id,
+      sessionIds: source.sessions.map(session => session.session_id),
+      sessionName: source.sessions[0].session_name,
+      project: source.sessions[0].project,
+      processPid: source.processPid,
+      sharedProcess: source.processPid !== undefined && source.sessions.length > 1,
+      cpuPercent: source.runtime.cpu_percent,
+      gpuPercent: source.runtime.gpu_percent,
+      memoryPercent: source.runtime.memory_percent,
+      memoryBytes: source.runtime.memory_bytes,
+      processCount: source.runtime.process_count,
+      cpuShare: share(source.runtime.cpu_percent, cpuPercent),
+      gpuShare: share(source.runtime.gpu_percent, gpuPercent),
+      memoryShare: share(source.runtime.memory_percent, memoryPercent),
+      processShare: share(source.runtime.process_count, processCount),
     })),
   };
+}
+
+interface RuntimeSource {
+  processPid?: number;
+  sessions: RuntimeSession[];
+  runtime: SessionRuntimeSnapshot;
+}
+
+function runtimeSources(sessions: readonly RuntimeSession[]): RuntimeSource[] {
+  const groups = new Map<string, { processPid?: number; sessions: RuntimeSession[] }>();
+  for (const session of sessions) {
+    const key = session.process_pid === undefined ? `session:${session.session_id}` : `pid:${session.process_pid}`;
+    const group = groups.get(key) ?? { processPid: session.process_pid, sessions: [] };
+    group.sessions.push(session);
+    groups.set(key, group);
+  }
+
+  const sources: RuntimeSource[] = [];
+  for (const group of groups.values()) {
+    const runtimes = group.sessions.map(session => session.runtime).filter(hasRuntimeValue);
+    if (runtimes.length === 0) continue;
+    sources.push({
+      ...group,
+      runtime: {
+        cpu_percent: latestMetric(runtimes, "cpu_percent"),
+        gpu_percent: latestMetric(runtimes, "gpu_percent"),
+        memory_percent: latestMetric(runtimes, "memory_percent"),
+        memory_bytes: latestMetric(runtimes, "memory_bytes"),
+        process_count: latestMetric(runtimes, "process_count"),
+        sampled_at: max(runtimes.map(runtime => runtime.sampled_at)),
+      },
+    });
+  }
+  return sources;
+}
+
+function latestMetric(
+  runtimes: readonly SessionRuntimeSnapshot[],
+  field: Exclude<keyof SessionRuntimeSnapshot, "sampled_at">,
+): number | undefined {
+  let latest: SessionRuntimeSnapshot | undefined;
+  for (const runtime of runtimes) {
+    const value = runtime[field];
+    if (value === undefined || !Number.isFinite(value)) continue;
+    if (!latest || (runtime.sampled_at ?? -Infinity) > (latest.sampled_at ?? -Infinity)) latest = runtime;
+  }
+  return latest?.[field];
 }
 
 export function runtimeProgressBar(value: number | undefined, max: number, width = 16): string {
@@ -95,7 +149,7 @@ export function formatRuntimeBytes(value: number | undefined): string {
   return `${scaled.toFixed(digits).replace(/\.0+$/, "")} ${unit}`;
 }
 
-function hasRuntimeValue(runtime: SessionRuntimeSnapshot | undefined): boolean {
+function hasRuntimeValue(runtime: SessionRuntimeSnapshot | undefined): runtime is SessionRuntimeSnapshot {
   return runtime !== undefined && [
     runtime.cpu_percent,
     runtime.gpu_percent,
@@ -116,6 +170,7 @@ function max(values: readonly (number | undefined)[]): number | undefined {
 }
 
 function share(value: number | undefined, total: number | undefined): number | undefined {
-  if (value === undefined || total === undefined || total <= 0) return undefined;
+  if (value === undefined || total === undefined || total < 0) return undefined;
+  if (total === 0) return value === 0 ? 0 : undefined;
   return Math.round((value / total) * 10000) / 100;
 }

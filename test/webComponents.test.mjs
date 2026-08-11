@@ -207,3 +207,42 @@ test("keeps exact values in accessible contribution labels for multiple samples"
   assert.match(html, /aria-label="PROC 66\.67% contribution · 2 processes current usage"/);
   assert.match(html, /GPU unavailable/);
 });
+
+test("renders sessions sharing one process root as shared current usage", () => {
+  const runtime = {
+    cpu_percent: 22,
+    memory_percent: 1,
+    memory_bytes: 196 * 1024 * 1024,
+    process_count: 2,
+  };
+  const html = runtimeContributionsMarkup([
+    { ...workingSession(runtime), session_id: "shared-a", session_name: "Shared A", process_pid: 4242 },
+    { ...workingSession(runtime), session_id: "shared-b", session_name: "Shared B", process_pid: 4242 },
+  ]);
+
+  assert.match(html, /current usage/);
+  assert.match(html, /shared process/i);
+  assert.equal((html.match(/class="runtime-matrix-session"/g) || []).length, 1);
+  assert.match(html, />22%</);
+  assert.doesNotMatch(html, /50% contribution/);
+});
+
+test("renders known zero contributions as no contribution instead of unavailable", () => {
+  const zeroRuntime = {
+    cpu_percent: 0,
+    gpu_percent: 0,
+    memory_percent: 0,
+    memory_bytes: 0,
+    process_count: 0,
+  };
+  const html = runtimeContributionsMarkup([
+    { ...workingSession(zeroRuntime), session_id: "zero-a" },
+    { ...workingSession(zeroRuntime), session_id: "zero-b" },
+  ]);
+
+  assert.match(html, /aria-label="CPU 0% contribution · 0% current usage"/);
+  assert.match(html, /aria-label="GPU 0% contribution · 0% current usage"/);
+  assert.match(html, /aria-label="MEM 0% contribution · 0% · 0 B current usage"/);
+  assert.match(html, /aria-label="PROC 0% contribution · 0 processes current usage"/);
+  assert.doesNotMatch(html, /CPU unavailable|GPU unavailable|MEM unavailable|PROC unavailable/);
+});

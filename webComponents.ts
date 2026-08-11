@@ -208,7 +208,8 @@ export function runtimeContributionsMarkup(sessions: readonly SessionPayload[]):
 }
 
 function runtimeSessionLabel(item: RuntimeContribution): string {
-  return item.sessionName || item.project || item.sessionId.split("__")[0] || item.sessionId;
+  const label = item.sessionName || item.project || item.sessionId.split("__")[0] || item.sessionId;
+  return item.sharedProcess ? `${label} +${item.sessionIds.length - 1} · shared process` : label;
 }
 
 function percentageLabel(value: number | undefined): string {

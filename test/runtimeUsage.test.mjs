@@ -81,3 +81,59 @@ test("runtime aggregation retains observed per-session values for runtime presen
   assert.equal(usage.contributions[0].memoryBytes, 196 * 1024 * 1024);
   assert.equal(usage.contributions[0].processCount, 1);
 });
+
+test("deduplicates shared process roots while keeping legacy sessions independent", () => {
+  const sharedRuntime = {
+    cpu_percent: 30,
+    memory_percent: 5,
+    memory_bytes: 512 * 1024 * 1024,
+    process_count: 2,
+    sampled_at: 1_700_000_000_000,
+  };
+  const usage = aggregateRuntimeUsage([
+    session({ session_id: "shared-a", session_name: "Shared A", process_pid: 4242, runtime: sharedRuntime }),
+    session({ session_id: "shared-b", session_name: "Shared B", process_pid: 4242, runtime: sharedRuntime }),
+    session({
+      session_id: "legacy",
+      process_pid: undefined,
+      runtime: {
+        cpu_percent: 10,
+        memory_percent: 2,
+        memory_bytes: 128 * 1024 * 1024,
+        process_count: 1,
+        sampled_at: 1_700_000_001_000,
+      },
+    }),
+  ]);
+
+  assert.equal(usage.sampledSessions, 3);
+  assert.equal(usage.cpuPercent, 40);
+  assert.equal(usage.memoryPercent, 7);
+  assert.equal(usage.memoryBytes, 640 * 1024 * 1024);
+  assert.equal(usage.processCount, 3);
+  assert.equal(usage.contributions.length, 2);
+  assert.deepEqual(usage.contributions[0].sessionIds, ["shared-a", "shared-b"]);
+  assert.equal(usage.contributions[0].sharedProcess, true);
+  assert.deepEqual(usage.contributions[1].sessionIds, ["legacy"]);
+  assert.equal(usage.contributions[1].sharedProcess, false);
+  assert.deepEqual(usage.contributions.map(item => item.cpuShare), [75, 25]);
+});
+
+test("preserves known zero contribution shares when the aggregate total is zero", () => {
+  const zeroRuntime = {
+    cpu_percent: 0,
+    gpu_percent: 0,
+    memory_percent: 0,
+    memory_bytes: 0,
+    process_count: 0,
+  };
+  const usage = aggregateRuntimeUsage([
+    session({ session_id: "zero-a", runtime: zeroRuntime }),
+    session({ session_id: "zero-b", runtime: zeroRuntime }),
+  ]);
+
+  assert.deepEqual(usage.contributions.map(item => item.cpuShare), [0, 0]);
+  assert.deepEqual(usage.contributions.map(item => item.gpuShare), [0, 0]);
+  assert.deepEqual(usage.contributions.map(item => item.memoryShare), [0, 0]);
+  assert.deepEqual(usage.contributions.map(item => item.processShare), [0, 0]);
+});
