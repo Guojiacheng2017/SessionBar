@@ -8,6 +8,11 @@ export interface RuntimeContribution {
   sessionId: string;
   sessionName?: string;
   project?: string;
+  cpuPercent?: number;
+  gpuPercent?: number;
+  memoryPercent?: number;
+  memoryBytes?: number;
+  processCount?: number;
   cpuShare?: number;
   gpuShare?: number;
   memoryShare?: number;
@@ -53,6 +58,11 @@ export function aggregateRuntimeUsage(sessions: readonly RuntimeSession[]): Runt
       sessionId: session.session_id,
       sessionName: session.session_name,
       project: session.project,
+      cpuPercent: session.runtime?.cpu_percent,
+      gpuPercent: session.runtime?.gpu_percent,
+      memoryPercent: session.runtime?.memory_percent,
+      memoryBytes: session.runtime?.memory_bytes,
+      processCount: session.runtime?.process_count,
       cpuShare: share(session.runtime?.cpu_percent, cpuPercent),
       gpuShare: share(session.runtime?.gpu_percent, gpuPercent),
       memoryShare: share(session.runtime?.memory_percent, memoryPercent),

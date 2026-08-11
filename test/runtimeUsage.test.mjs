@@ -64,3 +64,20 @@ test("runtime aggregation exposes per-session contributions for the Web matrix",
   assert.deepEqual(usage.contributions.map(item => item.memoryShare), [25, 75]);
   assert.deepEqual(usage.contributions.map(item => item.processShare), [66.67, 33.33]);
 });
+
+test("runtime aggregation retains observed per-session values for runtime presentation", () => {
+  const usage = aggregateRuntimeUsage([
+    session({ runtime: {
+      cpu_percent: 22,
+      memory_percent: 1,
+      memory_bytes: 196 * 1024 * 1024,
+      process_count: 1,
+    } }),
+  ]);
+
+  assert.equal(usage.contributions[0].cpuPercent, 22);
+  assert.equal(usage.contributions[0].gpuPercent, undefined);
+  assert.equal(usage.contributions[0].memoryPercent, 1);
+  assert.equal(usage.contributions[0].memoryBytes, 196 * 1024 * 1024);
+  assert.equal(usage.contributions[0].processCount, 1);
+});

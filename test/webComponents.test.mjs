@@ -10,6 +10,14 @@ import {
   statusSummaryMarkup,
 } from "../dist/webComponents.js";
 
+const workingSession = (runtime) => ({
+  session_id: "codex-demo__Vision-Dash",
+  session_name: "Build dashboard",
+  project: "Vision-Dash",
+  status: "working",
+  runtime,
+});
+
 test("renders status counts without a global progress bar", () => {
   const html = statusSummaryMarkup({ total: 7, working: 1, blocked: 0, error: 0, idle: 6 });
   assert.match(html, /7/);
@@ -147,4 +155,42 @@ test("renders a runtime contributions matrix for active sessions", () => {
   assert.match(html, /75%/);
   assert.match(html, /25%/);
   assert.match(html, /Waiting for runtime samples|sampled/);
+});
+
+test("renders actual current usage for one sampled active session", () => {
+  const html = runtimeContributionsMarkup([workingSession({
+    cpu_percent: 22,
+    memory_percent: 1,
+    memory_bytes: 196 * 1024 * 1024,
+    process_count: 1,
+  })]);
+  assert.match(html, /current usage/);
+  assert.match(html, />22%</);
+  assert.doesNotMatch(html, /100% contribution/);
+  assert.match(html, />1 process</);
+});
+
+test("keeps exact values in accessible contribution labels for multiple samples", () => {
+  const html = runtimeContributionsMarkup([
+    workingSession({
+      cpu_percent: 30,
+      memory_percent: 5,
+      memory_bytes: 512 * 1024 * 1024,
+      process_count: 2,
+    }),
+    {
+      ...workingSession({
+        cpu_percent: 10,
+        memory_percent: 15,
+        memory_bytes: 256 * 1024 * 1024,
+        process_count: 1,
+      }),
+      session_id: "claude-demo__Vision-Dash",
+    },
+  ]);
+
+  assert.match(html, /aria-label="CPU 75% contribution · 30% current usage"/);
+  assert.match(html, /title="MEM 25% contribution · 5% · 512 MB current usage"/);
+  assert.match(html, /aria-label="PROC 66\.67% contribution · 2 processes current usage"/);
+  assert.match(html, /GPU unavailable/);
 });

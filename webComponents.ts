@@ -158,6 +158,7 @@ export function detailListMarkup(rows: Array<{ label: string; value: string }>, 
 export function runtimeContributionsMarkup(sessions: readonly SessionPayload[]): string {
   const usage = aggregateRuntimeUsage(sessions);
   const sampled = usage.contributions;
+  const isCurrentUsage = sampled.length === 1;
   const summary = usage.activeSessions === 0
     ? "No active sessions"
     : usage.sampledSessions === 0
@@ -171,20 +172,37 @@ export function runtimeContributionsMarkup(sessions: readonly SessionPayload[]):
     </section>`;
   }
 
-  const rows: Array<{ label: string; total: string; share: (item: RuntimeContribution) => number | undefined }> = [
-    { label: "CPU", total: percentageLabel(usage.cpuPercent), share: item => item.cpuShare },
-    { label: "GPU", total: usage.hasGpuData ? percentageLabel(usage.gpuPercent) : "—", share: item => item.gpuShare },
-    { label: "MEM", total: memoryLabel(usage.memoryPercent, usage.memoryBytes), share: item => item.memoryShare },
-    { label: "PROC", total: usage.processCount === undefined ? "—" : String(usage.processCount), share: item => item.processShare },
+  const rows: Array<{
+    label: string;
+    total: string;
+    share: (item: RuntimeContribution) => number | undefined;
+    current: (item: RuntimeContribution) => string;
+    actual: (item: RuntimeContribution) => number | undefined;
+    isCount?: boolean;
+  }> = [
+    { label: "CPU", total: percentageLabel(usage.cpuPercent), share: item => item.cpuShare, current: item => percentageLabel(item.cpuPercent), actual: item => item.cpuPercent },
+    { label: "GPU", total: usage.hasGpuData ? percentageLabel(usage.gpuPercent) : "—", share: item => item.gpuShare, current: item => percentageLabel(item.gpuPercent), actual: item => item.gpuPercent },
+    { label: "MEM", total: memoryLabel(usage.memoryPercent, usage.memoryBytes), share: item => item.memoryShare, current: item => memoryLabel(item.memoryPercent, item.memoryBytes), actual: item => item.memoryPercent },
+    { label: "PROC", total: processLabel(usage.processCount), share: item => item.processShare, current: item => processLabel(item.processCount), actual: item => item.processCount, isCount: true },
   ];
   const columns = sampled.map(item => `<div class="runtime-matrix-session" title="${escapeHtml(runtimeSessionLabel(item))}">${escapeHtml(runtimeSessionLabel(item))}</div>`).join("");
   const body = rows.map(row => `<div class="runtime-matrix-label"><span>${row.label}</span><small>${escapeHtml(row.total)}</small></div>${sampled.map(item => {
-    const value = row.share(item);
-    const label = value === undefined ? `${row.label} unavailable` : `${row.label} ${value}% contribution`;
-    return `<div class="runtime-matrix-cell${value === undefined ? " is-unknown" : ""}" style="--runtime-share:${value ?? 0}%" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><span class="runtime-matrix-cell-fill"></span><em>${value === undefined ? "—" : `${value}%`}</em></div>`;
+    const contribution = row.share(item);
+    const current = row.current(item);
+    const value = isCurrentUsage ? row.actual(item) : contribution;
+    const display = isCurrentUsage ? current : value === undefined ? "—" : `${value}%`;
+    const label = value === undefined
+      ? `${row.label} unavailable`
+      : isCurrentUsage
+        ? `${row.label} current usage: ${current}`
+        : `${row.label} ${contribution}% contribution · ${current} current usage`;
+    const classes = cx("runtime-matrix-cell", value === undefined && "is-unknown", row.isCount && "is-count");
+    const fill = row.isCount ? "" : `<span class="runtime-matrix-cell-fill"></span>`;
+    return `<div class="${classes}"${row.isCount ? "" : ` style="--runtime-fill:${value ?? 0}%"`} aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${fill}<em>${escapeHtml(display)}</em></div>`;
   }).join("")}`).join("");
-  return `<section class="runtime-contributions" aria-label="Runtime usage contributions">
-    <div class="runtime-contributions-head"><div><strong>Runtime</strong><span>All active sessions · contribution by resource</span></div><span class="runtime-contributions-summary">${escapeHtml(summary)}</span></div>
+  const modeLabel = isCurrentUsage ? "current usage" : "contribution by resource";
+  return `<section class="runtime-contributions" aria-label="Runtime ${modeLabel}">
+    <div class="runtime-contributions-head"><div><strong>Runtime</strong><span>All active sessions · ${modeLabel}</span></div><span class="runtime-contributions-summary">${escapeHtml(summary)}</span></div>
     <div class="runtime-matrix-scroll"><div class="runtime-matrix" style="--runtime-columns:${sampled.length}"><div class="runtime-matrix-corner">RESOURCE</div>${columns}${body}</div></div>
   </section>`;
 }
@@ -198,9 +216,14 @@ function percentageLabel(value: number | undefined): string {
 }
 
 function memoryLabel(percent: number | undefined, bytes: number | undefined): string {
-  const pieces = [percentageLabel(percent)];
+  const pieces = percent === undefined ? [] : [percentageLabel(percent)];
   if (bytes !== undefined) pieces.push(formatRuntimeBytes(bytes));
-  return pieces.join(" · ");
+  return pieces.length > 0 ? pieces.join(" · ") : "—";
+}
+
+function processLabel(value: number | undefined): string {
+  if (value === undefined) return "—";
+  return `${value} ${value === 1 ? "process" : "processes"}`;
 }
 
 export function tabsMarkup(tabs: string[], activeIndex: number): string {
