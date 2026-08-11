@@ -96,6 +96,7 @@ export interface SessionPayload {
   token_rate?: number; // tokens per minute, when reported by the hook
   quota_percent?: number; // 0 ~ 100, provider quota remaining or available
   quota_reset?: string; // short display label, e.g. "5h38m"
+  process_pid?: number; // stable root PID used for server-side runtime sampling
   runtime?: SessionRuntimeSnapshot; // resources used by this session's agent process
   agent_signals?: SessionAgentSignal[];
   workflow_events?: SessionWorkflowEvent[];

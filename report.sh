@@ -166,12 +166,49 @@ if [ -z "$EXPLICIT_SESSION_ID" ]; then
   fi
 fi
 touch "$ID_FILE" 2>/dev/null || true
+PROCESS_FILE="${SESSION_DIR}/sessionbar-process-${AGENT_SLUG}-${HASH}-${TTY_ID}"
+
+is_positive_integer() {
+  printf '%s' "$1" | grep -Eq '^[1-9][0-9]*$'
+}
+
+find_owning_agent_pid() {
+  local pid="${PPID:-$$}"
+  local parent=""
+  local command=""
+  local depth=0
+  while is_positive_integer "$pid" && [ "$depth" -lt 32 ]; do
+    command=$(ps -p "$pid" -o comm= 2>/dev/null | tr -d '[:space:]')
+    case "$command" in
+      *"$AGENT_SLUG"*)
+        printf '%s' "$pid"
+        return
+        ;;
+    esac
+    parent=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d '[:space:]')
+    if ! is_positive_integer "$parent" || [ "$parent" = "$pid" ]; then
+      break
+    fi
+    pid="$parent"
+    depth=$((depth + 1))
+  done
+  printf '%s' "${PPID:-$$}"
+}
+
+PROCESS_PID="${SESSIONBAR_PROCESS_PID:-${AGENTBAR_PROCESS_PID:-}}"
+if ! is_positive_integer "$PROCESS_PID"; then
+  PROCESS_PID=$(find_owning_agent_pid)
+fi
+if is_positive_integer "$PROCESS_PID"; then
+  printf '%s\n' "$PROCESS_PID" > "${PROCESS_FILE}.tmp.$$"
+  mv "${PROCESS_FILE}.tmp.$$" "$PROCESS_FILE" 2>/dev/null || true
+fi
 PROJ_PATH="${SESSIONBAR_PROJECT_DIR:-${AGENTBAR_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PROJECT_DIR}}}"
 SESSION_NAME="${SESSIONBAR_SESSION_NAME:-${AGENTBAR_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}}"
 
 # Cleanup on session end
 if [ "$STATUS" = "idle" ] && [ "${TASK}" = "Session ended" ]; then
-  rm -f "$ID_FILE"
+  rm -f "$ID_FILE" "$PROCESS_FILE"
 fi
 
 # Escape JSON string — use python3/node for correct handling of all control chars and Unicode
@@ -241,10 +278,12 @@ append_number_field "quota_percent" "${SESSIONBAR_QUOTA_PERCENT:-${AGENTBAR_QUOT
 append_string_field "quota_reset" "${SESSIONBAR_QUOTA_RESET:-${AGENTBAR_QUOTA_RESET:-}}"
 append_string_field "hook_event" "${SESSIONBAR_HOOK_EVENT:-${AGENTBAR_HOOK_EVENT:-}}"
 append_string_field "session_name" "$SESSION_NAME"
+if is_positive_integer "$PROCESS_PID"; then
+  append_number_field "process_pid" "$PROCESS_PID"
+fi
 
-# Runtime samples are optional and intentionally scoped to the agent process
-# that invoked this hook. Integrations can provide more complete process-tree
-# values through SESSIONBAR_* overrides; unsupported GPU metrics stay absent.
+# Runtime samples are optional hook overrides. The server samples the persisted
+# process root rather than this short-lived hook process.
 RUNTIME_FIELDS=""
 append_runtime_number_field() {
   local key="$1"
@@ -260,32 +299,7 @@ runtime_memory_percent="${SESSIONBAR_MEMORY_PERCENT:-${AGENTBAR_MEMORY_PERCENT:-
 runtime_memory_bytes="${SESSIONBAR_MEMORY_BYTES:-${AGENTBAR_MEMORY_BYTES:-}}"
 runtime_process_count="${SESSIONBAR_PROCESS_COUNT:-${AGENTBAR_PROCESS_COUNT:-}}"
 
-runtime_pid="${SESSIONBAR_PROCESS_PID:-${AGENTBAR_PROCESS_PID:-${PPID:-$$}}}"
 if [ "$STATUS" = "working" ] || [ "$STATUS" = "blocked" ]; then
-  if command -v ps &>/dev/null; then
-    if [ -z "$runtime_cpu" ]; then
-      runtime_cpu=$(ps -p "$runtime_pid" -o %cpu= 2>/dev/null | tr -d ' ')
-    fi
-    runtime_rss_kb=$(ps -p "$runtime_pid" -o rss= 2>/dev/null | tr -d ' ')
-    if [ -z "$runtime_memory_bytes" ] && printf '%s' "$runtime_rss_kb" | grep -Eq '^[0-9]+$'; then
-      runtime_memory_bytes=$((runtime_rss_kb * 1024))
-    fi
-    if [ -z "$runtime_process_count" ]; then
-      runtime_process_count="1"
-    fi
-  fi
-  if [ -z "$runtime_memory_percent" ] && printf '%s' "$runtime_memory_bytes" | grep -Eq '^[0-9]+$'; then
-    runtime_total_bytes=""
-    if command -v sysctl &>/dev/null; then
-      runtime_total_bytes=$(sysctl -n hw.memsize 2>/dev/null || true)
-    fi
-    if [ -z "$runtime_total_bytes" ] && [ -r /proc/meminfo ]; then
-      runtime_total_bytes=$(awk '/MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo 2>/dev/null)
-    fi
-    if printf '%s' "$runtime_total_bytes" | grep -Eq '^[0-9]+$' && [ "$runtime_total_bytes" -gt 0 ]; then
-      runtime_memory_percent=$(awk -v used="$runtime_memory_bytes" -v total="$runtime_total_bytes" 'BEGIN { printf "%.2f", used * 100 / total }')
-    fi
-  fi
   append_runtime_number_field "cpu_percent" "$runtime_cpu"
   append_runtime_number_field "gpu_percent" "$runtime_gpu"
   append_runtime_number_field "memory_percent" "$runtime_memory_percent"

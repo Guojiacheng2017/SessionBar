@@ -30,6 +30,10 @@ export function markerMatchesSession(storedSid: string, file: string, sessionId:
   return storedSid === sessionId || scopedSessionId(storedSid, file) === sessionId;
 }
 
+function processMarkerFile(file: string): string {
+  return file.replace(/^sessionbar-id-/, "sessionbar-process-");
+}
+
 export function removeSessionMarkerFiles(sessionDir: string, sessionId: string): string[] {
   const removed: string[] = [];
   let files: string[];
@@ -51,6 +55,13 @@ export function removeSessionMarkerFiles(sessionDir: string, sessionId: string):
     try {
       unlinkSync(path);
       removed.push(file);
+      const processFile = processMarkerFile(file);
+      try {
+        unlinkSync(join(sessionDir, processFile));
+        removed.push(processFile);
+      } catch {
+        // The sidecar may already have been removed with the same session.
+      }
     } catch {
       // If another process already removed it, recovery still won't see it.
     }
@@ -85,6 +96,13 @@ export function pruneSessionMarkerFiles(
     try {
       unlinkSync(path);
       removed.push({ file, sessionId, ageMs });
+      const processFile = processMarkerFile(file);
+      try {
+        unlinkSync(join(sessionDir, processFile));
+        removed.push({ file: processFile, sessionId, ageMs });
+      } catch {
+        // The sidecar may already have been removed with the same session.
+      }
     } catch {
       // Another process may have ended the session and removed the marker first.
     }

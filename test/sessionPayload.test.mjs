@@ -104,6 +104,20 @@ test("validates and preserves runtime resource snapshots", () => {
   assert.deepEqual(merged.runtime, runtime);
 });
 
+test("validates positive integer process roots and preserves them when omitted", () => {
+  assert.equal(validateSessionPayload({ ...basePayload, process_pid: 4242 }), true);
+  assert.equal(validateSessionPayload({ ...basePayload, process_pid: 0 }), false);
+  assert.equal(validateSessionPayload({ ...basePayload, process_pid: 1.5 }), false);
+
+  const merged = mergeSessionPayload({
+    ...basePayload,
+    source: "hook",
+    process_pid: 4242,
+  }, { ...basePayload }, 1_700_000_001_000);
+
+  assert.equal(merged.process_pid, 4242);
+});
+
 test("rejects overlong quota reset labels", () => {
   assert.equal(validateSessionPayload({ ...basePayload, quota_reset: "x".repeat(65) }), false);
 });
