@@ -4,7 +4,7 @@ import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync, readFile
 import { join, dirname, basename, resolve } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
-import { SessionPayload } from "./types.js";
+import { SessionPayload, SessionRuntimeSnapshot } from "./types.js";
 import { mergeSessionPayload, validateSessionPayload } from "./sessionPayload.js";
 import { syncToICloud } from "./icloud.js";
 import { removeSessionMarkerFiles, scopedSessionId } from "./sessionMarkers.js";
@@ -16,6 +16,7 @@ import { agentSignalToApiRow, computeAdvisorRows } from "./quotaAdvisor.js";
 import { computePlanRows } from "./planAdvisor.js";
 import type { PlanRow } from "./planTypes.js";
 import { RateBuffer } from "./rateBuffer.js";
+import { sampleRegisteredProcesses } from "./runtimeSampler.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Start the HTTP server + polling loops only when run directly
@@ -70,7 +71,10 @@ const PROVIDER_POLL_ENABLED = process.env.SESSIONBAR_PROVIDER_POLL !== "0";
 const PROVIDER_POLL_MS = Math.max(30_000, parseInt(process.env.SESSIONBAR_PROVIDER_POLL_MS || String(5 * 60 * 1000), 10));
 const CCSWITCH_ENABLED = process.env.SESSIONBAR_CCSWITCH !== "0";
 const envProviderConfigs = PROVIDER_POLL_ENABLED ? providerConfigsFromEnv(process.env) : [];
+const RUNTIME_SAMPLE_MS = parseInt(process.env.SESSIONBAR_RUNTIME_SAMPLE_MS || "2000", 10);
 let providerPollInterval: NodeJS.Timeout | undefined;
+let runtimeSampleInterval: NodeJS.Timeout | undefined;
+let runtimeSampleInFlight = false;
 
 // ---- idle auto-shutdown -------------------------------------------------
 // When no client (SSE or HTTP poll) touches the server for
@@ -105,6 +109,7 @@ function cleanup() {
   clearInterval(heartbeatInterval);
   clearInterval(purgeInterval);
   if (providerPollInterval) clearInterval(providerPollInterval);
+  if (runtimeSampleInterval) clearInterval(runtimeSampleInterval);
   if (idleTimer) clearTimeout(idleTimer);
   removeClaudeHooks();
   try { unlinkSync(PID_FILE); } catch { /* ignore */ }
@@ -141,6 +146,83 @@ function removeClaudeHooks() {
 
 const sessions: Record<string, SessionPayload> = {};
 const sseClients = new Set<express.Response>();
+
+const RUNTIME_METRIC_FIELDS = [
+  "cpu_percent",
+  "gpu_percent",
+  "memory_percent",
+  "memory_bytes",
+  "process_count",
+] as const;
+
+function runtimeMetricsEqual(
+  left: SessionRuntimeSnapshot | undefined,
+  right: SessionRuntimeSnapshot | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return RUNTIME_METRIC_FIELDS.every(field => left[field] === right[field]);
+}
+
+export function applyRuntimeSamples(
+  targetSessions: Record<string, SessionPayload>,
+  samples: ReadonlyMap<number, SessionRuntimeSnapshot>,
+  sampledRoots: ReadonlySet<number>,
+): boolean {
+  let changed = false;
+  for (const session of Object.values(targetSessions)) {
+    if (session.status !== "working" && session.status !== "blocked") continue;
+    const rootPid = session.process_pid;
+    if (rootPid === undefined || !sampledRoots.has(rootPid)) continue;
+
+    const previous = session.runtime;
+    const sample = samples.get(rootPid);
+    let next: SessionRuntimeSnapshot | undefined;
+    if (sample) {
+      next = { ...sample };
+      if (next.gpu_percent === undefined && previous?.gpu_percent !== undefined) {
+        next.gpu_percent = previous.gpu_percent;
+      }
+    } else if (previous?.gpu_percent !== undefined) {
+      next = { gpu_percent: previous.gpu_percent };
+    }
+
+    if (!runtimeMetricsEqual(previous, next)) changed = true;
+    session.runtime = next;
+  }
+  return changed;
+}
+
+function activeRuntimeRoots(): Set<number> {
+  const roots = new Set<number>();
+  for (const session of Object.values(sessions)) {
+    if (session.status !== "working" && session.status !== "blocked") continue;
+    if (session.process_pid !== undefined) roots.add(session.process_pid);
+  }
+  return roots;
+}
+
+async function sampleSessionRuntimes(): Promise<void> {
+  if (runtimeSampleInFlight) return;
+  const roots = activeRuntimeRoots();
+  if (roots.size === 0) return;
+
+  runtimeSampleInFlight = true;
+  try {
+    const samples = await sampleRegisteredProcesses(roots);
+    if (!applyRuntimeSamples(sessions, samples, roots)) return;
+    broadcastSSE();
+    if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
+  } catch (error) {
+    console.warn(`[runtime] sampling failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    runtimeSampleInFlight = false;
+  }
+}
+
+function startRuntimeSampling(): void {
+  void sampleSessionRuntimes();
+  runtimeSampleInterval = setInterval(() => void sampleSessionRuntimes(), RUNTIME_SAMPLE_MS);
+}
 
 const rateBuffers = new Map<string, RateBuffer>();
 
@@ -615,6 +697,7 @@ function recoverSessions() {
           claude: "Claude Code", gemini: "Gemini CLI",
           codex: "Codex", copilot: "Copilot",
         };
+        const processPid = readProcessSidecar(f);
         sessions[sid] = {
           session_id: sid,
           session_type: typeMap[type] || type,
@@ -622,6 +705,7 @@ function recoverSessions() {
           status: "idle",
           task_name: "Ready",
           timestamp: Date.now(),
+          ...(processPid === undefined ? {} : { process_pid: processPid }),
         };
         console.log(`[recover] ${sid}`);
       } catch { /* corrupt ID file, skip */ }
@@ -631,6 +715,20 @@ function recoverSessions() {
       if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
     }
   } catch { /* state dir not readable */ }
+}
+
+function readProcessSidecar(idFile: string): number | undefined {
+  try {
+    const raw = readFileSync(
+      join(SESSION_ID_DIR, idFile.replace(/^sessionbar-id-/, "sessionbar-process-")),
+      "utf-8",
+    ).trim();
+    if (!/^[1-9][0-9]*$/.test(raw)) return undefined;
+    const processPid = Number(raw);
+    return Number.isInteger(processPid) && processPid > 0 ? processPid : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // SSE heartbeat — detect dead connections
@@ -740,6 +838,7 @@ if (isDirectRun) {
     console.log(`SessionBar on http://${HOST}:${PORT}`);
     if (WEB_ENABLED) console.log(`Dashboard: http://${HOST}:${PORT}`);
     recoverSessions();
+    startRuntimeSampling();
     startProviderPolling();
   });
 
