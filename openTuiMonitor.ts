@@ -37,6 +37,7 @@ import {
   projectPathSummary,
   groupByProject as groupSessionsByProject,
 } from "./projectUtils.js";
+import { aggregateRuntimeUsage, formatRuntimeBytes, runtimeProgressBar } from "./runtimeUsage.js";
 
 type Session = SessionPayload;
 type FetchSessions = () => Promise<{ sessions: Session[]; error?: string }>;
@@ -685,6 +686,28 @@ function detailTextForProject(scope: readonly Session[], all: readonly Session[]
   ].join("\n");
 }
 
+export function runtimeOverviewText(sessions: readonly Session[], width = 44): string {
+  const usage = aggregateRuntimeUsage(sessions);
+  const barWidth = Math.max(10, Math.min(20, Math.floor(width / 3)));
+  const lines = [
+    "RUNTIME / ALL ACTIVE SESSIONS",
+    `active ${usage.activeSessions} | sampled ${usage.sampledSessions}`,
+    "",
+    `CPU  ${runtimeValue(usage.cpuPercent, "%")} ${runtimeProgressBar(usage.cpuPercent, 100, barWidth)}`,
+    `GPU  ${usage.hasGpuData ? runtimeValue(usage.gpuPercent, "%") : "—"} ${runtimeProgressBar(usage.gpuPercent, 100, barWidth)}`,
+    `MEM  ${formatRuntimeBytes(usage.memoryBytes)} ${runtimeProgressBar(usage.memoryPercent, 100, barWidth)}`,
+    `PROC ${runtimeValue(usage.processCount, "")} ${runtimeProgressBar(usage.processCount, Math.max(16, usage.processCount || 16), barWidth)}`,
+  ];
+  if (usage.activeSessions === 0) lines.push("", "no active session resources");
+  else if (usage.sampledSessions === 0) lines.push("", "waiting for runtime samples");
+  else if (usage.sampledSessions < usage.activeSessions) lines.push("", `waiting for ${usage.activeSessions - usage.sampledSessions} sample${usage.activeSessions - usage.sampledSessions === 1 ? "" : "s"}`);
+  return lines.join("\n");
+}
+
+function runtimeValue(value: number | undefined, suffix: string): string {
+  return value === undefined ? "—" : `${Math.round(value)}${suffix}`;
+}
+
 function detailTextForSession(session: Session, tab: DetailTab, width: number): StyledText {
   return buildSessionDetailChunks(session, tab, width);
 }
@@ -909,7 +932,9 @@ function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<Mo
   const detailWidth = layout.detailContentWidth;
   const details = selected
     ? detailTextForSession(selected, state.detailTab, detailWidth)
-    : detailTextForProject(scopeSessions, shown, opts);
+    : state.projectFocusKey
+      ? detailTextForProject(scopeSessions, shown, opts)
+      : runtimeOverviewText(shown, detailWidth);
   const sessionTitle = state.projectFocusKey && scopeSessions[0]
     ? `Sessions / ${projectName(scopeSessions[0])}`
     : "All Sessions";
@@ -940,7 +965,9 @@ function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<Mo
   refs.detailsBox.width = layout.detailPanelWidth;
   refs.sessionsBox.title = sessionTitle;
   refs.sessionsTable.content = sessionTableContent(sessionData, state, renderer);
-  refs.detailsBox.title = selected ? `Details / Session / ${detailTabTitle(state.detailTab)}` : "Details / Project";
+  refs.detailsBox.title = selected
+    ? `Details / Session / ${detailTabTitle(state.detailTab)}`
+    : state.projectFocusKey ? "Details / Project" : "Details / Runtime";
   refs.detailsText.content = details;
   refs.footer.content = footer;
   refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;

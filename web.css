@@ -55,6 +55,32 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
+html {
+  scroll-snap-type: y proximity;
+  scroll-padding-block: 20px;
+}
+
+#app { gap: 0; }
+
+.dashboard-page {
+  height: calc(100svh - 40px);
+  min-height: 0;
+  scroll-snap-align: start;
+  scroll-snap-stop: normal;
+}
+
+.sessions-page,
+.providers-page {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sessions-page { overflow: hidden; }
+.providers-page { padding-top: 14px; }
+.providers-page #footer { margin-top: auto; }
+
 button, input { font: inherit; }
 input::placeholder { color: var(--sb-muted); opacity: 1; }
 
@@ -65,26 +91,38 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 .thin-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
 .thin-scroll::-webkit-scrollbar-thumb { background: var(--sb-scrollbar); border-radius: 999px; }
 
-/* The dashboard remains one document: scrolling continuously hands the
-   Sessions workspace to the Providers section instead of switching views. */
 .session-scene {
   position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1 1 0 !important;
+  flex-direction: column;
   min-width: 0;
 }
 
 .session-shell {
   position: relative;
-  min-height: 56px;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  width: 100%;
+  height: auto !important;
   overflow: visible;
 }
 
 .session-content {
   display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  width: 100%;
   flex-direction: column;
   gap: 14px;
   transform: translateY(var(--session-shift, 0px)) scale(var(--session-scale, 1));
   transform-origin: top center;
   opacity: var(--session-opacity, 1);
+  transition: transform 180ms cubic-bezier(0.22, 0.72, 0.28, 1), opacity 160ms ease;
   will-change: transform, opacity;
 }
 
@@ -119,6 +157,8 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
   will-change: transform, opacity;
 }
 
+.session-compact { display: none !important; }
+
 .session-compact-title {
   color: var(--sb-ink-strong);
   font-size: 13px;
@@ -145,7 +185,7 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 .providers-panel {
   position: relative;
   z-index: 3;
-  margin-top: 28px;
+  margin: 0;
   padding: 18px;
   border: 1px solid var(--sb-border);
   border-radius: 14px;
@@ -157,23 +197,32 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
   will-change: transform, opacity;
 }
 
+.providers-card {
+  flex: 0 1 auto;
+  transform: none !important;
+  opacity: var(--providers-opacity, 0) !important;
+}
+
 #footer,
 #copyright {
-  transition: transform 190ms cubic-bezier(0.22, 0.72, 0.28, 1);
-  will-change: transform;
+  transform: none !important;
+  transition: none;
+  will-change: auto;
 }
 
 .providers-session-bar {
-  display: none;
-  position: sticky;
-  top: 10px;
-  z-index: 4;
+  display: flex;
+  position: relative;
+  top: auto;
+  z-index: 1;
   height: 56px;
-  margin: -18px -18px -56px;
+  margin: 0;
   pointer-events: none;
-  transform: translateY(-12px);
-  opacity: var(--providers-bar-opacity, 0);
-  transition: opacity 180ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform: translateY(var(--providers-bar-shift, 10px)) !important;
+  opacity: var(--providers-bar-opacity, 0) !important;
+  transition: opacity 180ms ease, transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+  flex: 0 0 auto;
 }
 
 .providers-header {
@@ -258,7 +307,14 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 
 @keyframes providerPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 
-.session-workspace { height: 440px; flex: none !important; }
+.session-workspace {
+  height: auto;
+  flex: 1 1 auto !important;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-height: 440px;
+}
 
 .project-row {
   align-items: stretch;
@@ -395,6 +451,162 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 
 #detail-body {
   padding: 14px 16px;
+}
+
+.runtime-contributions {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid var(--sb-line-subtle);
+  border-radius: 12px;
+  background: var(--sb-surface-highlight);
+}
+
+.runtime-contributions-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.runtime-contributions-head > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.runtime-contributions-head strong {
+  color: var(--sb-ink-strong);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.runtime-contributions-head span,
+.runtime-contributions-summary {
+  color: var(--sb-muted);
+  font-size: 11px;
+}
+
+.runtime-contributions-summary {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.runtime-matrix-scroll {
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.runtime-matrix {
+  display: grid;
+  grid-template-columns: minmax(132px, 150px) repeat(var(--runtime-columns), minmax(76px, 1fr));
+  align-items: center;
+  gap: 6px 8px;
+  min-width: max-content;
+}
+
+.runtime-matrix-corner,
+.runtime-matrix-label {
+  color: var(--sb-muted);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.runtime-matrix-label {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 5px;
+}
+
+.runtime-matrix-label small {
+  color: var(--sb-ink);
+  font-family: "SF Mono", "Fira Code", Menlo, monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.runtime-matrix-session {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--sb-ink);
+  font-size: 10px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-matrix-cell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: 25px;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 7px;
+  background: var(--sb-track);
+}
+
+.runtime-matrix-cell-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--runtime-share);
+  min-width: 3px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--sb-accent) 72%, var(--sb-green)), var(--sb-accent));
+  opacity: .8;
+  transition: width 320ms cubic-bezier(.22, .72, .28, 1);
+}
+
+.runtime-matrix-cell em {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  padding: 0 7px;
+  color: var(--sb-ink-strong);
+  font-family: "SF Mono", "Fira Code", Menlo, monospace;
+  font-size: 9px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.runtime-matrix-cell.is-unknown {
+  background: transparent;
+  border: 1px dashed var(--sb-line-subtle);
+}
+
+.runtime-matrix-cell.is-unknown .runtime-matrix-cell-fill { display: none; }
+.runtime-matrix-cell.is-unknown em { color: var(--sb-muted); text-align: center; }
+
+.runtime-empty-copy {
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--sb-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.runtime-empty-copy strong {
+  color: var(--sb-ink);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .detail-tabs {
@@ -813,9 +1025,9 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
   #app { padding: 12px 10px; gap: 10px; }
   .projects-panel { max-height: 132px; }
   .workspace { gap: 10px; }
-  .session-workspace { height: 320px; }
-  .providers-panel { margin-top: 20px; padding: 14px; }
-  .providers-session-bar { margin: -14px -14px -56px; }
+  .session-workspace { height: auto; max-height: none; }
+  .providers-panel { margin: 0; padding: 14px; }
+  .providers-session-bar { margin: 0; }
 }
 
 @media (max-width: 640px) {

@@ -1,6 +1,7 @@
 import type { SessionPayload } from "./types.js";
 import type { PlanRow } from "./planTypes.js";
 import { compactNumber } from "./displayUtils.js";
+import { aggregateRuntimeUsage, formatRuntimeBytes, type RuntimeContribution } from "./runtimeUsage.js";
 
 export const UI = {
   app: "flex flex-col h-screen px-6 py-5 gap-3.5 max-w-[1180px] mx-auto",
@@ -152,6 +153,54 @@ export function detailListMarkup(rows: Array<{ label: string; value: string }>, 
   return `<dl class="${cx(UI.detailList, extraClass)}">${rows.map(row =>
     `<dt class="${UI.detailLabel}">${escapeHtml(row.label)}</dt><dd class="${UI.detailValue}">${escapeHtml(row.value)}</dd>`
   ).join("")}</dl>`;
+}
+
+export function runtimeContributionsMarkup(sessions: readonly SessionPayload[]): string {
+  const usage = aggregateRuntimeUsage(sessions);
+  const sampled = usage.contributions;
+  const summary = usage.activeSessions === 0
+    ? "No active sessions"
+    : usage.sampledSessions === 0
+      ? `${usage.activeSessions} active · waiting for samples`
+      : `${usage.activeSessions} active · ${usage.sampledSessions} sampled`;
+
+  if (usage.activeSessions === 0 || sampled.length === 0) {
+    return `<section class="runtime-contributions runtime-contributions-empty" aria-label="Runtime usage">
+      <div class="runtime-contributions-head"><div><strong>Runtime</strong><span>All active sessions</span></div><span class="runtime-contributions-summary">${escapeHtml(summary)}</span></div>
+      <div class="runtime-empty-copy"><strong>${usage.activeSessions === 0 ? "No active session resources" : "Waiting for runtime samples"}</strong><span>CPU, GPU, memory, and process usage will appear here when an active session reports a snapshot.</span></div>
+    </section>`;
+  }
+
+  const rows: Array<{ label: string; total: string; share: (item: RuntimeContribution) => number | undefined }> = [
+    { label: "CPU", total: percentageLabel(usage.cpuPercent), share: item => item.cpuShare },
+    { label: "GPU", total: usage.hasGpuData ? percentageLabel(usage.gpuPercent) : "—", share: item => item.gpuShare },
+    { label: "MEM", total: memoryLabel(usage.memoryPercent, usage.memoryBytes), share: item => item.memoryShare },
+    { label: "PROC", total: usage.processCount === undefined ? "—" : String(usage.processCount), share: item => item.processShare },
+  ];
+  const columns = sampled.map(item => `<div class="runtime-matrix-session" title="${escapeHtml(runtimeSessionLabel(item))}">${escapeHtml(runtimeSessionLabel(item))}</div>`).join("");
+  const body = rows.map(row => `<div class="runtime-matrix-label"><span>${row.label}</span><small>${escapeHtml(row.total)}</small></div>${sampled.map(item => {
+    const value = row.share(item);
+    const label = value === undefined ? `${row.label} unavailable` : `${row.label} ${value}% contribution`;
+    return `<div class="runtime-matrix-cell${value === undefined ? " is-unknown" : ""}" style="--runtime-share:${value ?? 0}%" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}"><span class="runtime-matrix-cell-fill"></span><em>${value === undefined ? "—" : `${value}%`}</em></div>`;
+  }).join("")}`).join("");
+  return `<section class="runtime-contributions" aria-label="Runtime usage contributions">
+    <div class="runtime-contributions-head"><div><strong>Runtime</strong><span>All active sessions · contribution by resource</span></div><span class="runtime-contributions-summary">${escapeHtml(summary)}</span></div>
+    <div class="runtime-matrix-scroll"><div class="runtime-matrix" style="--runtime-columns:${sampled.length}"><div class="runtime-matrix-corner">RESOURCE</div>${columns}${body}</div></div>
+  </section>`;
+}
+
+function runtimeSessionLabel(item: RuntimeContribution): string {
+  return item.sessionName || item.project || item.sessionId.split("__")[0] || item.sessionId;
+}
+
+function percentageLabel(value: number | undefined): string {
+  return value === undefined ? "—" : `${Math.round(value)}%`;
+}
+
+function memoryLabel(percent: number | undefined, bytes: number | undefined): string {
+  const pieces = [percentageLabel(percent)];
+  if (bytes !== undefined) pieces.push(formatRuntimeBytes(bytes));
+  return pieces.join(" · ");
 }
 
 export function tabsMarkup(tabs: string[], activeIndex: number): string {

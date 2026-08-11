@@ -11,6 +11,7 @@ import {
   iconMarkup,
   projectIconListMarkup,
   providerTableMarkup,
+  runtimeContributionsMarkup,
   statusDotMarkup,
   statusLabel,
   statusSummaryMarkup,
@@ -38,13 +39,11 @@ const providersSessionBar = document.getElementById("providers-session-bar")!;
 const providersHeader = document.getElementById("providers-header")!;
 const providersStatus = document.getElementById("providers-status")!;
 const providersBody = document.getElementById("providers-body")!;
-const copyrightEl = document.getElementById("copyright");
 
 let disconnectedBanner: HTMLDivElement | null = null;
 let selectedId: string | null = null;
 let focusedProject: string | null = null;
 let expandedProjectIcons: string | null = null;
-let defaultSelectionApplied = false;
 let detailTab = 0; // 0=overview 1=activity 2=usage 3=flow 4=raw
 let lastSessions: SessionPayload[] = [];
 let providers: PlanRow[] = [];
@@ -63,7 +62,8 @@ let lastSceneScrollY = window.scrollY;
 let lastSceneScrollAt = performance.now();
 let sceneMomentumBypassUntil = 0;
 const compactHeight = 56;
-const sessionFadeEnd = 0.32;
+const sessionFadeEnd = 0.72;
+const providersFadeEnd = 0.6;
 const sceneHoldDistance = 24;
 const sceneMomentumSpeed = 0.35;
 const sceneMomentumGrace = 180;
@@ -150,25 +150,18 @@ function applySceneProgress(): void {
   const height = sceneExpandedHeight > 0 ? sceneExpandedHeight : compactHeight;
   sessionShell.style.height = `${Math.round(height)}px`;
   sessionShell.style.setProperty("--scene-progress", progress.toFixed(4));
-  sessionShell.style.setProperty("--session-shift", `${Math.round(progress * -28)}px`);
-  sessionShell.style.setProperty("--session-scale", `${(1 - progress * 0.025).toFixed(4)}`);
+  sessionShell.style.setProperty("--session-shift", `${Math.round(progress * -42)}px`);
+  sessionShell.style.setProperty("--session-scale", `${(1 - progress * 0.06).toFixed(4)}`);
   const sessionOpacity = clamp(1 - progress / sessionFadeEnd);
+  const providersOpacity = clamp(progress / providersFadeEnd);
   sessionShell.style.setProperty("--session-opacity", sessionOpacity.toFixed(4));
   sessionShell.style.setProperty("--compact-shift", `${Math.round((1 - progress) * -16)}px`);
   sessionShell.style.setProperty("--compact-opacity", progress > 0.01 ? "1" : "0");
   sessionCompact.style.visibility = progress > 0.01 ? "visible" : "hidden";
-  // Let Providers catch up with the compact bar, but only with a damped
-  // portion of the collapsed workspace height. A full shift skips the panel
-  // above the viewport; no shift leaves a large dead area at the scene end.
-  const providersShift = Math.round(
-    Math.max(0, sceneExpandedHeight - compactHeight - 10) * -0.78 * progress,
-  );
-  providersPanel.style.setProperty("--providers-shift", `${providersShift}px`);
-  providersPanel.style.setProperty("--providers-opacity", `${(0.88 + progress * 0.12).toFixed(4)}`);
-  providersPanel.style.setProperty("--providers-bar-opacity", progress.toFixed(4));
+  providersPanel.style.setProperty("--providers-opacity", providersOpacity.toFixed(4));
+  providersSessionBar.style.setProperty("--providers-bar-opacity", providersOpacity.toFixed(4));
+  providersSessionBar.style.setProperty("--providers-bar-shift", `${Math.round((1 - providersOpacity) * 10)}px`);
   sessionContent.style.pointerEvents = progress >= sessionFadeEnd ? "none" : "";
-  footerEl.style.transform = `translateY(${providersShift}px)`;
-  if (copyrightEl) copyrightEl.style.transform = `translateY(${providersShift}px)`;
 }
 
 function scheduleSceneProgress(): void {
@@ -539,11 +532,6 @@ function render(sessions: SessionPayload[]) {
   if (selectedId && !scope.find(s=>s.session_id===selectedId)) selectedId = null;
   const sSorted = [...scope].sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
   syncSessionWorkspace();
-  if (!defaultSelectionApplied && sSorted.length > 0) {
-    selectedId = sSorted[0].session_id;
-    defaultSelectionApplied = true;
-  }
-
   sessionsHdr.innerHTML = `<span class="${UI.panelTitle}">${focusedProject ? `Sessions / ${escapeHtml(focusedProject)}` : `All Sessions (${sSorted.length})`}</span>`;
   let sH = "";
   for (const s of sSorted) {
@@ -593,8 +581,8 @@ function render(sessions: SessionPayload[]) {
       { label: "Path", value: scope[0]?.project_path || "" },
     ]);
   } else {
-    detailHdr.innerHTML = `<span class="${UI.panelTitle}">Details</span>`;
-    detailBody.innerHTML = `<div class="${UI.empty}">Select a session to view details</div>`;
+    detailHdr.innerHTML = `<span class="${UI.panelTitle}">Details / Runtime</span>`;
+    detailBody.innerHTML = runtimeContributionsMarkup(shown);
   }
 
   syncSessionWorkspace();

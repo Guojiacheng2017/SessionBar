@@ -5,6 +5,7 @@ import {
   escapeHtml,
   projectIconListMarkup,
   providerTableMarkup,
+  runtimeContributionsMarkup,
   statusDotMarkup,
   statusSummaryMarkup,
 } from "../dist/webComponents.js";
@@ -121,4 +122,29 @@ test("renders provider loading, empty, and error states", () => {
   assert.match(providerTableMarkup([]), /No quota data/);
   assert.match(providerTableMarkup([], { error: "request failed <now>" }), /request failed &lt;now&gt;/);
   assert.match(providerTableMarkup([], { error: "request failed" }), /data-providers-retry/);
+});
+
+test("renders a runtime contributions matrix for active sessions", () => {
+  const html = runtimeContributionsMarkup([
+    {
+      session_id: "codex-a__Vision-Dash",
+      session_name: "Build dashboard",
+      project: "Vision-Dash",
+      status: "working",
+      runtime: { cpu_percent: 30, memory_percent: 5, process_count: 2 },
+    },
+    {
+      session_id: "claude-b__Vision-Dash",
+      project: "Vision-Dash",
+      status: "working",
+      runtime: { cpu_percent: 10, memory_percent: 15, process_count: 1 },
+    },
+  ]);
+  assert.match(html, /runtime-contributions/);
+  assert.match(html, /Build dashboard/);
+  assert.match(html, /CPU/);
+  assert.match(html, /MEM/);
+  assert.match(html, /75%/);
+  assert.match(html, /25%/);
+  assert.match(html, /Waiting for runtime samples|sampled/);
 });

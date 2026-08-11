@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { monitorBodyLayout, providerSummaryLine, providerTableContent } from "../dist/openTuiMonitor.js";
+import { monitorBodyLayout, providerSummaryLine, providerTableContent, runtimeOverviewText } from "../dist/openTuiMonitor.js";
 
 test("monitor body layout gives the session sidebar a stable monitor width", () => {
   const layout = monitorBodyLayout(154);
@@ -16,6 +16,23 @@ test("monitor body layout keeps narrow terminals usable", () => {
   assert.ok(layout.sidebarLineWidth >= 20);
   assert.ok(layout.detailContentWidth >= 32);
   assert.equal(layout.sidebarPanelWidth + layout.gap + layout.detailPanelWidth, layout.bodyWidth);
+});
+
+test("runtime overview uses fixed-width progress bars instead of a sparkline", () => {
+  const content = runtimeOverviewText([
+    {
+      session_id: "codex-a",
+      status: "working",
+      session_type: "Codex",
+      task_name: "running",
+      timestamp: 1,
+      runtime: { cpu_percent: 50, memory_percent: 20, memory_bytes: 768 * 1024 * 1024, process_count: 2 },
+    },
+  ], 60);
+  assert.match(content, /RUNTIME \/ ALL ACTIVE SESSIONS/);
+  assert.match(content, /CPU\s+50%\s+██████████/);
+  assert.match(content, /MEM\s+768 MB/);
+  assert.doesNotMatch(content, /░░▒▓|sparkline/i);
 });
 
 function subscriptionRow(overrides = {}) {

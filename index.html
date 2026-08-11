@@ -38,7 +38,9 @@
 </head>
 <body class="bg-bg text-ink text-[14px] leading-relaxed overflow-x-hidden min-h-screen">
 
-<div id="app" class="flex flex-col min-h-screen px-6 py-5 gap-3.5 max-w-[1180px] mx-auto">
+<div id="app" class="flex flex-col min-h-screen px-6 py-5 max-w-[1180px] mx-auto">
+
+<section class="dashboard-page sessions-page" aria-label="Sessions dashboard">
 
     <!-- Header -->
     <div class="flex items-center justify-between gap-4 shrink-0">
@@ -85,9 +87,12 @@
       </div>
     </section>
 
+</section>
+
     <!-- Providers -->
-    <section id="providers-panel" class="providers-panel" aria-labelledby="providers-heading">
-        <div id="providers-session-bar" class="providers-session-bar" aria-hidden="true"></div>
+    <section class="dashboard-page providers-page" aria-label="Providers dashboard">
+    <div id="providers-session-bar" class="providers-session-bar" aria-hidden="true"></div>
+    <section id="providers-panel" class="providers-panel providers-card" aria-labelledby="providers-heading">
         <div id="providers-header" class="providers-header">
             <div>
                 <h2 id="providers-heading" class="providers-heading">Providers</h2>
@@ -100,6 +105,8 @@
     <!-- Footer -->
     <div id="footer" class="text-[11px] text-muted shrink-0 truncate"></div>
     <div id="copyright" class="text-[11px] text-muted/50 text-center shrink-0">&copy; 2026 SessionBar</div>
+
+    </section>
 
 </div>
 

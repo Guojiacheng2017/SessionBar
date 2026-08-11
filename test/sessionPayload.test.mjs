@@ -88,6 +88,22 @@ test("rejects negative usage numbers and invalid percentages", () => {
   assert.equal(validateSessionPayload({ ...basePayload, quota_percent: 101 }), false);
 });
 
+test("validates and preserves runtime resource snapshots", () => {
+  const runtime = {
+    cpu_percent: 24.5,
+    gpu_percent: 12,
+    memory_percent: 8,
+    memory_bytes: 805306368,
+    process_count: 4,
+    sampled_at: 1_700_000_000_000,
+  };
+  assert.equal(validateSessionPayload({ ...basePayload, runtime }), true);
+  assert.equal(validateSessionPayload({ ...basePayload, runtime: { ...runtime, gpu_percent: 101 } }), false);
+  assert.equal(validateSessionPayload({ ...basePayload, runtime: { ...runtime, process_count: 1.5 } }), false);
+  const merged = mergeSessionPayload(undefined, { ...basePayload, runtime }, 1_700_000_001_000);
+  assert.deepEqual(merged.runtime, runtime);
+});
+
 test("rejects overlong quota reset labels", () => {
   assert.equal(validateSessionPayload({ ...basePayload, quota_reset: "x".repeat(65) }), false);
 });

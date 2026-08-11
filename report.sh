@@ -242,6 +242,61 @@ append_string_field "quota_reset" "${SESSIONBAR_QUOTA_RESET:-${AGENTBAR_QUOTA_RE
 append_string_field "hook_event" "${SESSIONBAR_HOOK_EVENT:-${AGENTBAR_HOOK_EVENT:-}}"
 append_string_field "session_name" "$SESSION_NAME"
 
+# Runtime samples are optional and intentionally scoped to the agent process
+# that invoked this hook. Integrations can provide more complete process-tree
+# values through SESSIONBAR_* overrides; unsupported GPU metrics stay absent.
+RUNTIME_FIELDS=""
+append_runtime_number_field() {
+  local key="$1"
+  local value="$2"
+  if [ -n "$value" ] && printf '%s' "$value" | grep -Eq '^[0-9]+([.][0-9]+)?$'; then
+    RUNTIME_FIELDS="${RUNTIME_FIELDS},\"${key}\":${value}"
+  fi
+}
+
+runtime_cpu="${SESSIONBAR_CPU_PERCENT:-${AGENTBAR_CPU_PERCENT:-}}"
+runtime_gpu="${SESSIONBAR_GPU_PERCENT:-${AGENTBAR_GPU_PERCENT:-}}"
+runtime_memory_percent="${SESSIONBAR_MEMORY_PERCENT:-${AGENTBAR_MEMORY_PERCENT:-}}"
+runtime_memory_bytes="${SESSIONBAR_MEMORY_BYTES:-${AGENTBAR_MEMORY_BYTES:-}}"
+runtime_process_count="${SESSIONBAR_PROCESS_COUNT:-${AGENTBAR_PROCESS_COUNT:-}}"
+
+runtime_pid="${SESSIONBAR_PROCESS_PID:-${AGENTBAR_PROCESS_PID:-${PPID:-$$}}}"
+if [ "$STATUS" = "working" ] || [ "$STATUS" = "blocked" ]; then
+  if command -v ps &>/dev/null; then
+    if [ -z "$runtime_cpu" ]; then
+      runtime_cpu=$(ps -p "$runtime_pid" -o %cpu= 2>/dev/null | tr -d ' ')
+    fi
+    runtime_rss_kb=$(ps -p "$runtime_pid" -o rss= 2>/dev/null | tr -d ' ')
+    if [ -z "$runtime_memory_bytes" ] && printf '%s' "$runtime_rss_kb" | grep -Eq '^[0-9]+$'; then
+      runtime_memory_bytes=$((runtime_rss_kb * 1024))
+    fi
+    if [ -z "$runtime_process_count" ]; then
+      runtime_process_count="1"
+    fi
+  fi
+  if [ -z "$runtime_memory_percent" ] && printf '%s' "$runtime_memory_bytes" | grep -Eq '^[0-9]+$'; then
+    runtime_total_bytes=""
+    if command -v sysctl &>/dev/null; then
+      runtime_total_bytes=$(sysctl -n hw.memsize 2>/dev/null || true)
+    fi
+    if [ -z "$runtime_total_bytes" ] && [ -r /proc/meminfo ]; then
+      runtime_total_bytes=$(awk '/MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo 2>/dev/null)
+    fi
+    if printf '%s' "$runtime_total_bytes" | grep -Eq '^[0-9]+$' && [ "$runtime_total_bytes" -gt 0 ]; then
+      runtime_memory_percent=$(awk -v used="$runtime_memory_bytes" -v total="$runtime_total_bytes" 'BEGIN { printf "%.2f", used * 100 / total }')
+    fi
+  fi
+  append_runtime_number_field "cpu_percent" "$runtime_cpu"
+  append_runtime_number_field "gpu_percent" "$runtime_gpu"
+  append_runtime_number_field "memory_percent" "$runtime_memory_percent"
+  append_runtime_number_field "memory_bytes" "$runtime_memory_bytes"
+  append_runtime_number_field "process_count" "$runtime_process_count"
+  append_runtime_number_field "sampled_at" "$(date +%s 2>/dev/null)000"
+  if [ -n "$RUNTIME_FIELDS" ]; then
+    EXTRA_FIELDS="${EXTRA_FIELDS},\"runtime\":{${RUNTIME_FIELDS#,}}"
+  fi
+fi
+
 AGENT_SIGNAL="${SESSIONBAR_AGENT_SIGNAL:-${AGENTBAR_AGENT_SIGNAL:-}}"
 AGENT_SIGNAL_FIELDS=""
 AGENT_SIGNAL_ATTRIBUTES=""

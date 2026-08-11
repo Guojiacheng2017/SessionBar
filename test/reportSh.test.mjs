@@ -49,6 +49,11 @@ exit 1
       SESSIONBAR_TOKEN_RATE: "17000",
       SESSIONBAR_QUOTA_PERCENT: "65",
       SESSIONBAR_QUOTA_RESET: "5h38m",
+      SESSIONBAR_CPU_PERCENT: "23.5",
+      SESSIONBAR_GPU_PERCENT: "12",
+      SESSIONBAR_MEMORY_PERCENT: "8.25",
+      SESSIONBAR_MEMORY_BYTES: "805306368",
+      SESSIONBAR_PROCESS_COUNT: "4",
       SESSIONBAR_HOOK_EVENT: "PreToolUse",
       SESSIONBAR_AGENT_SIGNAL: "api_balance",
       SESSIONBAR_AGENT_SIGNAL_SOURCE: "provider_api",
@@ -73,6 +78,12 @@ exit 1
   assert.equal(payload.token_rate, 17000);
   assert.equal(payload.quota_percent, 65);
   assert.equal(payload.quota_reset, "5h38m");
+  assert.equal(payload.runtime.cpu_percent, 23.5);
+  assert.equal(payload.runtime.gpu_percent, 12);
+  assert.equal(payload.runtime.memory_percent, 8.25);
+  assert.equal(payload.runtime.memory_bytes, 805306368);
+  assert.equal(payload.runtime.process_count, 4);
+  assert.equal(typeof payload.runtime.sampled_at, "number");
   assert.equal(payload.hook_event, "PreToolUse");
   assert.deepEqual(payload.agent_signals, [{
     signal: "api_balance",

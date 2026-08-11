@@ -45,6 +45,7 @@ export function validateSessionPayload(body: unknown): body is SessionReportPayl
   )) return false;
   if (payload.project !== undefined && typeof payload.project !== "string") return false;
   if (payload.project_path !== undefined && typeof payload.project_path !== "string") return false;
+  if (payload.runtime !== undefined && !isValidRuntimeSnapshot(payload.runtime)) return false;
   if (payload.agent_signals !== undefined && (
     !Array.isArray(payload.agent_signals) ||
     payload.agent_signals.length > 8 ||
@@ -63,6 +64,7 @@ export function mergeSessionPayload(
     ...reduced,
     quota_percent: data.quota_percent ?? prev?.quota_percent,
     quota_reset: data.quota_reset ?? prev?.quota_reset,
+    runtime: data.runtime ?? prev?.runtime,
   };
 }
 
@@ -97,5 +99,18 @@ function isValidAgentSignal(value: unknown): value is SessionAgentSignalInput {
   if (signal.used_percent !== undefined && !isNumberInRange(signal.used_percent, 0, 100)) return false;
   if (signal.reset_at !== undefined && !isNonNegativeNumber(signal.reset_at)) return false;
   if (signal.label !== undefined && (typeof signal.label !== "string" || signal.label.length > 128)) return false;
+  return true;
+}
+
+function isValidRuntimeSnapshot(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const runtime = value as Record<string, unknown>;
+  for (const field of ["cpu_percent", "memory_bytes", "process_count", "sampled_at"] as const) {
+    if (runtime[field] !== undefined && !isNonNegativeNumber(runtime[field])) return false;
+  }
+  for (const field of ["gpu_percent", "memory_percent"] as const) {
+    if (runtime[field] !== undefined && !isNumberInRange(runtime[field], 0, 100)) return false;
+  }
+  if (runtime.process_count !== undefined && !Number.isInteger(runtime.process_count)) return false;
   return true;
 }
