@@ -196,7 +196,7 @@ export function runtimeContributionsMarkup(sessions: readonly SessionPayload[]):
       : isCurrentUsage
         ? `${row.label} current usage: ${current}`
         : `${row.label} ${contribution}% contribution · ${current} current usage`;
-    const classes = cx("runtime-matrix-cell", value === undefined && "is-unknown", row.isCount && "is-count");
+    const classes = cx("runtime-matrix-cell", value === undefined && "is-unknown", !row.isCount && value === 0 && "is-zero", row.isCount && "is-count");
     const fill = row.isCount ? "" : `<span class="runtime-matrix-cell-fill"></span>`;
     return `<div class="${classes}"${row.isCount ? "" : ` style="--runtime-fill:${value ?? 0}%"`} aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${fill}<em>${escapeHtml(display)}</em></div>`;
   }).join("")}`).join("");

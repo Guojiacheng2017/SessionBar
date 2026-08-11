@@ -170,6 +170,19 @@ test("renders actual current usage for one sampled active session", () => {
   assert.match(html, />1 process</);
 });
 
+test("renders zero current-usage metrics without a minimum fill", () => {
+  const html = runtimeContributionsMarkup([workingSession({
+    cpu_percent: 0,
+    gpu_percent: 0,
+    memory_percent: 0,
+    memory_bytes: 0,
+    process_count: 0,
+  })]);
+
+  assert.equal((html.match(/runtime-matrix-cell is-zero/g) || []).length, 3);
+  assert.match(html, /class="runtime-matrix-cell is-zero" style="--runtime-fill:0%" aria-label="CPU current usage: 0%"/);
+});
+
 test("keeps exact values in accessible contribution labels for multiple samples", () => {
   const html = runtimeContributionsMarkup([
     workingSession({

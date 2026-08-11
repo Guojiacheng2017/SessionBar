@@ -590,6 +590,7 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 
 .runtime-matrix-cell.is-unknown .runtime-matrix-cell-fill { display: none; }
 .runtime-matrix-cell.is-unknown em { color: var(--sb-muted); text-align: center; }
+.runtime-matrix-cell.is-zero .runtime-matrix-cell-fill { min-width: 0; }
 
 .runtime-matrix-cell.is-count {
   border: 1px solid var(--sb-line-subtle);
