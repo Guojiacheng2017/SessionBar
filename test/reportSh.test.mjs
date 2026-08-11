@@ -191,6 +191,55 @@ exit 1
   assert.equal(readdirSync(markerDir).some(file => file.startsWith("sessionbar-process-")), false);
 });
 
+test("report.sh discovers a Codex process root from the complete command line", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-report-command-process-root-"));
+  const bin = join(root, "bin");
+  const home = join(root, "home");
+  const project = join(root, "Vision-Dash");
+  const capture = join(root, "payload.json");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(bin, "curl"), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    shift
+    printf '%s' "$1" > "$SESSIONBAR_CAPTURE"
+    exit 0
+  fi
+  shift
+done
+exit 1
+`);
+  writeFileSync(join(bin, "ps"), `#!/bin/sh
+case "$*" in
+  *"comm="*) printf '%s\\n' '/Applications/Ch' ;;
+  *"command="*) printf '%s\\n' '/Applications/ChatGPT.app/Contents/Resources/CoDeX -c hook-runner' ;;
+esac
+`);
+  execFileSync("chmod", ["755", join(bin, "curl")]);
+  execFileSync("chmod", ["755", join(bin, "ps")]);
+
+  execFileSync("bash", ["report.sh", "working", "discover process root", "8989"], {
+    cwd: new URL("..", import.meta.url),
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: home,
+      SESSIONBAR_CAPTURE: capture,
+      SESSIONBAR_HOME: join(home, ".sessionbar"),
+      SESSIONBAR_AGENT: "CoDeX",
+      SESSIONBAR_SESSION_ID: "codex-demo",
+      SESSIONBAR_PROJECT_DIR: project,
+      SESSIONBAR_PROCESS_PID: "",
+      AGENTBAR_PROCESS_PID: "",
+    },
+  });
+
+  const payload = JSON.parse(readFileSync(capture, "utf8"));
+  assert.equal(payload.process_pid, process.pid);
+});
+
 test("report.sh reuses the hook session id when hook invocations have different parents", () => {
   const root = mkdtempSync(join(tmpdir(), "sessionbar-report-hook-id-"));
   const home = join(root, "home");

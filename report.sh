@@ -178,7 +178,7 @@ find_owning_agent_pid() {
   local command=""
   local depth=0
   while is_positive_integer "$pid" && [ "$depth" -lt 32 ]; do
-    command=$(ps -p "$pid" -o comm= 2>/dev/null | tr -d '[:space:]')
+    command=$(ps -p "$pid" -o command= 2>/dev/null | tr '[:upper:]' '[:lower:]')
     case "$command" in
       *"$AGENT_SLUG"*)
         printf '%s' "$pid"
