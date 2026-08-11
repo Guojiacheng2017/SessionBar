@@ -192,7 +192,7 @@ find_owning_agent_pid() {
     pid="$parent"
     depth=$((depth + 1))
   done
-  printf '%s' "${PPID:-$$}"
+  return 1
 }
 
 PROCESS_PID="${SESSIONBAR_PROCESS_PID:-${AGENTBAR_PROCESS_PID:-}}"
