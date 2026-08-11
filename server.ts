@@ -71,6 +71,9 @@ const PROVIDER_POLL_ENABLED = process.env.SESSIONBAR_PROVIDER_POLL !== "0";
 const PROVIDER_POLL_MS = Math.max(30_000, parseInt(process.env.SESSIONBAR_PROVIDER_POLL_MS || String(5 * 60 * 1000), 10));
 const CCSWITCH_ENABLED = process.env.SESSIONBAR_CCSWITCH !== "0";
 const envProviderConfigs = PROVIDER_POLL_ENABLED ? providerConfigsFromEnv(process.env) : [];
+const DEFAULT_RUNTIME_SAMPLE_MS = 2000;
+const MIN_RUNTIME_SAMPLE_MS = 100;
+const MAX_RUNTIME_SAMPLE_MS = 2_147_483_647;
 const RUNTIME_SAMPLE_MS = parseRuntimeSampleMs(process.env.SESSIONBAR_RUNTIME_SAMPLE_MS);
 let providerPollInterval: NodeJS.Timeout | undefined;
 let runtimeSampleInterval: NodeJS.Timeout | undefined;
@@ -78,7 +81,9 @@ let runtimeSampleInFlight = false;
 
 export function parseRuntimeSampleMs(value: string | undefined): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 2000;
+  return Number.isInteger(parsed) && parsed >= MIN_RUNTIME_SAMPLE_MS && parsed <= MAX_RUNTIME_SAMPLE_MS
+    ? parsed
+    : DEFAULT_RUNTIME_SAMPLE_MS;
 }
 
 // ---- idle auto-shutdown -------------------------------------------------

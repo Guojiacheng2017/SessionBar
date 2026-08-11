@@ -27,12 +27,26 @@ function session(id, overrides = {}) {
   };
 }
 
-test("runtime sample interval accepts only finite positive numbers", () => {
-  for (const value of [undefined, "", "invalid", "Infinity", "NaN", "0", "-20"]) {
+test("runtime sample interval accepts only safe integers within the supported range", () => {
+  for (const value of [
+    undefined,
+    "",
+    "invalid",
+    "Infinity",
+    "NaN",
+    "0",
+    "-20",
+    "0.5",
+    "12.5",
+    "99",
+    "2147483648",
+  ]) {
     assert.equal(parseRuntimeSampleMs(value), 2000, String(value));
   }
+  assert.equal(parseRuntimeSampleMs("100"), 100);
+  assert.equal(parseRuntimeSampleMs("2000"), 2000);
   assert.equal(parseRuntimeSampleMs("2500"), 2500);
-  assert.equal(parseRuntimeSampleMs("12.5"), 12.5);
+  assert.equal(parseRuntimeSampleMs("2147483647"), 2_147_483_647);
 });
 
 test("applies host samples only to active sessions without changing activity timestamps", () => {
@@ -223,7 +237,7 @@ rmdir "$SESSIONBAR_PS_LOCK" 2>/dev/null || true
       SESSIONBAR_PROVIDER_POLL: "0",
       SESSIONBAR_CCSWITCH: "0",
       SESSIONBAR_IDLE_SHUTDOWN_MS: "60000",
-      SESSIONBAR_RUNTIME_SAMPLE_MS: "20",
+      SESSIONBAR_RUNTIME_SAMPLE_MS: "100",
       SESSIONBAR_PS_TABLE: table,
       SESSIONBAR_PS_CALLS: calls,
       SESSIONBAR_PS_FAILURES: failures,
