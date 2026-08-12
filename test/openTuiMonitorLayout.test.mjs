@@ -10,6 +10,7 @@ import {
   preserveSystemSnapshot,
   providerSummaryLine,
   providerTableContent,
+  systemOverviewContent,
   systemOverviewText,
   visibleModelFingerprint,
 } from "../dist/openTuiMonitor.js";
@@ -77,6 +78,27 @@ test("system overview remains six visual rows at 32 columns", () => {
   assert.equal(lines.length, 6);
   assert.ok(lines.every(line => line.length <= 32));
   assert.deepEqual(lines.map(line => line.split(/\s+/)[0]), ["CPU", "Load", "Memory", "Network", "SessionBar", "Sample"]);
+});
+
+test("system overview uses the balanced dashboard at wide widths", () => {
+  const lines = systemOverviewText(systemSnapshot(), 84, 11_000).split("\n");
+  assert.equal(lines.length, 12);
+  assert.match(lines[0], /SYSTEM \/ HOST.*LIVE 1s/);
+  assert.match(lines[2], /CPU \/ HOST.*MEMORY/);
+  assert.match(lines[3], /37\.5%.*80\.0%/);
+  assert.match(lines[4], /█.*░.*█.*░/);
+  assert.match(lines[7], /LOAD AVERAGE/);
+  assert.match(lines[8], /1 min.*5 min.*15 min/);
+  assert.match(lines[10], /NETWORK.*80\.0 KB\/s.*10\.0 KB\/s/);
+  assert.match(lines[11], /SESSIONBAR.*1\.8%.*79 MB/);
+  assert.ok(lines.every(line => line.length <= 84));
+});
+
+test("wide system overview uses styled OpenTUI content without changing text", () => {
+  const content = systemOverviewContent(systemSnapshot(), 84, 11_000);
+  assert.equal(typeof content, "object");
+  assert.equal(content.chunks.map(chunk => chunk.text).join(""), systemOverviewText(systemSnapshot(), 84, 11_000));
+  assert.ok(content.chunks.some(chunk => chunk.fg));
 });
 
 test("visible model updater suppresses identical renders and repaints visible changes", () => {

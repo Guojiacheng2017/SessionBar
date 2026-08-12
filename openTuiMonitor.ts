@@ -731,36 +731,201 @@ function detailTextForProject(
   ].join("\n");
 }
 
-export function systemOverviewText(
+const SYSTEM_DASHBOARD_MIN_WIDTH = 64;
+const SYSTEM_DASHBOARD_GAP = 3;
+const SYSTEM_DASHBOARD_LABEL_WIDTH = 12;
+
+function systemDashboardColumns(width: number): { left: number; gap: number; right: number } {
+  const gap = SYSTEM_DASHBOARD_GAP;
+  const left = Math.floor((width - gap) / 2);
+  return { left, gap, right: width - left - gap };
+}
+
+function systemDashboardPair(left: string, right: string, width: number, alignRight = false): string {
+  const columns = systemDashboardColumns(width);
+  const leftText = truncatePlain(left, columns.left).padEnd(columns.left);
+  const rightValue = truncatePlain(right, columns.right);
+  const rightText = alignRight ? rightValue.padStart(columns.right) : rightValue;
+  return truncatePlain(`${leftText}${" ".repeat(columns.gap)}${rightText}`, width);
+}
+
+function systemDashboardTriple(values: readonly string[], width: number): string {
+  const gap = 2;
+  const available = Math.max(3, width - gap * 2);
+  const first = Math.floor(available / 3);
+  const second = Math.floor(available / 3);
+  const third = available - first - second;
+  return truncatePlain([
+    truncatePlain(values[0] ?? "", first).padEnd(first),
+    truncatePlain(values[1] ?? "", second).padEnd(second),
+    truncatePlain(values[2] ?? "", third),
+  ].join(" ".repeat(gap)), width);
+}
+
+function systemDashboardMetricLine(label: string, left: string, right: string, width: number): string {
+  const labelWidth = Math.min(SYSTEM_DASHBOARD_LABEL_WIDTH, Math.max(1, width));
+  const contentWidth = Math.max(1, width - labelWidth);
+  const content = systemDashboardPair(left, right, contentWidth);
+  return truncatePlain(`${truncatePlain(label, labelWidth).padEnd(labelWidth)}${content}`, width);
+}
+
+function systemMetricColor(value: number | undefined): PaletteColor {
+  if (value === undefined || !Number.isFinite(value)) return PALETTE.muted;
+  if (value >= 90) return PALETTE.red;
+  if (value >= 70) return PALETTE.yellow;
+  return PALETTE.green;
+}
+
+function systemMetricStatus(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "UNAVAILABLE";
+  if (value >= 90) return "CRITICAL";
+  if (value >= 70) return "HIGH";
+  return "NORMAL";
+}
+
+function systemFreshnessColor(sampleAge: number | undefined): PaletteColor {
+  if (sampleAge === undefined) return PALETTE.muted;
+  if (sampleAge <= 5) return PALETTE.green;
+  if (sampleAge <= 15) return PALETTE.yellow;
+  return PALETTE.red;
+}
+
+function systemOverviewLines(
   snapshot: SystemEfficiencySnapshot | undefined,
-  width = 44,
-  now = Date.now(),
-): string {
+  width: number,
+  now: number,
+): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
   const barWidth = Math.max(3, Math.min(12, safeWidth - 28));
   const cpu = snapshot?.cpu_percent;
   const memory = snapshot?.memory_percent;
   const load = snapshot?.load_average;
   const sampleAge = snapshot ? Math.max(0, Math.floor((now - snapshot.sampled_at) / 1000)) : undefined;
-  const compact = safeWidth < 40;
-  const lines = compact
-    ? [
-        `CPU ${percentValue(cpu)} ${systemProgressBar(cpu, 100, barWidth)}`,
-        `Load ${load ? load.map(value => value.toFixed(2)).join(" ") : "— — —"}`,
-        `Memory ${compactBytes(snapshot?.memory_used_bytes)}/${compactBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)}`,
-        `Network D${compactByteRate(snapshot?.network_down_bytes_per_second)} U${compactByteRate(snapshot?.network_up_bytes_per_second)}`,
-        `SessionBar ${percentValue(snapshot?.server_cpu_percent)} ${compactBytes(snapshot?.server_memory_bytes)}`,
-        `Sample ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
-      ]
-    : [
-        `CPU        ${percentValue(cpu)} ${systemProgressBar(cpu, 100, barWidth)}`,
-        `Load       ${load ? load.map(value => value.toFixed(2)).join("  ") : "—  —  —"}`,
-        `Memory     ${formatSystemBytes(snapshot?.memory_used_bytes)} / ${formatSystemBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)} ${systemProgressBar(memory, 100, barWidth)}`,
-        `Network    down ${formatByteRate(snapshot?.network_down_bytes_per_second)}  up ${formatByteRate(snapshot?.network_up_bytes_per_second)}`,
-        `SessionBar CPU ${percentValue(snapshot?.server_cpu_percent)}  MEM ${formatSystemBytes(snapshot?.server_memory_bytes)}`,
-        `Sample     ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
-      ];
-  return lines.map(line => truncatePlain(line, safeWidth)).join("\n");
+
+  if (safeWidth < SYSTEM_DASHBOARD_MIN_WIDTH) {
+    const compact = safeWidth < 40;
+    return (compact
+      ? [
+          `CPU ${percentValue(cpu)} ${systemProgressBar(cpu, 100, barWidth)}`,
+          `Load ${load ? load.map(value => value.toFixed(2)).join(" ") : "— — —"}`,
+          `Memory ${compactBytes(snapshot?.memory_used_bytes)}/${compactBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)}`,
+          `Network D${compactByteRate(snapshot?.network_down_bytes_per_second)} U${compactByteRate(snapshot?.network_up_bytes_per_second)}`,
+          `SessionBar ${percentValue(snapshot?.server_cpu_percent)} ${compactBytes(snapshot?.server_memory_bytes)}`,
+          `Sample ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
+        ]
+      : [
+          `CPU        ${percentValue(cpu)} ${systemProgressBar(cpu, 100, barWidth)}`,
+          `Load       ${load ? load.map(value => value.toFixed(2)).join("  ") : "—  —  —"}`,
+          `Memory     ${formatSystemBytes(snapshot?.memory_used_bytes)} / ${formatSystemBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)} ${systemProgressBar(memory, 100, barWidth)}`,
+          `Network    down ${formatByteRate(snapshot?.network_down_bytes_per_second)}  up ${formatByteRate(snapshot?.network_up_bytes_per_second)}`,
+          `SessionBar CPU ${percentValue(snapshot?.server_cpu_percent)}  MEM ${formatSystemBytes(snapshot?.server_memory_bytes)}`,
+          `Sample     ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
+        ]).map(line => truncatePlain(line, safeWidth));
+  }
+
+  const dashboardBarWidth = Math.max(8, Math.min(18, systemDashboardColumns(safeWidth).left));
+  const freshness = sampleAge === undefined ? "WAITING" : `LIVE ${sampleAge}s`;
+  const loadValues = load?.map(value => value.toFixed(2)) ?? ["—", "—", "—"];
+  return [
+    systemDashboardPair("SYSTEM / HOST", freshness, safeWidth, true),
+    "",
+    systemDashboardPair("CPU / HOST", "MEMORY", safeWidth),
+    systemDashboardPair(percentValue(cpu), percentValue(memory), safeWidth),
+    systemDashboardPair(
+      systemProgressBar(cpu, 100, dashboardBarWidth),
+      systemProgressBar(memory, 100, dashboardBarWidth),
+      safeWidth,
+    ),
+    systemDashboardPair(
+      systemMetricStatus(cpu),
+      `${formatSystemBytes(snapshot?.memory_used_bytes)} / ${formatSystemBytes(snapshot?.memory_total_bytes)}`,
+      safeWidth,
+    ),
+    "",
+    "LOAD AVERAGE",
+    systemDashboardTriple([
+      `1 min  ${loadValues[0]}`,
+      `5 min  ${loadValues[1]}`,
+      `15 min  ${loadValues[2]}`,
+    ], safeWidth),
+    "─".repeat(safeWidth),
+    systemDashboardMetricLine(
+      "NETWORK",
+      `down ${formatByteRate(snapshot?.network_down_bytes_per_second)}`,
+      `up ${formatByteRate(snapshot?.network_up_bytes_per_second)}`,
+      safeWidth,
+    ),
+    systemDashboardMetricLine(
+      "SESSIONBAR",
+      `CPU ${percentValue(snapshot?.server_cpu_percent)}`,
+      `MEM ${formatSystemBytes(snapshot?.server_memory_bytes)}`,
+      safeWidth,
+    ),
+  ].map(line => truncatePlain(line, safeWidth));
+}
+
+export function systemOverviewText(
+  snapshot: SystemEfficiencySnapshot | undefined,
+  width = 44,
+  now = Date.now(),
+): string {
+  return systemOverviewLines(snapshot, width, now).join("\n");
+}
+
+function pushSystemLine(chunks: TextChunk[], parts: readonly TextChunk[], addNewline: boolean): void {
+  chunks.push(...parts);
+  if (addNewline) chunks.push(chunk("\n"));
+}
+
+export function systemOverviewContent(
+  snapshot: SystemEfficiencySnapshot | undefined,
+  width = 44,
+  now = Date.now(),
+): string | StyledText {
+  const safeWidth = Math.max(1, Math.floor(width));
+  if (safeWidth < SYSTEM_DASHBOARD_MIN_WIDTH) {
+    return systemOverviewText(snapshot, safeWidth, now);
+  }
+
+  const lines = systemOverviewLines(snapshot, safeWidth, now);
+  const columns = systemDashboardColumns(safeWidth);
+  const rightStart = columns.left + columns.gap;
+  const labelWidth = Math.min(SYSTEM_DASHBOARD_LABEL_WIDTH, safeWidth);
+  const cpuColor = systemMetricColor(snapshot?.cpu_percent);
+  const memoryColor = systemMetricColor(snapshot?.memory_percent);
+  const serverColor = systemMetricColor(snapshot?.server_cpu_percent);
+  const sampleAge = snapshot ? Math.max(0, Math.floor((now - snapshot.sampled_at) / 1000)) : undefined;
+  const chunks: TextChunk[] = [];
+
+  const paired = (line: string, leftColor: PaletteColor, rightColor: PaletteColor, attributes = TextAttributes.NONE): TextChunk[] => [
+    chunk(line.slice(0, columns.left), leftColor, attributes),
+    chunk(line.slice(columns.left, rightStart), PALETTE.dim),
+    chunk(line.slice(rightStart), rightColor, attributes),
+  ];
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!;
+    const addNewline = index < lines.length - 1;
+    if (index === 0) {
+      pushSystemLine(chunks, paired(line, PALETTE.fg, systemFreshnessColor(sampleAge), TextAttributes.BOLD), addNewline);
+    } else if (index === 2) {
+      pushSystemLine(chunks, paired(line, PALETTE.muted, PALETTE.muted, TextAttributes.BOLD), addNewline);
+    } else if (index >= 3 && index <= 5) {
+      pushSystemLine(chunks, paired(line, cpuColor, memoryColor, index === 3 ? TextAttributes.BOLD : TextAttributes.NONE), addNewline);
+    } else if (index === 7) {
+      pushSystemLine(chunks, [chunk(line, PALETTE.muted, TextAttributes.BOLD)], addNewline);
+    } else if (index === 9) {
+      pushSystemLine(chunks, [chunk(line, PALETTE.dim)], addNewline);
+    } else if (index === 10) {
+      pushSystemLine(chunks, [chunk(line.slice(0, labelWidth), PALETTE.muted, TextAttributes.BOLD), chunk(line.slice(labelWidth), PALETTE.cyan)], addNewline);
+    } else if (index === 11) {
+      pushSystemLine(chunks, [chunk(line.slice(0, labelWidth), PALETTE.muted, TextAttributes.BOLD), chunk(line.slice(labelWidth), serverColor)], addNewline);
+    } else {
+      pushSystemLine(chunks, [chunk(line)], addNewline);
+    }
+  }
+
+  return new StyledText(chunks);
 }
 
 function percentValue(value: number | undefined): string {
@@ -1069,7 +1234,7 @@ export function monitorVisibleModel(
           port: opts?.port ?? 0,
           stateDir: opts?.stateDir ?? "",
         }, now)
-      : systemOverviewText(state.system, detailWidth, now);
+      : systemOverviewContent(state.system, detailWidth, now);
   const sessionTitle = state.projectFocusKey && scopeSessions[0]
     ? `Sessions / ${projectName(scopeSessions[0])}`
     : "All Sessions";
