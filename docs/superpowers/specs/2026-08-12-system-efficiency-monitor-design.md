@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace SessionBar's costly and unreliable per-session process-tree sampling with a low-overhead system health snapshot. The monitor should show the machine's overall CPU, load, memory, and network activity together with the SessionBar server's own CPU and memory usage.
+Replace SessionBar's costly and unreliable per-session process-tree sampling with a low-overhead system health snapshot. The monitor should show the machine's overall CPU, load, memory, network activity, and available device and battery temperatures. SessionBar server CPU and memory remain transport-compatible metrics but are not shown in the TUI System details panel.
 
 The sampling path must remain independent from session discovery and UI rendering so a metric update cannot trigger a Codex rollout scan or a full session broadcast.
 
@@ -14,10 +14,12 @@ The first version exposes:
 - load averages for 1, 5, and 15 minutes
 - used and total physical memory, plus utilization percentage
 - aggregate network download and upload throughput
+- optional device CPU/SoC average temperature
+- optional battery temperature
 - SessionBar server CPU utilization and resident memory
 - sample timestamp and freshness
 
-Disk, battery, GPU, top processes, and per-session resource attribution are out of scope.
+Disk, battery charge state, GPU, top processes, and per-session resource attribution are out of scope.
 
 ## Architecture
 
@@ -45,6 +47,15 @@ Network throughput needs platform-specific cumulative interface counters. On mac
 
 The network collector must have a timeout, tolerate unsupported platforms, and avoid shell pipelines. A failed network read leaves network rates unavailable for that sample without discarding CPU, memory, or server metrics.
 
+Temperature collection is optional and independently cached for 30 seconds so it does not run on the two-second system sampling cadence. On macOS:
+
+- use an installed `macmon` binary for the CPU/SoC average temperature without sudo
+- read `AppleSmartBattery.Temperature` through one bounded `ioreg` invocation for the battery temperature
+- parse `macmon` as JSON and accept only finite, plausible Celsius values
+- preserve the last valid value when one source fails; expose an unavailable value when a source has never succeeded
+
+Do not install `macmon`, invoke `sudo`, infer a Celsius value from thermal pressure, or run either temperature command from a UI process.
+
 ## Data Contract
 
 Introduce a server-level snapshot instead of embedding runtime data in each session:
@@ -58,6 +69,8 @@ interface SystemEfficiencySnapshot {
   memory_percent: number;
   network_down_bytes_per_second?: number;
   network_up_bytes_per_second?: number;
+  device_temperature_celsius?: number;
+  battery_temperature_celsius?: number;
   server_cpu_percent?: number;
   server_memory_bytes: number;
   sampled_at: number;
@@ -86,8 +99,9 @@ For detail panels at least 64 columns wide, use a balanced dashboard layout:
 - a quiet `SYSTEM / HOST` heading with sample freshness aligned to the right
 - side-by-side CPU and memory metrics with prominent percentages, fixed-width bars, and semantic health colors
 - a three-column load-average row labelled `1 min`, `5 min`, and `15 min`
-- one network row that visually separates download and upload throughput
-- one SessionBar row that shows server CPU and resident memory together
+- separate `DOWNLOAD` and `UPLOAD` rows
+- a temperature section with `DEVICE / CPU` and `BATTERY` values
+- no SessionBar self-usage row
 
 The dashboard is rendered as styled OpenTUI text within the existing details panel. It does not add nested bordered boxes, mouse handling, animation, history buffers, or another rendering loop. The current system snapshot remains the only data source.
 
@@ -96,8 +110,8 @@ For detail panels narrower than 64 columns, retain the compact fixed-row layout 
 - `CPU` with percentage and a fixed-width bar
 - `Load` with 1m, 5m, and 15m values
 - `Memory` with percentage, used/total values, and a fixed-width bar
-- `Network` with down/up rates
-- `SessionBar` with server CPU and RSS
+- separate `Download` and `Upload` rows
+- `Device` and `Battery` temperature rows
 - `Sample` with relative freshness or an unavailable state
 
 All rows are width-bounded before they reach OpenTUI. Numeric changes must not alter panel geometry, and missing metrics render as unavailable values without collapsing a section.
@@ -109,6 +123,7 @@ The project/session/details hierarchy remains unchanged. System health is global
 Sampling, transport, and painting have separate clocks:
 
 - sampler: two seconds
+- temperature refresh: thirty seconds, cached inside the server-side collector
 - session discovery: independent and slower/bounded
 - UI animation/input: controlled by the TUI framework
 
