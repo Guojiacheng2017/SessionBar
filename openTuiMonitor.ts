@@ -1193,76 +1193,102 @@ function nextAgeChangeAt(timestamp: number, now: number): number {
   return timestamp + (Math.floor(seconds / 3600) + 1) * 3_600_000;
 }
 
-function visibleFreshnessTimestamps(state: Readonly<MonitorState>, renderer: CliRenderer): number[] {
-  if (state.view === "providers") return [];
+function nextWorkflowAgeChangeAt(timestamp: number, now: number): number {
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 60) return Math.max(now + 1, timestamp + (seconds + 1) * 1000);
+  if (seconds < 3600) return timestamp + (Math.floor(seconds / 60) + 1) * 60_000;
+  return timestamp + (Math.floor(seconds / 3600) + 1) * 3_600_000;
+}
+
+function nextResetChangeAt(resetAt: number, now: number): number | undefined {
+  const millis = resetAt < 1_000_000_000_000 ? resetAt * 1000 : resetAt;
+  const seconds = Math.max(0, Math.floor((millis - now) / 1000));
+  if (seconds <= 0) return undefined;
+  if (seconds < 60) return millis - seconds * 1000 + 1;
+  if (seconds < 3600) return millis - Math.floor(seconds / 60) * 60_000 + 1;
+  return millis - Math.floor(seconds / 3600) * 3_600_000 + 1;
+}
+
+function earlierDeadline(current: number | undefined, candidate: number | undefined, now: number): number | undefined {
+  if (candidate === undefined || !Number.isFinite(candidate) || candidate <= now) return current;
+  return current === undefined ? candidate : Math.min(current, candidate);
+}
+
+function visibleSessionAgeDeadline(
+  state: Readonly<MonitorState>,
+  renderer: CliRenderer,
+  now: number,
+): number | undefined {
   const shown = applyFilter(state.sessions, state.filterText);
   const groups = groupByProject(shown);
   const projectData = projectRows(groups, state, 0);
   const projectIndex = state.projectCursorKey ? projectData.findIndex(row => row.key === state.projectCursorKey) : 0;
   const projectSlots = Math.max(2, Math.min(6, renderer.height - 13));
   const visibleProjects = new Set(visibleWindow(projectData, projectIndex, projectSlots).map(row => row.key));
-  const timestamps = [...groups.entries()]
-    .filter(([key]) => visibleProjects.has(key))
-    .map(([, sessions]) => latestTimestamp(sessions));
+  let deadline: number | undefined;
+  for (const [key, sessions] of groups.entries()) {
+    if (visibleProjects.has(key)) deadline = earlierDeadline(deadline, nextAgeChangeAt(latestTimestamp(sessions), now), now);
+  }
 
   const scope = state.projectFocusKey ? selectedProjectSessions(state) : shown;
   const selectedIndex = state.projectFocusKey ? Math.max(0, state.selectedIdx) : 0;
   const sessionSlots = Math.max(4, renderer.height - 17);
-  timestamps.push(...visibleWindow(scope, selectedIndex, sessionSlots).map(session => session.timestamp || 0));
+  for (const session of visibleWindow(scope, selectedIndex, sessionSlots)) {
+    if (session.timestamp) deadline = earlierDeadline(deadline, nextAgeChangeAt(session.timestamp, now), now);
+  }
 
   const selected = selectedSession(state);
-  if (selected) timestamps.push(...nestedTimestamps(selected));
-  else if (state.projectFocusKey && scope.length > 0) timestamps.push(latestTimestamp(scope));
-  return [...new Set(timestamps.filter(value => Number.isFinite(value) && value > 0))];
+  if (selected?.timestamp) deadline = earlierDeadline(deadline, nextAgeChangeAt(selected.timestamp, now), now);
+  return deadline;
 }
 
-function nestedTimestamps(value: unknown): number[] {
-  if (Array.isArray(value)) return value.flatMap(nestedTimestamps);
-  if (!value || typeof value !== "object") return [];
-  const timestamps: number[] = [];
-  for (const [key, entry] of Object.entries(value)) {
-    if ((key === "timestamp" || key === "sampled_at") && typeof entry === "number" && Number.isFinite(entry)) {
-      timestamps.push(entry);
-    } else if (entry && typeof entry === "object") {
-      timestamps.push(...nestedTimestamps(entry));
+function activeDetailDeadline(state: Readonly<MonitorState>, now: number): number | undefined {
+  const session = selectedSession(state);
+  if (!session) return undefined;
+  let deadline: number | undefined;
+  if (state.detailTab === "flow" && !(session.flow?.edges?.length)) {
+    const workflow = session.workflow_events ?? [];
+    const firstVisible = Math.max(0, workflow.length - 10);
+    for (let index = firstVisible; index < workflow.length; index++) {
+      const timestamp = workflow[index]?.timestamp;
+      if (timestamp) deadline = earlierDeadline(deadline, nextWorkflowAgeChangeAt(timestamp, now), now);
+    }
+  } else if (state.detailTab === "usage") {
+    const signals = session.agent_signals ?? [];
+    let visible = 0;
+    for (let index = signals.length - 1; index >= 0 && visible < 4; index--) {
+      const signal = signals[index]!;
+      const paintsRow = signal.balance !== undefined
+        || signal.remaining !== undefined
+        || signal.used_percent !== undefined
+        || signal.used !== undefined
+        || signal.limit !== undefined
+        || signal.status !== undefined;
+      if (!paintsRow) continue;
+      visible++;
+      if (signal.reset_at !== undefined) {
+        deadline = earlierDeadline(deadline, nextResetChangeAt(signal.reset_at, now), now);
+      }
     }
   }
-  return timestamps;
+  return deadline;
 }
 
 export function nextVisibleFreshnessDelay(
   state: Readonly<MonitorState>,
   renderer: CliRenderer,
   now = Date.now(),
-  opts?: Pick<OpenTuiMonitorOptions, "apiHost" | "port" | "stateDir">,
+  _opts?: Pick<OpenTuiMonitorOptions, "apiHost" | "port" | "stateDir">,
 ): number | undefined {
   if (state.view === "providers") return undefined;
-  const baseline = visibleModelFingerprint(monitorVisibleModel(state, renderer, now, opts));
-  const candidates = visibleFreshnessTimestamps(state, renderer).map(timestamp => ({ timestamp, at: nextAgeChangeAt(timestamp, now) }));
+  let deadline = visibleSessionAgeDeadline(state, renderer, now);
+  deadline = earlierDeadline(deadline, activeDetailDeadline(state, now), now);
   if (!state.projectFocusKey && state.system) {
     const timestamp = state.system.sampled_at;
     const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
-    candidates.push({ timestamp, at: timestamp + (seconds + 1) * 1000 });
+    deadline = earlierDeadline(deadline, timestamp + (seconds + 1) * 1000, now);
   }
-  if (state.projectFocusKey) {
-    for (const session of selectedProjectSessions(state)) {
-      const staleAt = (session.timestamp || 0) + 120_001;
-      if (staleAt > now) candidates.push({ timestamp: Number.NaN, at: staleAt });
-    }
-  }
-
-  for (let attempts = 0; candidates.length > 0 && attempts < 10_000; attempts++) {
-    candidates.sort((left, right) => left.at - right.at);
-    const candidate = candidates.shift()!;
-    if (visibleModelFingerprint(monitorVisibleModel(state, renderer, candidate.at, opts)) !== baseline) {
-      return Math.max(1, candidate.at - now);
-    }
-    if (Number.isFinite(candidate.timestamp)) {
-      candidate.at = nextAgeChangeAt(candidate.timestamp, candidate.at);
-      candidates.push(candidate);
-    }
-  }
-  return undefined;
+  return deadline === undefined ? undefined : Math.max(1, deadline - now);
 }
 
 export function createSingleFlightRefresh<T>(

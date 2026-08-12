@@ -224,6 +224,111 @@ test("next visible freshness update waits until formatted output changes", () =>
   assert.equal(nextVisibleFreshnessDelay(monitorState({ view: "providers" }), renderer, 10_100), undefined);
 });
 
+test("flow workflow age schedules its first one-second transition", () => {
+  const now = 1_700_000_000_100;
+  const session = {
+    session_id: "flow-session",
+    session_type: "Codex",
+    status: "working",
+    task_name: "flow",
+    project: "Shown",
+    timestamp: now - 65_000,
+    workflow_events: [{
+      timestamp: now - 100,
+      raw_event: "PreToolUse",
+      canonical_stage_id: "tool",
+      canonical_category: "tool",
+      canonical_direction: "start",
+      mapping_type: "exact",
+      confidence: "high",
+    }],
+  };
+  const state = monitorState({
+    sessions: [session],
+    system: undefined,
+    filterText: "",
+    projectCursorKey: "name:Shown",
+    projectFocusKey: "name:Shown",
+    selectedIdx: 0,
+    selectedId: session.session_id,
+    detailId: session.session_id,
+    detailTab: "flow",
+  });
+  assert.equal(nextVisibleFreshnessDelay(state, { width: 100, height: 30 }, now), 900);
+});
+
+test("usage reset countdown schedules its next visible decrement", () => {
+  const now = 1_700_000_000_100;
+  const session = {
+    session_id: "usage-session",
+    session_type: "Codex",
+    status: "working",
+    task_name: "usage",
+    project: "Shown",
+    timestamp: now - 65_000,
+    agent_signals: [{
+      signal: "quota",
+      timestamp: now - 5_000,
+      remaining: 10,
+      reset_at: 1_700_000_002,
+    }],
+  };
+  const state = monitorState({
+    sessions: [session],
+    system: undefined,
+    filterText: "",
+    projectCursorKey: "name:Shown",
+    projectFocusKey: "name:Shown",
+    selectedIdx: 0,
+    selectedId: session.session_id,
+    detailId: session.session_id,
+    detailTab: "usage",
+  });
+  assert.equal(nextVisibleFreshnessDelay(state, { width: 100, height: 30 }, now), 901);
+});
+
+test("freshness scheduling reads only bounded active Flow rows", () => {
+  const now = 1_700_000_000_100;
+  let indexedReads = 0;
+  const workflow = new Proxy(Array.from({ length: 10_000 }, (_, index) => ({
+    timestamp: now - index * 1000,
+    raw_event: `event-${index}`,
+    canonical_stage_id: "tool",
+    canonical_category: "tool",
+    canonical_direction: "start",
+    mapping_type: "exact",
+    confidence: "high",
+  })), {
+    get(target, property, receiver) {
+      if (typeof property === "string" && /^\d+$/.test(property)) indexedReads++;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const session = {
+    session_id: "bounded-flow",
+    session_type: "Codex",
+    status: "working",
+    task_name: "flow",
+    project: "Shown",
+    timestamp: now - 65_000,
+    workflow_events: workflow,
+  };
+  const state = monitorState({
+    sessions: [session],
+    system: undefined,
+    filterText: "",
+    projectCursorKey: "name:Shown",
+    projectFocusKey: "name:Shown",
+    selectedIdx: 0,
+    selectedId: session.session_id,
+    detailId: session.session_id,
+    detailTab: "flow",
+  });
+
+  nextVisibleFreshnessDelay(state, { width: 100, height: 30 }, now);
+  assert.ok(indexedReads <= 10, `read ${indexedReads} workflow events`);
+});
+
 test("single-flight refresh skips overlapping poll and supersedes it for manual refresh", async () => {
   const pending = [];
   const applied = [];
