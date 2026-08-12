@@ -122,7 +122,29 @@ export interface MonitorBodyLayout {
   detailContentWidth: number;
 }
 
-type VisibleModel = Record<string, unknown>;
+export interface MonitorVisibleModel {
+  view: "sessions" | "providers";
+  width: number;
+  height: number;
+  title: string;
+  online: string;
+  activity: string;
+  projectsVisible: boolean;
+  projectsTitle: string;
+  projectsContent: TextTableContent;
+  sessionsWidth: number;
+  sessionsTitle: string;
+  sessionsVisible: boolean;
+  sessionsContent: TextTableContent;
+  providersVisible: boolean;
+  providersContent: TextTableContent;
+  detailsVisible: boolean;
+  detailsWidth: number;
+  detailsTitle: string;
+  detailsContent: string | StyledText;
+  footer: string;
+  footerError: boolean;
+}
 
 const PALETTE = {
   bg: "transparent",
@@ -402,22 +424,25 @@ function contextPercent(s: Session): number | undefined {
 }
 
 export function monitorBodyLayout(rendererWidth: number): MonitorBodyLayout {
-  const bodyWidth = Math.max(40, Math.floor(rendererWidth) - 2);
+  const bodyWidth = Math.max(20, Math.floor(rendererWidth) - 2);
   const gap = bodyWidth >= 48 ? 1 : 0;
   const minDetail = bodyWidth >= 90 ? 44 : 32;
   const minSidebar = bodyWidth >= 90 ? 34 : 24;
   const maxSidebar = bodyWidth >= 140 ? 46 : 42;
-  const sidebarMax = Math.max(minSidebar, Math.min(maxSidebar, bodyWidth - gap - minDetail));
-  const sidebarPanelWidth = clampNumber(Math.round(bodyWidth * 0.31), minSidebar, sidebarMax);
-  const detailPanelWidth = Math.max(minDetail, bodyWidth - sidebarPanelWidth - gap);
+  const available = bodyWidth - gap;
+  const effectiveMinDetail = Math.min(minDetail, Math.max(10, available - 12));
+  const effectiveMinSidebar = Math.min(minSidebar, Math.max(10, available - effectiveMinDetail));
+  const sidebarMax = Math.max(effectiveMinSidebar, Math.min(maxSidebar, available - effectiveMinDetail));
+  const sidebarPanelWidth = clampNumber(Math.round(bodyWidth * 0.31), effectiveMinSidebar, sidebarMax);
+  const detailPanelWidth = available - sidebarPanelWidth;
 
   return {
     bodyWidth,
     gap,
     sidebarPanelWidth,
     detailPanelWidth,
-    sidebarLineWidth: Math.max(16, sidebarPanelWidth - 4),
-    detailContentWidth: Math.max(32, detailPanelWidth - 4),
+    sidebarLineWidth: Math.max(1, sidebarPanelWidth - 4),
+    detailContentWidth: Math.max(1, detailPanelWidth - 4),
   };
 }
 
@@ -437,7 +462,7 @@ function agentsText(sessions: readonly Session[]): string {
     .join(", ");
 }
 
-function projectRows(groups: Map<string, Session[]>, state: Readonly<MonitorState>): ProjectRow[] {
+function projectRows(groups: Map<string, Session[]>, state: Readonly<MonitorState>, now = Date.now()): ProjectRow[] {
   return [...groups.entries()].map(([key, sessions]) => {
     const sample = sessions[0]!;
     const marker = key === state.projectFocusKey ? "*" : key === state.projectCursorKey ? ">" : "";
@@ -449,7 +474,7 @@ function projectRows(groups: Map<string, Session[]>, state: Readonly<MonitorStat
       agents: agentsText(sessions),
       status: inlineStatus(sessions),
       path: projectPathSummary(sessions),
-      age: age(latestTimestamp(sessions)),
+      age: age(latestTimestamp(sessions), now),
     };
   });
 }
@@ -506,7 +531,7 @@ function projectTableContent(rows: readonly ProjectRow[], state: Readonly<Monito
   return content;
 }
 
-function sessionTableContent(rows: readonly SessionRow[], state: Readonly<MonitorState>, renderer: CliRenderer): TextTableContent {
+function sessionTableContent(rows: readonly SessionRow[], state: Readonly<MonitorState>, renderer: CliRenderer, now = Date.now()): TextTableContent {
   const content: TextTableContent = [];
   if (rows.length === 0) return [[cell(state.filterText ? "No sessions match the current filter" : "No sessions reporting yet", PALETTE.muted)]];
 
@@ -514,7 +539,6 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
   const slots = Math.max(4, renderer.height - 17);
   const visible = visibleWindow(rows, selectedIndex, slots);
   const lineWidth = monitorBodyLayout(renderer.width).sidebarLineWidth;
-  const now = Date.now();
   for (const row of visible) {
     const selected = state.projectFocusKey && row.key === state.selectedId;
     const attrs = selected || row.unread ? TextAttributes.BOLD : TextAttributes.NONE;
@@ -609,37 +633,10 @@ export function providerTableContent(rows: readonly PlanRow[], renderer: CliRend
 }
 
 
-function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<MonitorState>, opts: OpenTuiMonitorOptions): void {
-  const layout = monitorBodyLayout(renderer.width);
-  const providers = state.providers || [];
-  const apiCount = providers.filter(r => r.form === "api").length;
-  const subCount = providers.length - apiCount;
-  const error = state.providersError;
-
-  refs.title.content = "SessionBar [Providers]";
-  refs.online.content = `online :${opts.port}`;
-  refs.projectsBox.visible = false;
-  refs.activity.content = error
-    ? "provider fetch failed"
-    : [
-        `${providers.length} provider${providers.length !== 1 ? "s" : ""}`,
-        subCount > 0 ? `${subCount} subscription` : "",
-        apiCount > 0 ? `${apiCount} api` : "",
-      ].filter(Boolean).join("  ");
-  refs.sessionsBox.title = `Providers (${providers.length})`;
-  refs.sessionsBox.width = layout.bodyWidth;
-  refs.detailsBox.visible = false;
-  refs.sessionsTable.visible = false;
-  refs.providersTable.visible = true;
-  refs.providersTable.content = providerTableContent(providers, renderer, error);
-  refs.footer.content = state.errorMsg ? `! ${state.errorMsg}` : "v / P  switch to sessions  r refresh  / filter  w web  q quit";
-  refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;
-}
-
-function healthScore(sessions: readonly Session[]): { score: number; label: string; color: string } {
+function healthScore(sessions: readonly Session[], now = Date.now()): { score: number; label: string; color: string } {
   if (sessions.length === 0) return { score: 0, label: "waiting for sessions", color: PALETTE.muted };
   const counts = statusCounts(sessions);
-  const stale = sessions.filter(s => Date.now() - (s.timestamp || 0) > 120_000).length;
+  const stale = sessions.filter(s => now - (s.timestamp || 0) > 120_000).length;
   const highContext = sessions.filter(s => (contextPercent(s) || 0) >= 85).length;
   const penalty = counts.errored * 35 + counts.blocked * 20 + stale * 10 + highContext * 8;
   const score = Math.max(0, Math.min(100, 100 - penalty));
@@ -693,7 +690,12 @@ function projectTailLines(scope: readonly Session[]): string[] {
   ];
 }
 
-function detailTextForProject(scope: readonly Session[], all: readonly Session[], opts: OpenTuiMonitorOptions): string {
+function detailTextForProject(
+  scope: readonly Session[],
+  all: readonly Session[],
+  opts: Pick<OpenTuiMonitorOptions, "apiHost" | "port" | "stateDir">,
+  now = Date.now(),
+): string {
   if (scope.length === 0) {
     return [
       "PROJECT none selected",
@@ -705,7 +707,7 @@ function detailTextForProject(scope: readonly Session[], all: readonly Session[]
   }
 
   const sample = scope[0]!;
-  const health = healthScore(scope);
+  const health = healthScore(scope, now);
   return [
     `PROJECT ${projectName(sample)}`,
     `path ${projectPathSummary(scope)}`,
@@ -713,7 +715,7 @@ function detailTextForProject(scope: readonly Session[], all: readonly Session[]
     `agents ${agentsText(scope)}`,
     `status ${inlineStatus(scope)}`,
     `health ${health.score} | ${health.label}`,
-    `latest ${age(latestTimestamp(scope))}`,
+    `latest ${age(latestTimestamp(scope), now)}`,
     "",
     ...projectActivityLines(scope),
     ...projectTailLines(scope),
@@ -746,19 +748,31 @@ export function systemOverviewText(
   width = 44,
   now = Date.now(),
 ): string {
-  const barWidth = Math.max(8, Math.min(16, Math.floor(width / 4)));
+  const safeWidth = Math.max(1, Math.floor(width));
+  const barWidth = Math.max(3, Math.min(12, safeWidth - 28));
   const cpu = snapshot?.cpu_percent;
   const memory = snapshot?.memory_percent;
   const load = snapshot?.load_average;
   const sampleAge = snapshot ? Math.max(0, Math.floor((now - snapshot.sampled_at) / 1000)) : undefined;
-  return [
-    `CPU        ${percentValue(cpu)} ${runtimeProgressBar(cpu, 100, barWidth)}`,
-    `Load       ${load ? load.map(value => value.toFixed(2)).join("  ") : "—  —  —"}`,
-    `Memory     ${formatRuntimeBytes(snapshot?.memory_used_bytes)} / ${formatRuntimeBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)} ${runtimeProgressBar(memory, 100, barWidth)}`,
-    `Network    down ${formatByteRate(snapshot?.network_down_bytes_per_second)}  up ${formatByteRate(snapshot?.network_up_bytes_per_second)}`,
-    `SessionBar CPU ${percentValue(snapshot?.server_cpu_percent)}  MEM ${formatRuntimeBytes(snapshot?.server_memory_bytes)}`,
-    `Sample     ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
-  ].join("\n");
+  const compact = safeWidth < 40;
+  const lines = compact
+    ? [
+        `CPU ${percentValue(cpu)} ${runtimeProgressBar(cpu, 100, barWidth)}`,
+        `Load ${load ? load.map(value => value.toFixed(2)).join(" ") : "— — —"}`,
+        `Memory ${compactBytes(snapshot?.memory_used_bytes)}/${compactBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)}`,
+        `Network D${compactByteRate(snapshot?.network_down_bytes_per_second)} U${compactByteRate(snapshot?.network_up_bytes_per_second)}`,
+        `SessionBar ${percentValue(snapshot?.server_cpu_percent)} ${compactBytes(snapshot?.server_memory_bytes)}`,
+        `Sample ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
+      ]
+    : [
+        `CPU        ${percentValue(cpu)} ${runtimeProgressBar(cpu, 100, barWidth)}`,
+        `Load       ${load ? load.map(value => value.toFixed(2)).join("  ") : "—  —  —"}`,
+        `Memory     ${formatRuntimeBytes(snapshot?.memory_used_bytes)} / ${formatRuntimeBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)} ${runtimeProgressBar(memory, 100, barWidth)}`,
+        `Network    down ${formatByteRate(snapshot?.network_down_bytes_per_second)}  up ${formatByteRate(snapshot?.network_up_bytes_per_second)}`,
+        `SessionBar CPU ${percentValue(snapshot?.server_cpu_percent)}  MEM ${formatRuntimeBytes(snapshot?.server_memory_bytes)}`,
+        `Sample     ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
+      ];
+  return lines.map(line => truncatePlain(line, safeWidth)).join("\n");
 }
 
 function percentValue(value: number | undefined): string {
@@ -773,12 +787,20 @@ function formatByteRate(value: number | undefined): string {
   return `${(value / 1_000_000_000).toFixed(1)} GB/s`;
 }
 
+function compactBytes(value: number | undefined): string {
+  return formatRuntimeBytes(value).replace(" ", "");
+}
+
+function compactByteRate(value: number | undefined): string {
+  return formatByteRate(value).replace(" ", "");
+}
+
 function runtimeValue(value: number | undefined, suffix: string): string {
   return value === undefined ? "—" : `${Math.round(value)}${suffix}`;
 }
 
-function detailTextForSession(session: Session, tab: DetailTab, width: number): StyledText {
-  return buildSessionDetailChunks(session, tab, width);
+function detailTextForSession(session: Session, tab: DetailTab, width: number, now = Date.now()): StyledText {
+  return buildSessionDetailChunks(session, tab, width, now);
 }
 
 function detailTabTitle(tab: DetailTab): string {
@@ -981,29 +1003,65 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
   };
 }
 
-function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<MonitorState>, opts: OpenTuiMonitorOptions): void {
+export function monitorVisibleModel(
+  state: Readonly<MonitorState>,
+  renderer: CliRenderer,
+  now = Date.now(),
+  opts?: Pick<OpenTuiMonitorOptions, "apiHost" | "port" | "stateDir">,
+): MonitorVisibleModel {
+  const layout = monitorBodyLayout(renderer.width);
   if (state.view === "providers") {
-    renderProvidersView(refs, renderer, state, opts);
-    return;
+    const providers = state.providers || [];
+    const apiCount = providers.filter(row => row.form === "api").length;
+    const subCount = providers.length - apiCount;
+    const error = state.providersError;
+    return {
+      view: state.view,
+      width: renderer.width,
+      height: renderer.height,
+      title: "SessionBar [Providers]",
+      online: `online :${opts?.port ?? ""}`,
+      activity: error
+        ? "provider fetch failed"
+        : [
+            `${providers.length} provider${providers.length !== 1 ? "s" : ""}`,
+            subCount > 0 ? `${subCount} subscription` : "",
+            apiCount > 0 ? `${apiCount} api` : "",
+          ].filter(Boolean).join("  "),
+      projectsVisible: false,
+      projectsTitle: "",
+      projectsContent: [],
+      sessionsWidth: layout.bodyWidth,
+      sessionsTitle: `Providers (${providers.length})`,
+      sessionsVisible: false,
+      sessionsContent: [],
+      providersVisible: true,
+      providersContent: providerTableContent(providers, renderer, error),
+      detailsVisible: false,
+      detailsWidth: layout.detailPanelWidth,
+      detailsTitle: "",
+      detailsContent: "",
+      footer: state.errorMsg ? `! ${state.errorMsg}` : "v / P  switch to sessions  r refresh  / filter  w web  q quit",
+      footerError: Boolean(state.errorMsg),
+    };
   }
-  refs.sessionsTable.visible = true;
-  refs.providersTable.visible = false;
-  refs.detailsBox.visible = true;
-  refs.projectsBox.visible = true;
   const shown = applyFilter(state.sessions, state.filterText);
   const groups = groupByProject(shown);
   const counts = statusCounts(state.sessions);
-  const projectData = projectRows(groups, state);
+  const projectData = projectRows(groups, state, now);
   const scopeSessions = selectedProjectSessions(state);
   const sessionData = sessionRows(state.projectFocusKey ? scopeSessions : shown, state);
   const selected = selectedSession(state);
-  const layout = monitorBodyLayout(renderer.width);
   const detailWidth = layout.detailContentWidth;
   const details = selected
-    ? detailTextForSession(selected, state.detailTab, detailWidth)
+    ? detailTextForSession(selected, state.detailTab, detailWidth, now)
     : state.projectFocusKey
-      ? detailTextForProject(scopeSessions, shown, opts)
-      : systemOverviewText(state.system, detailWidth);
+      ? detailTextForProject(scopeSessions, shown, {
+          apiHost: opts?.apiHost ?? "",
+          port: opts?.port ?? 0,
+          stateDir: opts?.stateDir ?? "",
+        }, now)
+      : systemOverviewText(state.system, detailWidth, now);
   const sessionTitle = state.projectFocusKey && scopeSessions[0]
     ? `Sessions / ${projectName(scopeSessions[0])}`
     : "All Sessions";
@@ -1025,21 +1083,52 @@ function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<Mo
         ? "Up/Down session  Tab detail tab  1-5 scope  a/Backspace all projects  r refresh  v providers  / filter  w web  q quit"
         : "Up/Down project  Enter open project  r refresh  v providers  / filter  w web  q quit";
 
-  refs.title.content = "SessionBar [Sessions]";
-  refs.online.content = `online :${opts.port}`;
-  refs.activity.content = activity;
-  refs.projectsBox.title = `Projects (${groups.size})`;
-  refs.projectsTable.content = projectTableContent(projectData, state, renderer);
-  refs.sessionsBox.width = layout.sidebarPanelWidth;
-  refs.detailsBox.width = layout.detailPanelWidth;
-  refs.sessionsBox.title = sessionTitle;
-  refs.sessionsTable.content = sessionTableContent(sessionData, state, renderer);
-  refs.detailsBox.title = selected
-    ? `Details / Session / ${detailTabTitle(state.detailTab)}`
-    : state.projectFocusKey ? "Details / Project" : "Details / System";
-  refs.detailsText.content = details;
-  refs.footer.content = footer;
-  refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;
+  return {
+    view: state.view,
+    width: renderer.width,
+    height: renderer.height,
+    title: "SessionBar [Sessions]",
+    online: `online :${opts?.port ?? ""}`,
+    activity,
+    projectsVisible: true,
+    projectsTitle: `Projects (${groups.size})`,
+    projectsContent: projectTableContent(projectData, state, renderer),
+    sessionsWidth: layout.sidebarPanelWidth,
+    sessionsTitle: sessionTitle,
+    sessionsVisible: true,
+    sessionsContent: sessionTableContent(sessionData, state, renderer, now),
+    providersVisible: false,
+    providersContent: [],
+    detailsVisible: true,
+    detailsWidth: layout.detailPanelWidth,
+    detailsTitle: selected
+      ? `Details / Session / ${detailTabTitle(state.detailTab)}`
+      : state.projectFocusKey ? "Details / Project" : "Details / System",
+    detailsContent: details,
+    footer,
+    footerError: Boolean(state.errorMsg),
+  };
+}
+
+function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
+  refs.title.content = model.title;
+  refs.online.content = model.online;
+  refs.activity.content = model.activity;
+  refs.projectsBox.visible = model.projectsVisible;
+  refs.projectsBox.title = model.projectsTitle;
+  refs.projectsTable.content = model.projectsContent;
+  refs.sessionsBox.width = model.sessionsWidth;
+  refs.sessionsBox.title = model.sessionsTitle;
+  refs.sessionsTable.visible = model.sessionsVisible;
+  refs.sessionsTable.content = model.sessionsContent;
+  refs.providersTable.visible = model.providersVisible;
+  refs.providersTable.content = model.providersContent;
+  refs.detailsBox.visible = model.detailsVisible;
+  refs.detailsBox.width = model.detailsWidth;
+  refs.detailsBox.title = model.detailsTitle;
+  refs.detailsText.content = model.detailsContent;
+  refs.footer.content = model.footer;
+  refs.footer.fg = model.footerError ? PALETTE.red : PALETTE.muted;
 }
 
 function printableChar(key: KeyEvent): string {
@@ -1096,44 +1185,134 @@ export function nextViewFromMonitorKey(
   return null;
 }
 
-function monitorVisibleModel(state: Readonly<MonitorState>, renderer: CliRenderer, now = Date.now()): VisibleModel {
-  const common = {
-    view: state.view,
-    width: renderer.width,
-    height: renderer.height,
-    errorMsg: state.errorMsg,
-  };
-  if (state.view === "providers") {
-    return {
-      ...common,
-      providers: state.providers,
-      providersError: state.providersError,
-    };
-  }
+function nextAgeChangeAt(timestamp: number, now: number): number {
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 10) return Math.max(now + 1, timestamp + 10_000);
+  if (seconds < 60) return timestamp + (seconds + 1) * 1000;
+  if (seconds < 3600) return timestamp + (Math.floor(seconds / 60) + 1) * 60_000;
+  return timestamp + (Math.floor(seconds / 3600) + 1) * 3_600_000;
+}
+
+function visibleFreshnessTimestamps(state: Readonly<MonitorState>, renderer: CliRenderer): number[] {
+  if (state.view === "providers") return [];
   const shown = applyFilter(state.sessions, state.filterText);
-  return {
-    ...common,
-    sessions: state.sessions,
-    system: state.projectFocusKey ? undefined : state.system,
-    filterText: state.filterText,
-    filterActive: state.filterActive,
-    projectCursorKey: state.projectCursorKey,
-    projectFocusKey: state.projectFocusKey,
-    selectedIdx: state.selectedIdx,
-    selectedId: state.selectedId,
-    detailId: state.detailId,
-    detailTab: state.detailTab,
-    unreadSessionIds: state.unreadSessionIds,
-    freshnessSecond: shown.length > 0 || (!state.projectFocusKey && state.system)
-      ? Math.floor(now / 1000)
-      : undefined,
+  const groups = groupByProject(shown);
+  const projectData = projectRows(groups, state, 0);
+  const projectIndex = state.projectCursorKey ? projectData.findIndex(row => row.key === state.projectCursorKey) : 0;
+  const projectSlots = Math.max(2, Math.min(6, renderer.height - 13));
+  const visibleProjects = new Set(visibleWindow(projectData, projectIndex, projectSlots).map(row => row.key));
+  const timestamps = [...groups.entries()]
+    .filter(([key]) => visibleProjects.has(key))
+    .map(([, sessions]) => latestTimestamp(sessions));
+
+  const scope = state.projectFocusKey ? selectedProjectSessions(state) : shown;
+  const selectedIndex = state.projectFocusKey ? Math.max(0, state.selectedIdx) : 0;
+  const sessionSlots = Math.max(4, renderer.height - 17);
+  timestamps.push(...visibleWindow(scope, selectedIndex, sessionSlots).map(session => session.timestamp || 0));
+
+  const selected = selectedSession(state);
+  if (selected) timestamps.push(...nestedTimestamps(selected));
+  else if (state.projectFocusKey && scope.length > 0) timestamps.push(latestTimestamp(scope));
+  return [...new Set(timestamps.filter(value => Number.isFinite(value) && value > 0))];
+}
+
+function nestedTimestamps(value: unknown): number[] {
+  if (Array.isArray(value)) return value.flatMap(nestedTimestamps);
+  if (!value || typeof value !== "object") return [];
+  const timestamps: number[] = [];
+  for (const [key, entry] of Object.entries(value)) {
+    if ((key === "timestamp" || key === "sampled_at") && typeof entry === "number" && Number.isFinite(entry)) {
+      timestamps.push(entry);
+    } else if (entry && typeof entry === "object") {
+      timestamps.push(...nestedTimestamps(entry));
+    }
+  }
+  return timestamps;
+}
+
+export function nextVisibleFreshnessDelay(
+  state: Readonly<MonitorState>,
+  renderer: CliRenderer,
+  now = Date.now(),
+  opts?: Pick<OpenTuiMonitorOptions, "apiHost" | "port" | "stateDir">,
+): number | undefined {
+  if (state.view === "providers") return undefined;
+  const baseline = visibleModelFingerprint(monitorVisibleModel(state, renderer, now, opts));
+  const candidates = visibleFreshnessTimestamps(state, renderer).map(timestamp => ({ timestamp, at: nextAgeChangeAt(timestamp, now) }));
+  if (!state.projectFocusKey && state.system) {
+    const timestamp = state.system.sampled_at;
+    const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+    candidates.push({ timestamp, at: timestamp + (seconds + 1) * 1000 });
+  }
+  if (state.projectFocusKey) {
+    for (const session of selectedProjectSessions(state)) {
+      const staleAt = (session.timestamp || 0) + 120_001;
+      if (staleAt > now) candidates.push({ timestamp: Number.NaN, at: staleAt });
+    }
+  }
+
+  for (let attempts = 0; candidates.length > 0 && attempts < 10_000; attempts++) {
+    candidates.sort((left, right) => left.at - right.at);
+    const candidate = candidates.shift()!;
+    if (visibleModelFingerprint(monitorVisibleModel(state, renderer, candidate.at, opts)) !== baseline) {
+      return Math.max(1, candidate.at - now);
+    }
+    if (Number.isFinite(candidate.timestamp)) {
+      candidate.at = nextAgeChangeAt(candidate.timestamp, candidate.at);
+      candidates.push(candidate);
+    }
+  }
+  return undefined;
+}
+
+export function createSingleFlightRefresh<T>(
+  fetchValue: () => Promise<T>,
+  applyValue: (value: T) => void,
+): (reason: "poll" | "manual") => Promise<boolean> {
+  let active = false;
+  let generation = 0;
+  let queuedManual: Array<(applied: boolean) => void> = [];
+
+  const start = async (token: number): Promise<boolean> => {
+    let applied = false;
+    try {
+      const value = await fetchValue();
+      if (token === generation) {
+        applyValue(value);
+        applied = true;
+      }
+      return applied;
+    } finally {
+      active = false;
+      if (queuedManual.length > 0) {
+        const waiters = queuedManual;
+        queuedManual = [];
+        active = true;
+        void start(generation).then(
+          result => waiters.forEach(resolve => resolve(result)),
+          () => waiters.forEach(resolve => resolve(false)),
+        );
+      }
+    }
+  };
+
+  return reason => {
+    if (!active) {
+      active = true;
+      return start(++generation);
+    }
+    if (reason === "poll") return Promise.resolve(false);
+    generation++;
+    return new Promise(resolve => queuedManual.push(resolve));
   };
 }
 
-async function fetchIntoState(
-  opts: OpenTuiMonitorOptions,
-  update: (updater: (state: Readonly<MonitorState>) => MonitorState) => void,
-): Promise<void> {
+interface MonitorFetchResult {
+  sessions: { sessions: Session[]; error?: string };
+  system?: SystemEfficiencySnapshot;
+}
+
+async function fetchMonitorState(opts: OpenTuiMonitorOptions): Promise<MonitorFetchResult> {
   const [sessionResult, systemResult] = await Promise.allSettled([
     opts.fetchSessions(),
     opts.fetchSystem(),
@@ -1141,38 +1320,61 @@ async function fetchIntoState(
   const result = sessionResult.status === "fulfilled"
     ? sessionResult.value
     : { sessions: [], error: errorMessage(sessionResult.reason) };
-  update(state => {
-    const sessions = result.sessions.length > 0 || !result.error ? result.sessions : state.sessions;
-    const unread = updateUnreadSessionState({
-      previousFingerprints: state.sessionFingerprints,
-      previousUnread: state.unreadSessionIds,
-      initialized: state.unreadInitialized,
-      sessions,
-      selectedSessionId: state.selectedId,
-    });
-    return clampState({
-      ...state,
-      sessions,
-      system: systemResult.status === "fulfilled" ? systemResult.value : state.system,
-      errorMsg: result.error,
-      sessionFingerprints: unread.fingerprints,
-      unreadSessionIds: unread.unreadSessionIds,
-      unreadInitialized: unread.initialized,
-    });
+  return {
+    sessions: result,
+    system: systemResult.status === "fulfilled" ? systemResult.value : undefined,
+  };
+}
+
+function applyMonitorFetch(state: Readonly<MonitorState>, fetched: MonitorFetchResult): MonitorState {
+  const result = fetched.sessions;
+  const sessions = result.sessions.length > 0 || !result.error ? result.sessions : state.sessions;
+  const unread = updateUnreadSessionState({
+    previousFingerprints: state.sessionFingerprints,
+    previousUnread: state.unreadSessionIds,
+    initialized: state.unreadInitialized,
+    sessions,
+    selectedSessionId: state.selectedId,
+  });
+  return clampState({
+    ...state,
+    sessions,
+    system: preserveSystemSnapshot(state.system, fetched.system),
+    errorMsg: result.error,
+    sessionFingerprints: unread.fingerprints,
+    unreadSessionIds: unread.unreadSessionIds,
+    unreadInitialized: unread.initialized,
   });
 }
 
-async function fetchProvidersIntoState(
-  opts: OpenTuiMonitorOptions,
-  update: (updater: (state: Readonly<MonitorState>) => MonitorState) => void,
-): Promise<void> {
-  if (!opts.fetchProviders) return;
+export function preserveSystemSnapshot(
+  previous: SystemEfficiencySnapshot | undefined,
+  next: SystemEfficiencySnapshot | undefined,
+): SystemEfficiencySnapshot | undefined {
+  return next ?? previous;
+}
+
+interface ProviderFetchResult {
+  providers?: PlanRow[];
+  error?: string;
+}
+
+async function fetchProviderState(opts: OpenTuiMonitorOptions): Promise<ProviderFetchResult> {
+  if (!opts.fetchProviders) return {};
   try {
     const providers = await opts.fetchProviders();
-    update(state => clampState({ ...state, providers, providersError: undefined }));
+    return { providers };
   } catch (error) {
-    update(state => clampState({ ...state, providersError: errorMessage(error) }));
+    return { error: errorMessage(error) };
   }
+}
+
+function applyProviderFetch(state: Readonly<MonitorState>, fetched: ProviderFetchResult): MonitorState {
+  return clampState({
+    ...state,
+    providers: fetched.providers ?? state.providers,
+    providersError: fetched.error,
+  });
 }
 
 function errorMessage(error: unknown): string {
@@ -1216,25 +1418,40 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
     let freshnessTimer: ReturnType<typeof setTimeout> | undefined;
     const refs = createRefs(renderer, opts);
 
-    const requestVisibleUpdate = createVisibleModelUpdater(() => {
-      updateRefs(refs, renderer, state, opts);
+    const requestVisibleUpdate = createVisibleModelUpdater((model: MonitorVisibleModel) => {
+      updateRefs(refs, model);
       renderer.requestRender();
     });
     const render = () => {
-      if (!disposed) requestVisibleUpdate(monitorVisibleModel(state, renderer));
+      if (!disposed) requestVisibleUpdate(monitorVisibleModel(state, renderer, Date.now(), opts));
     };
     const update = (updater: (state: Readonly<MonitorState>) => MonitorState) => {
+      if (disposed) return;
       state = clampState(updater(state));
       render();
+      scheduleFreshnessUpdate();
     };
     const resizeHandler = () => update(current => ({ ...current }));
     const scheduleFreshnessUpdate = () => {
-      const delayMs = Math.max(1, 1000 - (Date.now() % 1000));
+      if (freshnessTimer) clearTimeout(freshnessTimer);
+      const delayMs = nextVisibleFreshnessDelay(state, renderer, Date.now(), opts);
+      if (delayMs === undefined) {
+        freshnessTimer = undefined;
+        return;
+      }
       freshnessTimer = setTimeout(() => {
         render();
         if (!disposed) scheduleFreshnessUpdate();
       }, delayMs);
     };
+    const refreshMonitor = createSingleFlightRefresh(
+      () => fetchMonitorState(opts),
+      fetched => update(current => applyMonitorFetch(current, fetched)),
+    );
+    const refreshProviders = createSingleFlightRefresh(
+      () => fetchProviderState(opts),
+      fetched => update(current => applyProviderFetch(current, fetched)),
+    );
     const close = () => {
       if (disposed) return;
       disposed = true;
@@ -1296,8 +1513,8 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
           return clampState({ ...current, projectCursorKey: keys[0] || null });
         });
       } else if (key.name === "r") {
-        void fetchIntoState(opts, update);
-        void fetchProvidersIntoState(opts, update);
+        void refreshMonitor("manual");
+        void refreshProviders("manual");
       } else if (key.name === "/" || key.sequence === "/") {
         update(current => clearProjectFocus({ ...current, filterActive: true, filterText: "" }));
       } else if (key.name === "w") {
@@ -1312,8 +1529,8 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
     };
 
     const poll = setInterval(() => {
-      void fetchIntoState(opts, update);
-      if (state.view === "providers") void fetchProvidersIntoState(opts, update);
+      void refreshMonitor("poll");
+      if (state.view === "providers") void refreshProviders("poll");
     }, opts.pollMs);
 
     renderer.keyInput.on("keypress", keyHandler);
@@ -1321,7 +1538,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
     renderer.start();
     render();
     scheduleFreshnessUpdate();
-    void fetchIntoState(opts, update);
-    void fetchProvidersIntoState(opts, update);
+    void refreshMonitor("poll");
+    void refreshProviders("poll");
   });
 }

@@ -93,10 +93,21 @@ test("monitor fetches structurally valid system state from the independent endpo
   assert.match(fetchSystemBody, /fetch\(`\$\{API_BASE\}\/system\/live`\)/);
   assert.match(fetchSystemBody, /data\.system/);
   assert.match(fetchSystemBody, /isSystemEfficiencySnapshot/);
+  assert.match(fetchSystemBody, /throw new Error\("invalid system response"\)/);
 });
 
 test("monitor settles session and system fetches independently", () => {
   const monitorSource = readFileSync(new URL("../openTuiMonitor.ts", import.meta.url), "utf8");
   assert.match(monitorSource, /Promise\.allSettled\(\[\s*opts\.fetchSessions\(\),\s*opts\.fetchSystem/);
   assert.match(cliSource, /fetchSystem(?:,|:)/);
+});
+
+test("monitor routes interval and manual refresh through single-flight controllers", () => {
+  const monitorSource = readFileSync(new URL("../openTuiMonitor.ts", import.meta.url), "utf8");
+  assert.match(monitorSource, /const refreshMonitor = createSingleFlightRefresh/);
+  assert.match(monitorSource, /const refreshProviders = createSingleFlightRefresh/);
+  assert.match(monitorSource, /refreshMonitor\("manual"\)/);
+  assert.match(monitorSource, /refreshMonitor\("poll"\)/);
+  assert.match(monitorSource, /refreshProviders\("manual"\)/);
+  assert.match(monitorSource, /refreshProviders\("poll"\)/);
 });

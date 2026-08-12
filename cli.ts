@@ -165,7 +165,8 @@ async function fetchSystem(): Promise<SystemEfficiencySnapshot | undefined> {
   const resp = await fetch(`${API_BASE}/system/live`);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
-  return isSystemEfficiencySnapshot(data.system) ? data.system : undefined;
+  if (!isSystemEfficiencySnapshot(data.system)) throw new Error("invalid system response");
+  return data.system;
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

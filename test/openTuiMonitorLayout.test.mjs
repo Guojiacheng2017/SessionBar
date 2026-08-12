@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createSingleFlightRefresh,
   createVisibleModelUpdater,
   monitorBodyLayout,
+  monitorVisibleModel,
+  nextVisibleFreshnessDelay,
+  preserveSystemSnapshot,
   providerSummaryLine,
   providerTableContent,
   runtimeOverviewText,
@@ -45,6 +49,17 @@ test("monitor body layout keeps narrow terminals usable", () => {
   assert.equal(layout.sidebarPanelWidth + layout.gap + layout.detailPanelWidth, layout.bodyWidth);
 });
 
+test("monitor body layout fits every panel within a 40-column renderer", () => {
+  const layout = monitorBodyLayout(40);
+  assert.ok(layout.bodyWidth <= 38);
+  assert.ok(layout.sidebarPanelWidth > 0);
+  assert.ok(layout.detailPanelWidth > 0);
+  assert.equal(layout.sidebarPanelWidth + layout.gap + layout.detailPanelWidth, layout.bodyWidth);
+  assert.ok(layout.detailContentWidth <= layout.detailPanelWidth - 4);
+  assert.ok(systemOverviewText(systemSnapshot(), layout.detailContentWidth, 11_000)
+    .split("\n").every(line => line.length <= layout.detailContentWidth));
+});
+
 test("runtime overview uses fixed-width progress bars instead of a sparkline", () => {
   const content = runtimeOverviewText([
     {
@@ -74,6 +89,13 @@ test("system overview renders a deterministic six-row efficiency panel", () => {
   assert.ok(text.split("\n").every(line => line.length <= 44));
 });
 
+test("system overview remains six visual rows at 32 columns", () => {
+  const lines = systemOverviewText(systemSnapshot(), 32, 11_000).split("\n");
+  assert.equal(lines.length, 6);
+  assert.ok(lines.every(line => line.length <= 32));
+  assert.deepEqual(lines.map(line => line.split(/\s+/)[0]), ["CPU", "Load", "Memory", "Network", "SessionBar", "Sample"]);
+});
+
 test("visible model updater suppresses identical renders and repaints visible changes", () => {
   const renderer = {
     renders: [],
@@ -98,6 +120,137 @@ test("visible model updater suppresses identical renders and repaints visible ch
   update(changedSystem);
   assert.equal(renderer.renders.length, 3);
   assert.notEqual(visibleModelFingerprint(base), visibleModelFingerprint(changedSystem));
+});
+
+function monitorState(overrides = {}) {
+  const sessions = [
+    { session_id: "a", session_type: "Codex", status: "working", task_name: "visible", project: "Shown", timestamp: 1_000 },
+    { session_id: "b", session_type: "Claude Code", status: "idle", task_name: "hidden", project: "Hidden", timestamp: 2_000 },
+  ];
+  return {
+    sessions,
+    system: systemSnapshot({ sampled_at: 10_000 }),
+    filterText: "Shown",
+    filterActive: false,
+    projectCursorKey: "name:Shown",
+    projectFocusKey: null,
+    selectedIdx: -1,
+    selectedId: null,
+    detailId: null,
+    detailTab: "overview",
+    unreadSessionIds: new Set(),
+    view: "sessions",
+    providers: [],
+    ...overrides,
+  };
+}
+
+test("monitor visible model fingerprints formatted freshness, not wall-clock seconds", () => {
+  const renderer = { width: 100, height: 30 };
+  const state = monitorState();
+  assert.equal(
+    visibleModelFingerprint(monitorVisibleModel(state, renderer, 10_100)),
+    visibleModelFingerprint(monitorVisibleModel(state, renderer, 10_900)),
+  );
+  assert.notEqual(
+    visibleModelFingerprint(monitorVisibleModel(state, renderer, 10_900)),
+    visibleModelFingerprint(monitorVisibleModel(state, renderer, 11_000)),
+  );
+});
+
+test("monitor visible model ignores filtered and non-painted session changes", () => {
+  const renderer = { width: 100, height: 30 };
+  const state = monitorState();
+  const hiddenChanged = monitorState({
+    sessions: [state.sessions[0], { ...state.sessions[1], task_name: "changed out of view", tokens: 999 }],
+  });
+  const visibleNonPaintedChanged = monitorState({
+    sessions: [{ ...state.sessions[0], tokens: 999 }, state.sessions[1]],
+  });
+  assert.equal(
+    visibleModelFingerprint(monitorVisibleModel(state, renderer, 10_100)),
+    visibleModelFingerprint(monitorVisibleModel(hiddenChanged, renderer, 10_100)),
+  );
+  assert.equal(
+    visibleModelFingerprint(monitorVisibleModel(state, renderer, 10_100)),
+    visibleModelFingerprint(monitorVisibleModel(visibleNonPaintedChanged, renderer, 10_100)),
+  );
+});
+
+test("monitor visible model ignores off-window and inactive-tab fields", () => {
+  const renderer = { width: 100, height: 21 };
+  const sessions = Array.from({ length: 8 }, (_, index) => ({
+    session_id: `s-${index}`,
+    session_type: "Codex",
+    status: "working",
+    task_name: `task-${index}`,
+    project: "Shown",
+    timestamp: 1_000,
+  }));
+  const root = monitorState({ sessions, filterText: "", projectCursorKey: "name:Shown" });
+  const offWindowChanged = monitorState({
+    ...root,
+    sessions: sessions.map((session, index) => index === 7 ? { ...session, task_name: "off-window changed" } : session),
+  });
+  assert.equal(
+    visibleModelFingerprint(monitorVisibleModel(root, renderer, 10_100)),
+    visibleModelFingerprint(monitorVisibleModel(offWindowChanged, renderer, 10_100)),
+  );
+
+  const focused = monitorState({
+    sessions,
+    filterText: "",
+    projectCursorKey: "name:Shown",
+    projectFocusKey: "name:Shown",
+    selectedIdx: 0,
+    selectedId: "s-0",
+    detailId: "s-0",
+    detailTab: "overview",
+  });
+  const inactiveTabChanged = monitorState({
+    ...focused,
+    sessions: [{ ...sessions[0], debug_blob: "raw-only" }, ...sessions.slice(1)],
+  });
+  assert.equal(
+    visibleModelFingerprint(monitorVisibleModel(focused, renderer, 10_100)),
+    visibleModelFingerprint(monitorVisibleModel(inactiveTabChanged, renderer, 10_100)),
+  );
+});
+
+test("next visible freshness update waits until formatted output changes", () => {
+  const renderer = { width: 100, height: 30 };
+  assert.equal(nextVisibleFreshnessDelay(monitorState(), renderer, 10_100), 900);
+  assert.equal(nextVisibleFreshnessDelay(monitorState({ system: undefined }), renderer, 2_100), 8_900);
+  assert.equal(nextVisibleFreshnessDelay(monitorState({ view: "providers" }), renderer, 10_100), undefined);
+});
+
+test("single-flight refresh skips overlapping poll and supersedes it for manual refresh", async () => {
+  const pending = [];
+  const applied = [];
+  const refresh = createSingleFlightRefresh(
+    () => new Promise(resolve => pending.push(resolve)),
+    value => applied.push(value),
+  );
+
+  const first = refresh("poll");
+  const skipped = refresh("poll");
+  const manual = refresh("manual");
+  assert.equal(await skipped, false);
+  assert.equal(pending.length, 1);
+
+  pending[0]("old");
+  assert.equal(await first, false);
+  await Promise.resolve();
+  assert.equal(pending.length, 2);
+  pending[1]("new");
+  assert.equal(await manual, true);
+  assert.deepEqual(applied, ["new"]);
+});
+
+test("missing or malformed system results preserve the last good snapshot", () => {
+  const snapshot = systemSnapshot();
+  assert.equal(preserveSystemSnapshot(snapshot, undefined), snapshot);
+  assert.equal(preserveSystemSnapshot(snapshot, systemSnapshot({ cpu_percent: 42 })).cpu_percent, 42);
 });
 
 function subscriptionRow(overrides = {}) {
