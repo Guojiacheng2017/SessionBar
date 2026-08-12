@@ -70,6 +70,7 @@ function lineCount(path) {
 }
 
 test("direct server serves cached system samples without Codex discovery or process-table reads", async (t) => {
+  const systemSampleMs = 100;
   const root = mkdtempSync(join(tmpdir(), "sessionbar-server-system-"));
   const home = join(root, "home");
   const sessionbarHome = join(root, "sessionbar");
@@ -120,7 +121,7 @@ syncBuiltinESMExports();
       SESSIONBAR_PROVIDER_POLL: "0",
       SESSIONBAR_CCSWITCH: "0",
       SESSIONBAR_IDLE_SHUTDOWN_MS: "60000",
-      SESSIONBAR_SYSTEM_SAMPLE_MS: "100",
+      SESSIONBAR_SYSTEM_SAMPLE_MS: String(systemSampleMs),
       SESSIONBAR_CODEX_SESSION_DIR: codexSessionDir,
       SESSIONBAR_CODEX_READS: codexReads,
       SESSIONBAR_NETSTAT_CALLS: netstatCalls,
@@ -132,15 +133,27 @@ syncBuiltinESMExports();
   child.stdout.on("data", chunk => { childOutput += chunk; });
   child.stderr.on("data", chunk => { childOutput += chunk; });
   t.after(async () => {
-    const exited = child.exitCode === null
-      ? new Promise(resolve => child.once("exit", resolve))
-      : Promise.resolve();
-    if (child.exitCode === null) child.kill("SIGTERM");
-    await Promise.race([
-      exited,
-      new Promise(resolve => setTimeout(resolve, 1_000)),
-    ]);
-    rmSync(root, { recursive: true, force: true });
+    assert.equal(child.exitCode, null, `server exited before SIGTERM (${childOutput})`);
+    const exited = new Promise(resolve => child.once("exit", (code, signal) => resolve({ code, signal })));
+    assert.equal(child.kill("SIGTERM"), true, "SIGTERM was not delivered to the server");
+    try {
+      const exit = await Promise.race([
+        exited,
+        new Promise(resolve => setTimeout(() => resolve(undefined), 1_000)),
+      ]);
+      if (!exit) {
+        if (child.exitCode === null) child.kill("SIGKILL");
+        await exited;
+        assert.fail(`server did not exit after SIGTERM (${childOutput})`);
+      }
+      assert.deepEqual(exit, { code: 0, signal: null }, `server did not exit cleanly (${childOutput})`);
+
+      const netstatCallsAfterExit = lineCount(netstatCalls);
+      await new Promise(resolve => setTimeout(resolve, systemSampleMs + 50));
+      assert.equal(lineCount(netstatCalls), netstatCallsAfterExit, "system sampler continued after shutdown");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -156,7 +169,7 @@ syncBuiltinESMExports();
   assert.equal(typeof initial.system.server_memory_bytes, "number");
   assert.equal(Array.isArray(initial.system.load_average), true);
 
-  await new Promise(resolve => setTimeout(resolve, 220));
+  await new Promise(resolve => setTimeout(resolve, systemSampleMs * 2 + 20));
   const later = await fetch(`${baseUrl}/system/live`).then(response => response.json());
   assert.equal(typeof later.system.sampled_at, "number");
   assert.ok(lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
