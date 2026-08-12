@@ -98,6 +98,56 @@ exit 1
   }]);
 });
 
+test("report.sh omits runtime when an active hook supplies no explicit metrics", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-report-no-runtime-"));
+  const bin = join(root, "bin");
+  const home = join(root, "home");
+  const project = join(root, "Vision-Dash");
+  const capture = join(root, "payload.json");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(bin, "curl"), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    shift
+    printf '%s' "$1" > "$SESSIONBAR_CAPTURE"
+    exit 0
+  fi
+  shift
+done
+exit 1
+`);
+  execFileSync("chmod", ["755", join(bin, "curl")]);
+
+  execFileSync("bash", ["report.sh", "working", "ordinary active hook", "8989"], {
+    cwd: new URL("..", import.meta.url),
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: home,
+      SESSIONBAR_CAPTURE: capture,
+      SESSIONBAR_HOME: join(home, ".sessionbar"),
+      SESSIONBAR_AGENT: "codex",
+      SESSIONBAR_SESSION_ID: "codex-demo",
+      SESSIONBAR_PROJECT_DIR: project,
+      SESSIONBAR_CPU_PERCENT: "",
+      SESSIONBAR_GPU_PERCENT: "",
+      SESSIONBAR_MEMORY_PERCENT: "",
+      SESSIONBAR_MEMORY_BYTES: "",
+      SESSIONBAR_PROCESS_COUNT: "",
+      AGENTBAR_CPU_PERCENT: "",
+      AGENTBAR_GPU_PERCENT: "",
+      AGENTBAR_MEMORY_PERCENT: "",
+      AGENTBAR_MEMORY_BYTES: "",
+      AGENTBAR_PROCESS_COUNT: "",
+    },
+  });
+
+  const payload = JSON.parse(readFileSync(capture, "utf8"));
+  assert.equal(payload.runtime, undefined);
+});
+
 test("report.sh ignores process roots without sidecars or process lookup", () => {
   const root = mkdtempSync(join(tmpdir(), "sessionbar-report-process-root-"));
   const bin = join(root, "bin");

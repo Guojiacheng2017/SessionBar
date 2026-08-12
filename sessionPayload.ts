@@ -60,7 +60,8 @@ export function mergeSessionPayload(
   now: number,
 ): SessionPayload {
   const reduced = reduceSessionEvents(prev, sessionSnapshotToHookEvents(data, now));
-  const { process_pid: _retiredProcessPid, ...session } = reduced;
+  const legacyReduced = reduced as SessionPayload & { process_pid?: unknown };
+  const { process_pid: _retiredProcessPid, ...session } = legacyReduced;
   return {
     ...session,
     quota_percent: data.quota_percent ?? prev?.quota_percent,

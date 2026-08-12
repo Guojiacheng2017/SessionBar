@@ -106,7 +106,7 @@ test("validates and preserves runtime resource snapshots", () => {
   assert.equal(withoutRuntime.runtime, undefined);
 });
 
-test("drops retired process roots while preserving explicit runtime compatibility", () => {
+test("ignores unknown legacy process roots without exposing them on sessions", () => {
   const runtime = { cpu_percent: 24.5, sampled_at: 1_700_000_000_000 };
   const merged = mergeSessionPayload({
     ...basePayload,
@@ -115,7 +115,7 @@ test("drops retired process roots while preserving explicit runtime compatibilit
   }, { ...basePayload, process_pid: 5252, runtime }, 1_700_000_001_000);
 
   assert.equal(validateSessionPayload({ ...basePayload, process_pid: "retired", runtime }), true);
-  assert.equal(merged.process_pid, undefined);
+  assert.equal(Object.hasOwn(merged, "process_pid"), false);
   assert.deepEqual(merged.runtime, runtime);
 });
 

@@ -265,8 +265,8 @@ if [ "$STATUS" = "working" ] || [ "$STATUS" = "blocked" ]; then
   append_runtime_number_field "memory_percent" "$runtime_memory_percent"
   append_runtime_number_field "memory_bytes" "$runtime_memory_bytes"
   append_runtime_number_field "process_count" "$runtime_process_count"
-  append_runtime_number_field "sampled_at" "$(date +%s 2>/dev/null)000"
   if [ -n "$RUNTIME_FIELDS" ]; then
+    append_runtime_number_field "sampled_at" "$(date +%s 2>/dev/null)000"
     EXTRA_FIELDS="${EXTRA_FIELDS},\"runtime\":{${RUNTIME_FIELDS#,}}"
   fi
 fi

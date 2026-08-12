@@ -88,6 +88,30 @@ export interface SystemEfficiencySnapshot {
   sampled_at: number;
 }
 
+export function isSystemEfficiencySnapshot(value: unknown): value is SystemEfficiencySnapshot {
+  if (!value || typeof value !== "object") return false;
+  const snapshot = value as Record<string, unknown>;
+  const load = snapshot.load_average;
+  const requiredNumbers = [
+    snapshot.memory_used_bytes,
+    snapshot.memory_total_bytes,
+    snapshot.memory_percent,
+    snapshot.server_memory_bytes,
+    snapshot.sampled_at,
+  ];
+  const optionalNumbers = [
+    snapshot.cpu_percent,
+    snapshot.network_down_bytes_per_second,
+    snapshot.network_up_bytes_per_second,
+    snapshot.server_cpu_percent,
+  ];
+  return Array.isArray(load)
+    && load.length === 3
+    && load.every(item => typeof item === "number" && Number.isFinite(item))
+    && requiredNumbers.every(item => typeof item === "number" && Number.isFinite(item))
+    && optionalNumbers.every(item => item === undefined || (typeof item === "number" && Number.isFinite(item)));
+}
+
 export interface SessionPayload {
   session_id: string;    // unique per session, e.g. "vision-dash-40393"
   session_type: string;  // label, e.g. "Claude Code", "Gemini CLI"
@@ -109,7 +133,6 @@ export interface SessionPayload {
   token_rate?: number; // tokens per minute, when reported by the hook
   quota_percent?: number; // 0 ~ 100, provider quota remaining or available
   quota_reset?: string; // short display label, e.g. "5h38m"
-  process_pid?: number; // stable root PID used for server-side runtime sampling
   runtime?: SessionRuntimeSnapshot; // resources used by this session's agent process
   agent_signals?: SessionAgentSignal[];
   workflow_events?: SessionWorkflowEvent[];

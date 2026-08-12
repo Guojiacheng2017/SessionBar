@@ -1,4 +1,4 @@
-import type { SessionPayload, SystemEfficiencySnapshot } from "./types.js";
+import { isSystemEfficiencySnapshot, type SessionPayload, type SystemEfficiencySnapshot } from "./types.js";
 import type { PlanRow } from "./planTypes.js";
 import { compactNumber } from "./displayUtils.js";
 
@@ -177,6 +177,72 @@ export function systemEfficiencyMarkup(snapshot: SystemEfficiencySnapshot | unde
     <div class="system-efficiency-head"><strong>System</strong><span>Global health</span></div>
     <div class="system-efficiency-rows">${rows.join("")}</div>
   </section>`;
+}
+
+interface HtmlRegion {
+  innerHTML: string;
+}
+
+export interface WebSystemMonitorOptions {
+  detailHeader: HtmlRegion;
+  detailBody: HtmlRegion;
+  isVisible: () => boolean;
+  request: (signal: AbortSignal) => Promise<unknown>;
+}
+
+export interface WebSystemMonitor {
+  render(): boolean;
+  refresh(): Promise<boolean>;
+  stop(): void;
+}
+
+export function createWebSystemMonitor(options: WebSystemMonitorOptions): WebSystemMonitor {
+  let snapshot: SystemEfficiencySnapshot | undefined;
+  let activeController: AbortController | undefined;
+  let generation = 0;
+  let stopped = false;
+
+  function render(): boolean {
+    if (!options.isVisible()) return false;
+    options.detailHeader.innerHTML = `<span class="${UI.panelTitle}">Details / System</span>`;
+    options.detailBody.innerHTML = systemEfficiencyMarkup(snapshot);
+    return true;
+  }
+
+  async function refresh(): Promise<boolean> {
+    if (stopped) return false;
+
+    const requestGeneration = ++generation;
+    activeController?.abort();
+    const controller = new AbortController();
+    activeController = controller;
+
+    try {
+      const payload = await options.request(controller.signal);
+      if (stopped || controller.signal.aborted || requestGeneration !== generation) return false;
+      if (!payload || typeof payload !== "object") return false;
+      const nextSnapshot = (payload as Record<string, unknown>).system;
+      if (!isSystemEfficiencySnapshot(nextSnapshot)) return false;
+
+      snapshot = nextSnapshot;
+      render();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (activeController === controller) activeController = undefined;
+    }
+  }
+
+  function stop(): void {
+    if (stopped) return;
+    stopped = true;
+    generation += 1;
+    activeController?.abort();
+    activeController = undefined;
+  }
+
+  return { render, refresh, stop };
 }
 
 function systemMeterRow(label: string, value: string, meterValue: number | undefined, max: number): string {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countSessions,
+  createWebSystemMonitor,
   escapeHtml,
   projectIconListMarkup,
   providerTableMarkup,
@@ -9,6 +10,35 @@ import {
   statusSummaryMarkup,
   systemEfficiencyMarkup,
 } from "../dist/webComponents.js";
+import { isSystemEfficiencySnapshot } from "../dist/types.js";
+
+const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
+
+function systemSnapshot(cpuPercent, sampledAt = 10_000) {
+  return {
+    cpu_percent: cpuPercent,
+    load_average: [3.19, 3.9, 3.44],
+    memory_used_bytes: 12.8 * GIB,
+    memory_total_bytes: 16 * GIB,
+    memory_percent: 80,
+    network_down_bytes_per_second: 80_000,
+    network_up_bytes_per_second: 10_000,
+    server_cpu_percent: 1.8,
+    server_memory_bytes: 79 * MIB,
+    sampled_at: sampledAt,
+  };
+}
+
+function deferredSystemRequests() {
+  const pending = [];
+  return {
+    pending,
+    request(signal) {
+      return new Promise(resolve => pending.push({ signal, resolve }));
+    },
+  };
+}
 
 test("renders status counts without a global progress bar", () => {
   const html = statusSummaryMarkup({ total: 7, working: 1, blocked: 0, error: 0, idle: 6 });
@@ -155,4 +185,106 @@ test("renders an unavailable global system state without a session grid", () => 
 
   assert.match(html, /System metrics unavailable/);
   assert.doesNotMatch(html, /runtime-contributions|runtime-matrix|<meter/);
+});
+
+test("shared system snapshot validation rejects malformed successful payloads", () => {
+  assert.equal(isSystemEfficiencySnapshot(systemSnapshot(37.5)), true);
+  assert.equal(isSystemEfficiencySnapshot({ ...systemSnapshot(37.5), load_average: "3.19" }), false);
+  assert.equal(isSystemEfficiencySnapshot({ ...systemSnapshot(37.5), load_average: [3.19, "3.9", 3.44] }), false);
+  assert.equal(isSystemEfficiencySnapshot({ ...systemSnapshot(37.5), memory_total_bytes: undefined }), false);
+});
+
+test("system polling updates only its region and preserves the last good snapshot", async () => {
+  const detailHeader = { innerHTML: "old header" };
+  const detailBody = { innerHTML: "old body" };
+  const sessionRegion = { innerHTML: "session rows", focused: true };
+  const requests = deferredSystemRequests();
+  const monitor = createWebSystemMonitor({
+    detailHeader,
+    detailBody,
+    isVisible: () => true,
+    request: signal => requests.request(signal),
+  });
+
+  monitor.render();
+  assert.match(detailBody.innerHTML, /System metrics unavailable/);
+  const first = monitor.refresh();
+  requests.pending[0].resolve({ system: systemSnapshot(37.5) });
+  assert.equal(await first, true);
+  assert.match(detailBody.innerHTML, /37\.5%/);
+  const lastGood = detailBody.innerHTML;
+
+  const malformed = monitor.refresh();
+  requests.pending[1].resolve({ system: { cpu_percent: 99 } });
+  assert.equal(await malformed, false);
+  assert.equal(detailBody.innerHTML, lastGood);
+  assert.deepEqual(sessionRegion, { innerHTML: "session rows", focused: true });
+});
+
+test("system polling does not overwrite an active session or project detail", async () => {
+  let visible = false;
+  const detailHeader = { innerHTML: "Details / Session" };
+  const detailBody = { innerHTML: "focused session" };
+  const requests = deferredSystemRequests();
+  const monitor = createWebSystemMonitor({
+    detailHeader,
+    detailBody,
+    isVisible: () => visible,
+    request: signal => requests.request(signal),
+  });
+
+  const refresh = monitor.refresh();
+  requests.pending[0].resolve({ system: systemSnapshot(42) });
+  assert.equal(await refresh, true);
+  assert.deepEqual(
+    { header: detailHeader.innerHTML, body: detailBody.innerHTML },
+    { header: "Details / Session", body: "focused session" },
+  );
+
+  visible = true;
+  assert.equal(monitor.render(), true);
+  assert.match(detailHeader.innerHTML, /Details \/ System/);
+  assert.match(detailBody.innerHTML, /42\.0%/);
+});
+
+test("newer system responses win even when an aborted request resolves later", async () => {
+  const detailHeader = { innerHTML: "" };
+  const detailBody = { innerHTML: "" };
+  const requests = deferredSystemRequests();
+  const monitor = createWebSystemMonitor({
+    detailHeader,
+    detailBody,
+    isVisible: () => true,
+    request: signal => requests.request(signal),
+  });
+
+  const older = monitor.refresh();
+  const newer = monitor.refresh();
+  assert.equal(requests.pending[0].signal.aborted, true);
+  requests.pending[1].resolve({ system: systemSnapshot(60, 20_000) });
+  assert.equal(await newer, true);
+  requests.pending[0].resolve({ system: systemSnapshot(10, 10_000) });
+  assert.equal(await older, false);
+  assert.match(detailBody.innerHTML, /60\.0%/);
+  assert.doesNotMatch(detailBody.innerHTML, /10\.0%/);
+});
+
+test("stopping system polling aborts in-flight work and blocks late updates", async () => {
+  const detailHeader = { innerHTML: "header" };
+  const detailBody = { innerHTML: "body" };
+  const requests = deferredSystemRequests();
+  const monitor = createWebSystemMonitor({
+    detailHeader,
+    detailBody,
+    isVisible: () => true,
+    request: signal => requests.request(signal),
+  });
+
+  const refresh = monitor.refresh();
+  monitor.stop();
+  assert.equal(requests.pending[0].signal.aborted, true);
+  requests.pending[0].resolve({ system: systemSnapshot(99) });
+  assert.equal(await refresh, false);
+  assert.equal(detailBody.innerHTML, "body");
+  assert.equal(await monitor.refresh(), false);
 });
