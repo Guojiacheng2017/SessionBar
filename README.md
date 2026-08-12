@@ -40,6 +40,20 @@ and polls session data every 1000ms, so age/heartbeat tracking stays responsive
 without letting collection work jitter the layout. Set `SESSIONBAR_TUI_REFRESH_MS`
 for render cadence or `SESSIONBAR_TUI_POLL_MS` for data polling.
 
+## System Efficiency Monitor
+
+The terminal monitor and Web dashboard include one global `System` panel. It
+shows overall CPU, load, physical memory, SessionBar's own CPU/RSS, and sample
+freshness. SessionBar collects one cached system snapshot every two seconds;
+the TUI and Web dashboard read that snapshot independently of session discovery.
+
+On macOS, the Network row shows aggregate non-loopback download and upload
+rates derived from interface byte counters. Network rates can be unavailable on
+the first sample or after a transient collector failure. Disk, battery, GPU,
+top-process, and per-session resource metrics are intentionally not reported:
+agent subprocesses and reused terminal PIDs cannot be attributed reliably to
+one session.
+
 ## Reporting Contract
 
 Agent hooks call `report.sh`:
