@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createIndependentMonitorRefresh,
   createSingleFlightRefresh,
   createVisibleModelUpdater,
   monitorBodyLayout,
@@ -332,6 +333,44 @@ test("single-flight refresh skips overlapping poll and supersedes it for manual 
   pending[1]("new");
   assert.equal(await manual, true);
   assert.deepEqual(applied, ["new"]);
+});
+
+test("session and system refresh results apply as soon as each settles", async () => {
+  let resolveSessions;
+  let resolveSystem;
+  const applied = [];
+  const refresh = createIndependentMonitorRefresh(
+    () => new Promise(resolve => { resolveSessions = resolve; }),
+    () => new Promise(resolve => { resolveSystem = resolve; }),
+    value => applied.push(["sessions", value.sessions.length]),
+    value => applied.push(["system", value?.cpu_percent]),
+  );
+
+  refresh("poll");
+  resolveSystem(systemSnapshot({ cpu_percent: 48 }));
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(applied, [["system", 48]]);
+
+  resolveSessions({ sessions: [{ session_id: "a" }] });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(applied, [["system", 48], ["sessions", 1]]);
+});
+
+test("an SSE deadline with no event leaves the current session result untouched", async () => {
+  const applied = [];
+  const refresh = createIndependentMonitorRefresh(
+    async () => ({ sessions: [], unchanged: true }),
+    async () => undefined,
+    value => applied.push(value),
+    () => undefined,
+  );
+
+  refresh("poll");
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(applied, []);
 });
 
 test("missing or malformed system results preserve the last good snapshot", () => {

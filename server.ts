@@ -158,8 +158,19 @@ function removeClaudeHooks() {
 const sessions: Record<string, SessionPayload> = {};
 const sseClients = new Set<express.Response>();
 
+export async function consumeSystemSample(
+  sample: () => Promise<unknown>,
+  log: (message: string, error: unknown) => void = (message, error) => console.error(message, error),
+): Promise<void> {
+  try {
+    await sample();
+  } catch (error) {
+    log("[system] system sample failed", error);
+  }
+}
+
 async function sampleSystem(): Promise<void> {
-  await systemSampler.sample();
+  await consumeSystemSample(() => systemSampler.sample());
 }
 
 function startSystemSampling(): void {

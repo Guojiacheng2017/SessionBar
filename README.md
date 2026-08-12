@@ -35,10 +35,10 @@ between projects while the session table still shows all sessions. Press `Enter`
 to inspect that project's sessions, then `↑↓` moves between sessions. Press `a`
 or Backspace to return to all projects.
 
-The TUI uses a monitor-style split cadence. By default it redraws every 500ms
-and polls session data every 1000ms, so age/heartbeat tracking stays responsive
-without letting collection work jitter the layout. Set `SESSIONBAR_TUI_REFRESH_MS`
-for render cadence or `SESSIONBAR_TUI_POLL_MS` for data polling.
+The TUI paints when its visible model changes and schedules lightweight updates
+at the next visible freshness deadline. Session and system data poll every
+1000ms by default. Set `SESSIONBAR_TUI_REFRESH_MS` to cap renderer FPS or
+`SESSIONBAR_TUI_POLL_MS` to change data polling.
 
 ## System Efficiency Monitor
 

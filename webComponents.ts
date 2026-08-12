@@ -154,11 +154,15 @@ export function detailListMarkup(rows: Array<{ label: string; value: string }>, 
   ).join("")}</dl>`;
 }
 
-export function systemEfficiencyMarkup(snapshot: SystemEfficiencySnapshot | undefined): string {
+export function systemEfficiencyMarkup(
+  snapshot: SystemEfficiencySnapshot | undefined,
+  now = Date.now(),
+): string {
   if (!snapshot) {
     return `<section class="system-efficiency system-efficiency-empty" aria-label="System health">
       <div class="system-efficiency-head"><strong>System</strong><span>Global health</span></div>
       <div class="system-efficiency-unavailable" role="status">System metrics unavailable</div>
+      <div class="system-efficiency-rows">${systemInfoRow("Sample", "Unavailable")}</div>
     </section>`;
   }
 
@@ -172,6 +176,7 @@ export function systemEfficiencyMarkup(snapshot: SystemEfficiencySnapshot | unde
     systemMeterRow("Memory", `${formatBytes(snapshot.memory_used_bytes)} / ${formatBytes(snapshot.memory_total_bytes)} · ${percentLabel(memory)}`, memory, 100),
     systemMeterRow("Network", `Down ${formatByteRate(snapshot.network_down_bytes_per_second)} · Up ${formatByteRate(snapshot.network_up_bytes_per_second)}`, networkTotal, networkMax),
     systemMeterRow("SessionBar", `CPU ${percentLabel(serverCpu)} · Memory ${formatBytes(snapshot.server_memory_bytes)}`, serverCpu, 100),
+    systemInfoRow("Sample", sampleFreshness(snapshot.sampled_at, now)),
   ];
   return `<section class="system-efficiency" aria-label="System health">
     <div class="system-efficiency-head"><strong>System</strong><span>Global health</span></div>
@@ -188,6 +193,9 @@ export interface WebSystemMonitorOptions {
   detailBody: HtmlRegion;
   isVisible: () => boolean;
   request: (signal: AbortSignal) => Promise<unknown>;
+  now?: () => number;
+  schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+  cancelSchedule?: (handle: ReturnType<typeof setTimeout>) => void;
 }
 
 export interface WebSystemMonitor {
@@ -201,11 +209,34 @@ export function createWebSystemMonitor(options: WebSystemMonitorOptions): WebSys
   let activeController: AbortController | undefined;
   let generation = 0;
   let stopped = false;
+  let freshnessTimer: ReturnType<typeof setTimeout> | undefined;
+  const now = options.now ?? (() => Date.now());
+  const schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+  const cancelSchedule = options.cancelSchedule ?? (handle => clearTimeout(handle));
+
+  function clearFreshnessTimer(): void {
+    if (freshnessTimer === undefined) return;
+    cancelSchedule(freshnessTimer);
+    freshnessTimer = undefined;
+  }
+
+  function scheduleFreshnessUpdate(): void {
+    clearFreshnessTimer();
+    if (stopped || !snapshot || !options.isVisible()) return;
+    freshnessTimer = schedule(() => {
+      freshnessTimer = undefined;
+      render();
+    }, nextSampleFreshnessDelay(snapshot.sampled_at, now()));
+  }
 
   function render(): boolean {
-    if (!options.isVisible()) return false;
+    if (!options.isVisible()) {
+      clearFreshnessTimer();
+      return false;
+    }
     options.detailHeader.innerHTML = `<span class="${UI.panelTitle}">Details / System</span>`;
-    options.detailBody.innerHTML = systemEfficiencyMarkup(snapshot);
+    options.detailBody.innerHTML = systemEfficiencyMarkup(snapshot, now());
+    scheduleFreshnessUpdate();
     return true;
   }
 
@@ -238,6 +269,7 @@ export function createWebSystemMonitor(options: WebSystemMonitorOptions): WebSys
     if (stopped) return;
     stopped = true;
     generation += 1;
+    clearFreshnessTimer();
     activeController?.abort();
     activeController = undefined;
   }
@@ -250,6 +282,22 @@ function systemMeterRow(label: string, value: string, meterValue: number | undef
     ? `<span class="system-efficiency-meter is-unavailable" aria-hidden="true"></span>`
     : `<meter class="system-efficiency-meter" min="0" max="${max}" value="${meterValue}" aria-label="${escapeHtml(label)}: ${escapeHtml(value)}"></meter>`;
   return `<div class="system-efficiency-row"><span class="system-efficiency-label">${escapeHtml(label)}</span>${meter}<span class="system-efficiency-value">${escapeHtml(value)}</span></div>`;
+}
+
+function systemInfoRow(label: string, value: string): string {
+  return `<div class="system-efficiency-row system-efficiency-info-row"><span class="system-efficiency-label">${escapeHtml(label)}</span><span class="system-efficiency-info-spacer" aria-hidden="true"></span><span class="system-efficiency-value">${escapeHtml(value)}</span></div>`;
+}
+
+function sampleFreshness(sampledAt: number, now: number): string {
+  if (!Number.isFinite(sampledAt) || !Number.isFinite(now)) return "Unavailable";
+  const seconds = Math.max(0, Math.floor((now - sampledAt) / 1_000));
+  return seconds === 0 ? "now" : `${seconds}s ago`;
+}
+
+function nextSampleFreshnessDelay(sampledAt: number, now: number): number {
+  if (!Number.isFinite(sampledAt) || !Number.isFinite(now)) return 1_000;
+  const ageMs = Math.max(0, now - sampledAt);
+  return Math.max(1, 1_000 - (ageMs % 1_000));
 }
 
 function clampPercent(value: number | undefined): number | undefined {

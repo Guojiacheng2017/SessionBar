@@ -39,7 +39,13 @@ import {
 } from "./projectUtils.js";
 
 type Session = SessionPayload;
-type FetchSessions = () => Promise<{ sessions: Session[]; error?: string }>;
+export interface SessionFetchResult {
+  sessions: Session[];
+  error?: string;
+  unchanged?: boolean;
+}
+
+export type FetchSessions = () => Promise<SessionFetchResult>;
 
 export interface OpenTuiMonitorOptions {
   fetchSessions: FetchSessions;
@@ -54,6 +60,7 @@ export interface OpenTuiMonitorOptions {
   animate: boolean;
   toggleSSE?: () => boolean;
   isSSE?: () => boolean;
+  closeTransport?: () => void;
 }
 
 interface MonitorState {
@@ -1334,27 +1341,10 @@ export function createSingleFlightRefresh<T>(
   };
 }
 
-interface MonitorFetchResult {
-  sessions: { sessions: Session[]; error?: string };
-  system?: SystemEfficiencySnapshot;
-}
-
-async function fetchMonitorState(opts: OpenTuiMonitorOptions): Promise<MonitorFetchResult> {
-  const [sessionResult, systemResult] = await Promise.allSettled([
-    opts.fetchSessions(),
-    opts.fetchSystem(),
-  ]);
-  const result = sessionResult.status === "fulfilled"
-    ? sessionResult.value
-    : { sessions: [], error: errorMessage(sessionResult.reason) };
-  return {
-    sessions: result,
-    system: systemResult.status === "fulfilled" ? systemResult.value : undefined,
-  };
-}
-
-function applyMonitorFetch(state: Readonly<MonitorState>, fetched: MonitorFetchResult): MonitorState {
-  const result = fetched.sessions;
+function applySessionFetch(
+  state: Readonly<MonitorState>,
+  result: SessionFetchResult,
+): MonitorState {
   const sessions = result.sessions.length > 0 || !result.error ? result.sessions : state.sessions;
   const unread = updateUnreadSessionState({
     previousFingerprints: state.sessionFingerprints,
@@ -1366,12 +1356,46 @@ function applyMonitorFetch(state: Readonly<MonitorState>, fetched: MonitorFetchR
   return clampState({
     ...state,
     sessions,
-    system: preserveSystemSnapshot(state.system, fetched.system),
     errorMsg: result.error,
     sessionFingerprints: unread.fingerprints,
     unreadSessionIds: unread.unreadSessionIds,
     unreadInitialized: unread.initialized,
   });
+}
+
+export function createIndependentMonitorRefresh(
+  fetchSessions: FetchSessions,
+  fetchSystem: () => Promise<SystemEfficiencySnapshot | undefined>,
+  applySessions: (result: SessionFetchResult) => void,
+  applySystem: (result: SystemEfficiencySnapshot | undefined) => void,
+): (reason: "poll" | "manual") => void {
+  const refreshSessions = createSingleFlightRefresh(
+    async () => {
+      try {
+        return await fetchSessions();
+      } catch (error) {
+        return { sessions: [], error: errorMessage(error) };
+      }
+    },
+    result => {
+      if (!result.unchanged) applySessions(result);
+    },
+  );
+  const refreshSystem = createSingleFlightRefresh(
+    async () => {
+      try {
+        return await fetchSystem();
+      } catch {
+        return undefined;
+      }
+    },
+    applySystem,
+  );
+
+  return reason => {
+    void refreshSessions(reason);
+    void refreshSystem(reason);
+  };
 }
 
 export function preserveSystemSnapshot(
@@ -1471,9 +1495,14 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
         if (!disposed) scheduleFreshnessUpdate();
       }, delayMs);
     };
-    const refreshMonitor = createSingleFlightRefresh(
-      () => fetchMonitorState(opts),
-      fetched => update(current => applyMonitorFetch(current, fetched)),
+    const refreshMonitor = createIndependentMonitorRefresh(
+      opts.fetchSessions,
+      opts.fetchSystem,
+      fetched => update(current => applySessionFetch(current, fetched)),
+      fetched => update(current => ({
+        ...current,
+        system: preserveSystemSnapshot(current.system, fetched),
+      })),
     );
     const refreshProviders = createSingleFlightRefresh(
       () => fetchProviderState(opts),
@@ -1484,6 +1513,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       disposed = true;
       clearInterval(poll);
       if (freshnessTimer) clearTimeout(freshnessTimer);
+      opts.closeTransport?.();
       renderer.keyInput.off("keypress", keyHandler);
       renderer.off("resize", resizeHandler);
       refs.root.destroyRecursively();

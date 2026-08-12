@@ -166,13 +166,15 @@ test("renders one global system efficiency band", () => {
     server_cpu_percent: 1.8,
     server_memory_bytes: 79 * 1024 ** 2,
     sampled_at: 10_000,
-  });
+  }, 12_000);
 
   assert.match(html, /System/);
   assert.match(html, /CPU/);
   assert.match(html, /Memory/);
   assert.match(html, /Network/);
   assert.match(html, /SessionBar/);
+  assert.match(html, /Sample/);
+  assert.match(html, /2s ago/);
   assert.match(html, /37\.5%/);
   assert.match(html, /12\.8 GB.*16 GB.*80\.0%/);
   assert.match(html, /80\.0 KB\/s.*10\.0 KB\/s/);
@@ -184,6 +186,8 @@ test("renders an unavailable global system state without a session grid", () => 
   const html = systemEfficiencyMarkup(undefined);
 
   assert.match(html, /System metrics unavailable/);
+  assert.match(html, /Sample/);
+  assert.match(html, /Unavailable/);
   assert.doesNotMatch(html, /runtime-contributions|runtime-matrix|<meter/);
 });
 
@@ -219,6 +223,42 @@ test("system polling updates only its region and preserves the last good snapsho
   assert.equal(await malformed, false);
   assert.equal(detailBody.innerHTML, lastGood);
   assert.deepEqual(sessionRegion, { innerHTML: "session rows", focused: true });
+  monitor.stop();
+});
+
+test("system freshness advances on its own deadline without rebuilding session UI", async () => {
+  let now = 10_500;
+  let scheduled;
+  let scheduledDelay;
+  const detailHeader = { innerHTML: "" };
+  const detailBody = { innerHTML: "" };
+  const sessionRegion = { innerHTML: "session rows" };
+  const requests = deferredSystemRequests();
+  const monitor = createWebSystemMonitor({
+    detailHeader,
+    detailBody,
+    isVisible: () => true,
+    request: signal => requests.request(signal),
+    now: () => now,
+    schedule(callback, delayMs) {
+      scheduled = callback;
+      scheduledDelay = delayMs;
+      return 1;
+    },
+    cancelSchedule() {},
+  });
+
+  const refresh = monitor.refresh();
+  requests.pending[0].resolve({ system: systemSnapshot(37.5, 10_000) });
+  assert.equal(await refresh, true);
+  assert.match(detailBody.innerHTML, /Sample.*now/s);
+  assert.equal(scheduledDelay, 500);
+
+  now = 11_000;
+  scheduled();
+  assert.match(detailBody.innerHTML, /Sample.*1s ago/s);
+  assert.deepEqual(sessionRegion, { innerHTML: "session rows" });
+  monitor.stop();
 });
 
 test("system polling does not overwrite an active session or project detail", async () => {
@@ -245,6 +285,7 @@ test("system polling does not overwrite an active session or project detail", as
   assert.equal(monitor.render(), true);
   assert.match(detailHeader.innerHTML, /Details \/ System/);
   assert.match(detailBody.innerHTML, /42\.0%/);
+  monitor.stop();
 });
 
 test("newer system responses win even when an aborted request resolves later", async () => {
@@ -267,6 +308,7 @@ test("newer system responses win even when an aborted request resolves later", a
   assert.equal(await older, false);
   assert.match(detailBody.innerHTML, /60\.0%/);
   assert.doesNotMatch(detailBody.innerHTML, /10\.0%/);
+  monitor.stop();
 });
 
 test("stopping system polling aborts in-flight work and blocks late updates", async () => {

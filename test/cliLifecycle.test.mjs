@@ -98,13 +98,22 @@ test("monitor fetches structurally valid system state from the independent endpo
 
 test("monitor settles session and system fetches independently", () => {
   const monitorSource = readFileSync(new URL("../openTuiMonitor.ts", import.meta.url), "utf8");
-  assert.match(monitorSource, /Promise\.allSettled\(\[\s*opts\.fetchSessions\(\),\s*opts\.fetchSystem/);
+  assert.match(monitorSource, /createIndependentMonitorRefresh/);
+  assert.doesNotMatch(monitorSource, /Promise\.allSettled\(\[\s*opts\.fetchSessions\(\),\s*opts\.fetchSystem/);
   assert.match(cliSource, /fetchSystem(?:,|:)/);
+});
+
+test("monitor close tears down the active SSE transport", () => {
+  const monitorSource = readFileSync(new URL("../openTuiMonitor.ts", import.meta.url), "utf8");
+  assert.match(monitorSource, /opts\.closeTransport\?\.\(\)/);
+  assert.match(cliSource, /closeTransport:\s*closeSSETransport/);
 });
 
 test("monitor routes interval and manual refresh through single-flight controllers", () => {
   const monitorSource = readFileSync(new URL("../openTuiMonitor.ts", import.meta.url), "utf8");
-  assert.match(monitorSource, /const refreshMonitor = createSingleFlightRefresh/);
+  assert.match(monitorSource, /const refreshMonitor = createIndependentMonitorRefresh/);
+  assert.match(monitorSource, /const refreshSessions = createSingleFlightRefresh/);
+  assert.match(monitorSource, /const refreshSystem = createSingleFlightRefresh/);
   assert.match(monitorSource, /const refreshProviders = createSingleFlightRefresh/);
   assert.match(monitorSource, /refreshMonitor\("manual"\)/);
   assert.match(monitorSource, /refreshMonitor\("poll"\)/);

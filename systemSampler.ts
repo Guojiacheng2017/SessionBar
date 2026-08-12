@@ -12,6 +12,7 @@ export interface CpuTimes {
 export interface NetworkCounters {
   received_bytes: number;
   transmitted_bytes: number;
+  interface_names?: string[];
 }
 
 export interface SystemSampleInput {
@@ -100,7 +101,7 @@ function cpuPercent(previous: CpuTimes | undefined, current: CpuTimes, elapsedMs
 function serverCpuPercent(previous: number | undefined, current: number, elapsedMs: number): number | undefined {
   const delta = counterDelta(previous, current);
   if (delta === undefined || !hasPositiveFiniteElapsed(elapsedMs)) return undefined;
-  return (delta / (elapsedMs * 1_000)) * 100;
+  return clampPercent((delta / (elapsedMs * 1_000)) * 100);
 }
 
 export function deriveSystemSnapshot(
@@ -156,7 +157,16 @@ function parseCounter(value: string | undefined): number | undefined {
 function validNetworkCounters(value: NetworkCounters | undefined): value is NetworkCounters {
   return value !== undefined
     && finiteNonNegative(value.received_bytes)
-    && finiteNonNegative(value.transmitted_bytes);
+    && finiteNonNegative(value.transmitted_bytes)
+    && (value.interface_names === undefined
+      || value.interface_names.every(name => typeof name === "string" && name.length > 0));
+}
+
+function sameEligibleInterfaces(previous: NetworkCounters | undefined, current: NetworkCounters): boolean {
+  if (!previous?.interface_names || !current.interface_names) return true;
+  if (previous.interface_names.length !== current.interface_names.length) return false;
+  const currentNames = new Set(current.interface_names);
+  return previous.interface_names.every(name => currentNames.has(name));
 }
 
 function isLoopbackInterface(name: string): boolean {
@@ -200,7 +210,11 @@ export function parseNetworkCounters(stdout: string): NetworkCounters | undefine
     receivedBytes += counters.received_bytes;
     transmittedBytes += counters.transmitted_bytes;
   }
-  return { received_bytes: receivedBytes, transmitted_bytes: transmittedBytes };
+  return {
+    received_bytes: receivedBytes,
+    transmitted_bytes: transmittedBytes,
+    interface_names: [...interfaces.keys()].sort(),
+  };
 }
 
 function defaultExecFile(
@@ -263,37 +277,46 @@ export function createSystemSampler(options: SystemSamplerOptions = {}): {
     if (stopped || inFlight) return undefined;
     inFlight = true;
     try {
-      const memory = readMemory();
-      const current: SystemSampleInput = {
-        monotonic_ms: monotonicNow(),
-        cpu: readCpuTimes(),
-        load_average: readLoadAverage(),
-        memory_used_bytes: memory.used_bytes,
-        memory_total_bytes: memory.total_bytes,
-        process_cpu_micros: readProcessCpu(),
-        server_memory_bytes: readServerMemory(),
-        sampled_at: sampledAt(),
-      };
-      let network: NetworkCounters | undefined;
       try {
-        network = options.networkCollector
-          ? await options.networkCollector()
-          : await collectNetworkCounters(platform, execFile);
+        const memory = readMemory();
+        const current: SystemSampleInput = {
+          monotonic_ms: monotonicNow(),
+          cpu: readCpuTimes(),
+          load_average: readLoadAverage(),
+          memory_used_bytes: memory.used_bytes,
+          memory_total_bytes: memory.total_bytes,
+          process_cpu_micros: readProcessCpu(),
+          server_memory_bytes: readServerMemory(),
+          sampled_at: sampledAt(),
+        };
+        let network: NetworkCounters | undefined;
+        try {
+          network = options.networkCollector
+            ? await options.networkCollector()
+            : await collectNetworkCounters(platform, execFile);
+        } catch {
+          network = undefined;
+        }
+        current.network = validNetworkCounters(network) ? network : undefined;
+        const snapshot = deriveSystemSnapshot(previous, current);
+        if (current.network) {
+          if (sameEligibleInterfaces(lastValidNetwork?.network, current.network)) {
+            const networkSnapshot = deriveSystemSnapshot(lastValidNetwork, current);
+            snapshot.network_down_bytes_per_second = networkSnapshot.network_down_bytes_per_second;
+            snapshot.network_up_bytes_per_second = networkSnapshot.network_up_bytes_per_second;
+          } else {
+            snapshot.network_down_bytes_per_second = undefined;
+            snapshot.network_up_bytes_per_second = undefined;
+          }
+          lastValidNetwork = current;
+        }
+        const immutableSnapshot = freezeSnapshot(snapshot);
+        previous = current;
+        latestSnapshot = immutableSnapshot;
+        return immutableSnapshot;
       } catch {
-        network = undefined;
+        return undefined;
       }
-      current.network = validNetworkCounters(network) ? network : undefined;
-      const snapshot = deriveSystemSnapshot(previous, current);
-      if (current.network) {
-        const networkSnapshot = deriveSystemSnapshot(lastValidNetwork, current);
-        snapshot.network_down_bytes_per_second = networkSnapshot.network_down_bytes_per_second;
-        snapshot.network_up_bytes_per_second = networkSnapshot.network_up_bytes_per_second;
-        lastValidNetwork = current;
-      }
-      const immutableSnapshot = freezeSnapshot(snapshot);
-      previous = current;
-      latestSnapshot = immutableSnapshot;
-      return immutableSnapshot;
     } finally {
       inFlight = false;
     }

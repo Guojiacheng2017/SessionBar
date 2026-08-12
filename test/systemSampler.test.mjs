@@ -42,6 +42,19 @@ test("derives CPU, network, and server CPU rates from monotonic deltas", () => {
   assert.equal(snapshot.server_cpu_percent, 25);
 });
 
+test("clamps server CPU to the public percentage range", () => {
+  const first = observation({
+    monotonic_ms: 1_000,
+    process_cpu_micros: 1_000_000,
+  });
+  const second = observation({
+    monotonic_ms: 2_000,
+    process_cpu_micros: 3_000_000,
+  });
+
+  assert.equal(deriveSystemSnapshot(first, second).server_cpu_percent, 100);
+});
+
 test("leaves first-sample rates unavailable", () => {
   const snapshot = deriveSystemSnapshot(undefined, observation({ monotonic_ms: 1_000 }));
 
@@ -102,7 +115,11 @@ test("parses non-loopback network maxima across address rows", () => {
     "lo0 16384 inet 127.0.0.1 99 0 9000 99 0 9000 0",
   ].join("\n"));
 
-  assert.deepEqual(counters, { received_bytes: 3004, transmitted_bytes: 5008 });
+  assert.deepEqual(counters, {
+    received_bytes: 3004,
+    transmitted_bytes: 5008,
+    interface_names: ["en0", "en1"],
+  });
 });
 
 test("clamps memory percentage and preserves other metrics when network is unavailable", () => {
@@ -146,6 +163,57 @@ test("recovers network throughput from the last valid baseline after a failed pa
   const recovered = await sampler.sample();
   assert.equal(recovered.network_down_bytes_per_second, 2_000);
   assert.equal(recovered.network_up_bytes_per_second, 500);
+});
+
+test("resets network rates for one sample when eligible interfaces are added or removed", async () => {
+  let sampleNumber = 0;
+  const networkResults = [
+    { received_bytes: 1_000, transmitted_bytes: 400, interface_names: ["en0"] },
+    { received_bytes: 2_000, transmitted_bytes: 900, interface_names: ["en0"] },
+    { received_bytes: 12_500, transmitted_bytes: 6_200, interface_names: ["en0", "en1"] },
+    { received_bytes: 13_500, transmitted_bytes: 6_700, interface_names: ["en0", "en1"] },
+    { received_bytes: 4_000, transmitted_bytes: 1_800, interface_names: ["en0"] },
+    { received_bytes: 5_000, transmitted_bytes: 2_300, interface_names: ["en0"] },
+  ];
+  const sampler = createSystemSampler({
+    platform: "linux",
+    monotonicNow: () => (++sampleNumber) * 1_000,
+    sampledAt: () => sampleNumber * 1_000,
+    cpuTimes: () => ({ idle: sampleNumber * 100, total: sampleNumber * 200 }),
+    loadAverage: () => [1, 0.5, 0.25],
+    memory: () => ({ used_bytes: 40, total_bytes: 100 }),
+    processCpuMicros: () => sampleNumber * 100_000,
+    networkCollector: () => networkResults[sampleNumber - 1],
+  });
+
+  await sampler.sample();
+  assert.equal((await sampler.sample()).network_down_bytes_per_second, 1_000);
+  assert.equal((await sampler.sample()).network_down_bytes_per_second, undefined);
+  assert.equal((await sampler.sample()).network_down_bytes_per_second, 1_000);
+  assert.equal((await sampler.sample()).network_down_bytes_per_second, undefined);
+  assert.equal((await sampler.sample()).network_down_bytes_per_second, 1_000);
+});
+
+test("a full observation exception preserves the last snapshot and resolves safely", async () => {
+  let sampleNumber = 0;
+  let throwMemory = false;
+  const sampler = createSystemSampler({
+    platform: "linux",
+    monotonicNow: () => (++sampleNumber) * 1_000,
+    sampledAt: () => sampleNumber * 1_000,
+    cpuTimes: () => ({ idle: sampleNumber * 100, total: sampleNumber * 200 }),
+    loadAverage: () => [1, 0.5, 0.25],
+    memory: () => {
+      if (throwMemory) throw new Error("memory reader failed");
+      return { used_bytes: 40, total_bytes: 100 };
+    },
+    processCpuMicros: () => sampleNumber * 100_000,
+  });
+
+  const first = await sampler.sample();
+  throwMemory = true;
+  assert.equal(await sampler.sample(), undefined);
+  assert.equal(sampler.latest(), first);
 });
 
 test("uses the bounded netstat adapter on macOS", async () => {

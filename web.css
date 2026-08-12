@@ -516,6 +516,10 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 .system-efficiency-meter::-moz-meter-bar { border-radius: 4px; background: var(--sb-accent); }
 .system-efficiency-meter.is-unavailable { display: block; }
 
+.system-efficiency-info-spacer {
+  min-height: 1px;
+}
+
 .system-efficiency-value {
   min-width: 0;
   color: var(--sb-ink);

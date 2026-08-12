@@ -7,6 +7,7 @@ import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
 import { runOpenTuiMonitor } from "./openTuiMonitor.js";
+import { createSSETransport, type SSETransport } from "./sseTransport.js";
 import { pruneSessionMarkerFiles } from "./sessionMarkers.js";
 import {
   setupHooks,
@@ -1126,47 +1127,15 @@ function render(sessions: any[], frame: number, errorMsg?: string) {
 
 // ── SSE stream reader ──
 
-async function startSSE(): Promise<ReadableStreamDefaultReader<string> | null> {
+async function startSSE(signal: AbortSignal): Promise<ReadableStreamDefaultReader<string> | null> {
   try {
-    const resp = await fetch(`${API_BASE}/sessions/stream`);
+    const resp = await fetch(`${API_BASE}/sessions/stream`, { signal });
     if (!resp.ok || !resp.body) return null;
     const reader = resp.body
       .pipeThrough(new TextDecoderStream())
       .getReader();
     return reader;
   } catch { return null; }
-}
-
-async function readSSE(
-  reader: ReadableStreamDefaultReader<string>,
-  timeoutMs = 30000,
-): Promise<any[] | "timeout" | "closed"> {
-  let buffer = "";
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    let result: ReadableStreamReadResult<string>;
-    try {
-      result = await reader.read();
-    } catch {
-      return "closed";
-    }
-    if (result.done) return "closed";
-    buffer += result.value;
-    // Extract complete SSE events (delimited by \n\n)
-    while (true) {
-      const idx = buffer.indexOf("\n\n");
-      if (idx === -1) break;
-      const event = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      const dataLine = event.split("\n").find((l: string) => l.startsWith("data: "));
-      if (dataLine) {
-        try {
-          return JSON.parse(dataLine.slice(6));
-        } catch { /* skip malformed event, continue parsing buffer */ }
-      }
-    }
-  }
-  return "timeout";
 }
 
 async function watch() {
@@ -1180,23 +1149,25 @@ async function watch() {
 
   // SSE-aware fetch wrapper: toggles between REST polling and SSE push
   let sse = false;
-  let sseReader: ReadableStreamDefaultReader<string> | null = null;
+  let sseTransport: SSETransport<any[]> | null = null;
+
+  const closeSSETransport = () => {
+    sseTransport?.close();
+    sseTransport = null;
+  };
 
   const sseToggleFetch: typeof fetchSessions = async () => {
     if (!sse) return fetchSessions();
-    if (!sseReader) {
-      sseReader = await startSSE();
-      if (!sseReader) return { sessions: [], error: "SSE connect failed" };
-    }
-    const data = await readSSE(sseReader, tuiRenderMs);
-    if (data === "closed") { sseReader = null; sse = false; return { sessions: [], error: "SSE lost" }; }
-    if (data === "timeout") return { sessions: [], error: undefined };
+    if (!sseTransport) sseTransport = createSSETransport(startSSE);
+    const data = await sseTransport.next(tuiRenderMs);
+    if (data === "closed") { closeSSETransport(); sse = false; return { sessions: [], error: "SSE lost" }; }
+    if (data === "timeout") return { sessions: [], unchanged: true };
     return { sessions: data as any[], error: undefined };
   };
 
   const toggleSSE = (): boolean => {
     sse = !sse;
-    if (!sse && sseReader) { try { sseReader.cancel(); } catch { /* */ } sseReader = null; }
+    if (!sse) closeSSETransport();
     return sse;
   };
 
@@ -1220,11 +1191,14 @@ async function watch() {
       animate: animateTui,
       toggleSSE,
       isSSE: () => sse,
+      closeTransport: closeSSETransport,
     });
   } catch (error) {
     if (!isOpenTuiRuntimeError(error)) throw error;
     console.error("OpenTUI monitor requires Bun's native FFI runtime. Install Bun or run: bun dist/cli.js monitor");
     process.exitCode = 1;
+  } finally {
+    closeSSETransport();
   }
   return;
 }
