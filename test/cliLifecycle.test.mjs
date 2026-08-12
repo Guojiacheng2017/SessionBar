@@ -87,3 +87,16 @@ test("setup hook commands pass canonical hook event labels", () => {
   assert.ok(hookSource.includes('commandFor("codex", "Codex", reportPath, "working", "\\"${CODEX_TOOL_NAME:-Working}\\"", "PreToolUse")'));
   assert.ok(hookSource.includes('commandFor("codex", "Codex", reportPath, "blocked", "\'Waiting for permission\'", "PermissionRequest")'));
 });
+
+test("monitor fetches structurally valid system state from the independent endpoint", () => {
+  const fetchSystemBody = functionBody("fetchSystem");
+  assert.match(fetchSystemBody, /fetch\(`\$\{API_BASE\}\/system\/live`\)/);
+  assert.match(fetchSystemBody, /data\.system/);
+  assert.match(fetchSystemBody, /isSystemEfficiencySnapshot/);
+});
+
+test("monitor settles session and system fetches independently", () => {
+  const monitorSource = readFileSync(new URL("../openTuiMonitor.ts", import.meta.url), "utf8");
+  assert.match(monitorSource, /Promise\.allSettled\(\[\s*opts\.fetchSessions\(\),\s*opts\.fetchSystem/);
+  assert.match(cliSource, /fetchSystem(?:,|:)/);
+});

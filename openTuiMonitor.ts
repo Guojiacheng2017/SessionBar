@@ -13,7 +13,7 @@ import {
   type TextTableContent,
 } from "@opentui/core";
 import type { PlanRow } from "./planTypes.js";
-import type { SessionPayload } from "./types.js";
+import type { SessionPayload, SystemEfficiencySnapshot } from "./types.js";
 import {
   buildSessionDetailChunks,
   buildSessionSidebarLine,
@@ -44,6 +44,7 @@ type FetchSessions = () => Promise<{ sessions: Session[]; error?: string }>;
 
 export interface OpenTuiMonitorOptions {
   fetchSessions: FetchSessions;
+  fetchSystem: () => Promise<SystemEfficiencySnapshot | undefined>;
   fetchProviders?: () => Promise<PlanRow[]>;
   openWebDashboard: () => Promise<void>;
   renderMs: number;
@@ -58,8 +59,8 @@ export interface OpenTuiMonitorOptions {
 
 interface MonitorState {
   sessions: Session[];
+  system?: SystemEfficiencySnapshot;
   errorMsg?: string;
-  frame: number;
   filterText: string;
   filterActive: boolean;
   projectCursorKey: string | null;
@@ -121,6 +122,8 @@ export interface MonitorBodyLayout {
   detailContentWidth: number;
 }
 
+type VisibleModel = Record<string, unknown>;
+
 const PALETTE = {
   bg: "transparent",
   panel: "transparent",
@@ -136,6 +139,41 @@ const PALETTE = {
 } as const;
 
 const COLOR_CACHE = new Map<string, ReturnType<typeof parseColor>>();
+
+function normalizedVisibleValue(value: unknown): unknown {
+  if (value instanceof Map) {
+    return [...value.entries()]
+      .map(([key, entry]) => [String(key), normalizedVisibleValue(entry)])
+      .sort(([left], [right]) => String(left).localeCompare(String(right)));
+  }
+  if (value instanceof Set) {
+    return [...value].map(normalizedVisibleValue).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  }
+  if (Array.isArray(value)) return value.map(normalizedVisibleValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, normalizedVisibleValue(entry)]),
+    );
+  }
+  return value;
+}
+
+export function visibleModelFingerprint(model: unknown): string {
+  return JSON.stringify(normalizedVisibleValue(model));
+}
+
+export function createVisibleModelUpdater<T>(render: (model: T) => void): (model: T) => boolean {
+  let previousFingerprint: string | undefined;
+  return model => {
+    const fingerprint = visibleModelFingerprint(model);
+    if (fingerprint === previousFingerprint) return false;
+    previousFingerprint = fingerprint;
+    render(model);
+    return true;
+  };
+}
 
 function color(value: PaletteColor) {
   if (value instanceof RGBA) return value;
@@ -596,7 +634,6 @@ function renderProvidersView(refs: MonitorRefs, renderer: CliRenderer, state: Re
   refs.providersTable.content = providerTableContent(providers, renderer, error);
   refs.footer.content = state.errorMsg ? `! ${state.errorMsg}` : "v / P  switch to sessions  r refresh  / filter  w web  q quit";
   refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;
-  renderer.requestRender();
 }
 
 function healthScore(sessions: readonly Session[]): { score: number; label: string; color: string } {
@@ -702,6 +739,38 @@ export function runtimeOverviewText(sessions: readonly Session[], width = 44): s
   else if (usage.sampledSessions === 0) lines.push("", "waiting for runtime samples");
   else if (usage.sampledSessions < usage.activeSessions) lines.push("", `waiting for ${usage.activeSessions - usage.sampledSessions} sample${usage.activeSessions - usage.sampledSessions === 1 ? "" : "s"}`);
   return lines.join("\n");
+}
+
+export function systemOverviewText(
+  snapshot: SystemEfficiencySnapshot | undefined,
+  width = 44,
+  now = Date.now(),
+): string {
+  const barWidth = Math.max(8, Math.min(16, Math.floor(width / 4)));
+  const cpu = snapshot?.cpu_percent;
+  const memory = snapshot?.memory_percent;
+  const load = snapshot?.load_average;
+  const sampleAge = snapshot ? Math.max(0, Math.floor((now - snapshot.sampled_at) / 1000)) : undefined;
+  return [
+    `CPU        ${percentValue(cpu)} ${runtimeProgressBar(cpu, 100, barWidth)}`,
+    `Load       ${load ? load.map(value => value.toFixed(2)).join("  ") : "—  —  —"}`,
+    `Memory     ${formatRuntimeBytes(snapshot?.memory_used_bytes)} / ${formatRuntimeBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)} ${runtimeProgressBar(memory, 100, barWidth)}`,
+    `Network    down ${formatByteRate(snapshot?.network_down_bytes_per_second)}  up ${formatByteRate(snapshot?.network_up_bytes_per_second)}`,
+    `SessionBar CPU ${percentValue(snapshot?.server_cpu_percent)}  MEM ${formatRuntimeBytes(snapshot?.server_memory_bytes)}`,
+    `Sample     ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
+  ].join("\n");
+}
+
+function percentValue(value: number | undefined): string {
+  return value === undefined ? "—" : `${value.toFixed(1)}%`;
+}
+
+function formatByteRate(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
+  if (value < 1000) return `${value.toFixed(1)} B/s`;
+  if (value < 1_000_000) return `${(value / 1000).toFixed(1)} KB/s`;
+  if (value < 1_000_000_000) return `${(value / 1_000_000).toFixed(1)} MB/s`;
+  return `${(value / 1_000_000_000).toFixed(1)} GB/s`;
 }
 
 function runtimeValue(value: number | undefined, suffix: string): string {
@@ -934,7 +1003,7 @@ function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<Mo
     ? detailTextForSession(selected, state.detailTab, detailWidth)
     : state.projectFocusKey
       ? detailTextForProject(scopeSessions, shown, opts)
-      : runtimeOverviewText(shown, detailWidth);
+      : systemOverviewText(state.system, detailWidth);
   const sessionTitle = state.projectFocusKey && scopeSessions[0]
     ? `Sessions / ${projectName(scopeSessions[0])}`
     : "All Sessions";
@@ -967,11 +1036,10 @@ function updateRefs(refs: MonitorRefs, renderer: CliRenderer, state: Readonly<Mo
   refs.sessionsTable.content = sessionTableContent(sessionData, state, renderer);
   refs.detailsBox.title = selected
     ? `Details / Session / ${detailTabTitle(state.detailTab)}`
-    : state.projectFocusKey ? "Details / Project" : "Details / Runtime";
+    : state.projectFocusKey ? "Details / Project" : "Details / System";
   refs.detailsText.content = details;
   refs.footer.content = footer;
   refs.footer.fg = state.errorMsg ? PALETTE.red : PALETTE.muted;
-  renderer.requestRender();
 }
 
 function printableChar(key: KeyEvent): string {
@@ -1028,11 +1096,51 @@ export function nextViewFromMonitorKey(
   return null;
 }
 
+function monitorVisibleModel(state: Readonly<MonitorState>, renderer: CliRenderer, now = Date.now()): VisibleModel {
+  const common = {
+    view: state.view,
+    width: renderer.width,
+    height: renderer.height,
+    errorMsg: state.errorMsg,
+  };
+  if (state.view === "providers") {
+    return {
+      ...common,
+      providers: state.providers,
+      providersError: state.providersError,
+    };
+  }
+  const shown = applyFilter(state.sessions, state.filterText);
+  return {
+    ...common,
+    sessions: state.sessions,
+    system: state.projectFocusKey ? undefined : state.system,
+    filterText: state.filterText,
+    filterActive: state.filterActive,
+    projectCursorKey: state.projectCursorKey,
+    projectFocusKey: state.projectFocusKey,
+    selectedIdx: state.selectedIdx,
+    selectedId: state.selectedId,
+    detailId: state.detailId,
+    detailTab: state.detailTab,
+    unreadSessionIds: state.unreadSessionIds,
+    freshnessSecond: shown.length > 0 || (!state.projectFocusKey && state.system)
+      ? Math.floor(now / 1000)
+      : undefined,
+  };
+}
+
 async function fetchIntoState(
   opts: OpenTuiMonitorOptions,
   update: (updater: (state: Readonly<MonitorState>) => MonitorState) => void,
 ): Promise<void> {
-  const result = await opts.fetchSessions();
+  const [sessionResult, systemResult] = await Promise.allSettled([
+    opts.fetchSessions(),
+    opts.fetchSystem(),
+  ]);
+  const result = sessionResult.status === "fulfilled"
+    ? sessionResult.value
+    : { sessions: [], error: errorMessage(sessionResult.reason) };
   update(state => {
     const sessions = result.sessions.length > 0 || !result.error ? result.sessions : state.sessions;
     const unread = updateUnreadSessionState({
@@ -1045,6 +1153,7 @@ async function fetchIntoState(
     return clampState({
       ...state,
       sessions,
+      system: systemResult.status === "fulfilled" ? systemResult.value : state.system,
       errorMsg: result.error,
       sessionFingerprints: unread.fingerprints,
       unreadSessionIds: unread.unreadSessionIds,
@@ -1086,7 +1195,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
   return new Promise<void>((resolve) => {
     let state: MonitorState = clampState({
       sessions: [],
-      frame: 0,
+      system: undefined,
       filterText: "",
       filterActive: false,
       projectCursorKey: null,
@@ -1104,22 +1213,35 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       providersError: undefined,
     });
     let disposed = false;
+    let freshnessTimer: ReturnType<typeof setTimeout> | undefined;
     const refs = createRefs(renderer, opts);
 
+    const requestVisibleUpdate = createVisibleModelUpdater(() => {
+      updateRefs(refs, renderer, state, opts);
+      renderer.requestRender();
+    });
     const render = () => {
-      if (!disposed) updateRefs(refs, renderer, state, opts);
+      if (!disposed) requestVisibleUpdate(monitorVisibleModel(state, renderer));
     };
     const update = (updater: (state: Readonly<MonitorState>) => MonitorState) => {
       state = clampState(updater(state));
       render();
     };
+    const resizeHandler = () => update(current => ({ ...current }));
+    const scheduleFreshnessUpdate = () => {
+      const delayMs = Math.max(1, 1000 - (Date.now() % 1000));
+      freshnessTimer = setTimeout(() => {
+        render();
+        if (!disposed) scheduleFreshnessUpdate();
+      }, delayMs);
+    };
     const close = () => {
       if (disposed) return;
       disposed = true;
       clearInterval(poll);
-      clearInterval(tick);
+      if (freshnessTimer) clearTimeout(freshnessTimer);
       renderer.keyInput.off("keypress", keyHandler);
-      renderer.off("resize", render);
+      renderer.off("resize", resizeHandler);
       refs.root.destroyRecursively();
       renderer.destroy();
       resolve();
@@ -1193,14 +1315,12 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       void fetchIntoState(opts, update);
       if (state.view === "providers") void fetchProvidersIntoState(opts, update);
     }, opts.pollMs);
-    const tick = setInterval(() => {
-      update(current => clampState({ ...current, frame: current.frame + 1 }));
-    }, opts.renderMs);
 
     renderer.keyInput.on("keypress", keyHandler);
-    renderer.on("resize", render);
+    renderer.on("resize", resizeHandler);
     renderer.start();
     render();
+    scheduleFreshnessUpdate();
     void fetchIntoState(opts, update);
     void fetchProvidersIntoState(opts, update);
   });

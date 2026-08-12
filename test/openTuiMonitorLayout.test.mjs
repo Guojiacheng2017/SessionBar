@@ -1,6 +1,33 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { monitorBodyLayout, providerSummaryLine, providerTableContent, runtimeOverviewText } from "../dist/openTuiMonitor.js";
+import {
+  createVisibleModelUpdater,
+  monitorBodyLayout,
+  providerSummaryLine,
+  providerTableContent,
+  runtimeOverviewText,
+  systemOverviewText,
+  visibleModelFingerprint,
+} from "../dist/openTuiMonitor.js";
+
+const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
+
+function systemSnapshot(overrides = {}) {
+  return {
+    cpu_percent: 37.5,
+    load_average: [3.19, 3.9, 3.44],
+    memory_used_bytes: 12.8 * GIB,
+    memory_total_bytes: 16 * GIB,
+    memory_percent: 80,
+    network_down_bytes_per_second: 80_000,
+    network_up_bytes_per_second: 10_000,
+    server_cpu_percent: 1.8,
+    server_memory_bytes: 79 * MIB,
+    sampled_at: 10_000,
+    ...overrides,
+  };
+}
 
 test("monitor body layout gives the session sidebar a stable monitor width", () => {
   const layout = monitorBodyLayout(154);
@@ -33,6 +60,44 @@ test("runtime overview uses fixed-width progress bars instead of a sparkline", (
   assert.match(content, /CPU\s+50%\s+██████████/);
   assert.match(content, /MEM\s+768 MB/);
   assert.doesNotMatch(content, /░░▒▓|sparkline/i);
+});
+
+test("system overview renders a deterministic six-row efficiency panel", () => {
+  const text = systemOverviewText(systemSnapshot(), 44, 11_000);
+  assert.match(text, /CPU.*37\.5%/);
+  assert.match(text, /Load.*3\.19.*3\.90.*3\.44/);
+  assert.match(text, /Memory.*12\.8 GB.*16 GB.*80\.0%/);
+  assert.match(text, /Network.*80\.0 KB\/s.*10\.0 KB\/s/);
+  assert.match(text, /SessionBar.*1\.8%.*79 MB/);
+  assert.match(text, /Sample.*1s/);
+  assert.equal(text.split("\n").length, 6);
+  assert.ok(text.split("\n").every(line => line.length <= 44));
+});
+
+test("visible model updater suppresses identical renders and repaints visible changes", () => {
+  const renderer = {
+    renders: [],
+    requestRender(model) { this.renders.push(model); },
+  };
+  const update = createVisibleModelUpdater(model => renderer.requestRender(model));
+  const base = {
+    view: "sessions",
+    selectedId: "session-a",
+    system: systemSnapshot(),
+    freshnessSecond: 1,
+  };
+
+  update(base);
+  update({ ...base, system: systemSnapshot() });
+  assert.equal(renderer.renders.length, 1);
+
+  update({ ...base, selectedId: "session-b" });
+  assert.equal(renderer.renders.length, 2);
+
+  const changedSystem = { ...base, selectedId: "session-b", system: systemSnapshot({ cpu_percent: 38 }) };
+  update(changedSystem);
+  assert.equal(renderer.renders.length, 3);
+  assert.notEqual(visibleModelFingerprint(base), visibleModelFingerprint(changedSystem));
 });
 
 function subscriptionRow(overrides = {}) {

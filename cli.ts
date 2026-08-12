@@ -15,6 +15,7 @@ import {
 } from "./hookManager.js";
 import { sessionDisplayName, stripAnsi, truncateAnsi } from "./displayUtils.js";
 import { aggregateRuntimeUsage, formatRuntimeBytes, runtimeProgressBar } from "./runtimeUsage.js";
+import type { SystemEfficiencySnapshot } from "./types.js";
 import {
   createRainbow,
   panelTop as _panelTop,
@@ -134,6 +135,37 @@ async function fetchSessions(): Promise<{ sessions: any[], error?: string }> {
     const message = e?.message || "unreachable";
     return { sessions: [], error: code ? `${code}: ${message}` : message };
   }
+}
+
+function isSystemEfficiencySnapshot(value: unknown): value is SystemEfficiencySnapshot {
+  if (!value || typeof value !== "object") return false;
+  const snapshot = value as Record<string, unknown>;
+  const load = snapshot.load_average;
+  const requiredNumbers = [
+    snapshot.memory_used_bytes,
+    snapshot.memory_total_bytes,
+    snapshot.memory_percent,
+    snapshot.server_memory_bytes,
+    snapshot.sampled_at,
+  ];
+  const optionalNumbers = [
+    snapshot.cpu_percent,
+    snapshot.network_down_bytes_per_second,
+    snapshot.network_up_bytes_per_second,
+    snapshot.server_cpu_percent,
+  ];
+  return Array.isArray(load)
+    && load.length === 3
+    && load.every(item => typeof item === "number" && Number.isFinite(item))
+    && requiredNumbers.every(item => typeof item === "number" && Number.isFinite(item))
+    && optionalNumbers.every(item => item === undefined || (typeof item === "number" && Number.isFinite(item)));
+}
+
+async function fetchSystem(): Promise<SystemEfficiencySnapshot | undefined> {
+  const resp = await fetch(`${API_BASE}/system/live`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+  return isSystemEfficiencySnapshot(data.system) ? data.system : undefined;
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -1198,6 +1230,7 @@ async function watch() {
   try {
     await runOpenTuiMonitor({
       fetchSessions: sseToggleFetch,
+      fetchSystem,
       fetchProviders: async () => {
         const resp = await fetch(`${API_BASE}/providers/live`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
