@@ -14,7 +14,6 @@ import {
   injectHooksOnServerReady,
 } from "./hookManager.js";
 import { sessionDisplayName, stripAnsi, truncateAnsi } from "./displayUtils.js";
-import { aggregateRuntimeUsage, formatRuntimeBytes, runtimeProgressBar } from "./runtimeUsage.js";
 import type { SystemEfficiencySnapshot } from "./types.js";
 import {
   createRainbow,
@@ -618,22 +617,19 @@ function renderProjectDetailsLines(
   ];
 }
 
-function renderRuntimeDetailsLines(sessions: any[], w: number): string[] {
-  const usage = aggregateRuntimeUsage(sessions);
-  const barWidth = Math.max(8, Math.min(18, Math.floor(w / 4)));
-  const value = (number: number | undefined, suffix = "") => number === undefined ? "—" : `${Math.round(number)}${suffix}`;
-  const lines = [
-    `${_B}RUNTIME${_D} ${_K}all active sessions${_D}`,
-    `${_K}active${_D} ${usage.activeSessions}  ${_K}sampled${_D} ${usage.sampledSessions}`,
+function renderSessionSummaryLines(sessions: any[], w: number): string[] {
+  const stats = computeStats(sessions);
+  return [
+    `${_B}SESSIONS${_D} ${_K}all projects${_D}`,
+    `${_K}total${_D} ${stats.total}`,
+    `${_K}working${_D} ${stats.working}`,
+    `${_K}blocked${_D} ${stats.blocked}`,
+    `${_K}errors${_D} ${stats.errored}`,
+    `${_K}idle${_D} ${stats.idle}`,
     "",
-    `${_K}CPU${_D}  ${value(usage.cpuPercent, "%")} ${runtimeProgressBar(usage.cpuPercent, 100, barWidth)}`,
-    `${_K}GPU${_D}  ${usage.hasGpuData ? value(usage.gpuPercent, "%") : "—"} ${runtimeProgressBar(usage.gpuPercent, 100, barWidth)}`,
-    `${_K}MEM${_D}  ${formatRuntimeBytes(usage.memoryBytes)} ${runtimeProgressBar(usage.memoryPercent, 100, barWidth)}`,
-    `${_K}PROC${_D} ${value(usage.processCount)} ${runtimeProgressBar(usage.processCount, Math.max(16, usage.processCount || 16), barWidth)}`,
+    `${_K}API${_D} ${API_HOST}:${PORT}`,
+    `${_K}State${_D} ${displayPath(HOME, Math.max(8, w - 10))}`,
   ];
-  if (usage.activeSessions === 0) lines.push("", `${_K}no active session resources${_D}`);
-  else if (usage.sampledSessions === 0) lines.push("", `${_K}waiting for runtime samples${_D}`);
-  return lines;
 }
 
 function renderDetailsPanel(
@@ -645,10 +641,10 @@ function renderDetailsPanel(
   totalRows: number,
   projectFocused: boolean,
 ): string[] {
-  const title = selected ? "Details / Session" : projectFocused ? "Details / Project" : "Details / Runtime";
+  const title = selected ? "Details / Session" : projectFocused ? "Details / Project" : "Details / Sessions";
   const content = selected
     ? renderSelectedSessionLines(selected, frame, w)
-    : projectFocused ? renderProjectDetailsLines(scopeSessions, allSessions, w) : renderRuntimeDetailsLines(allSessions, w);
+    : projectFocused ? renderProjectDetailsLines(scopeSessions, allSessions, w) : renderSessionSummaryLines(allSessions, w);
   return panelBlock(title, w, content, Math.max(1, totalRows - 2));
 }
 
@@ -996,8 +992,8 @@ function renderFrame(
 	    const listSessionsN = focusedSessions;
 	    const selectedSessionN = projectFocusKey ? detailSession : null;
 	    const detailBody = 8;
-	    const showRuntimeN = !projectFocusKey && bodyRows >= 12;
-	    const detailRows = (selectedSessionN || showRuntimeN) && bodyRows >= 12
+	    const showSummaryN = !projectFocusKey && bodyRows >= 12;
+	    const detailRows = (selectedSessionN || showSummaryN) && bodyRows >= 12
 	      ? Math.min(detailBody, Math.floor(bodyRows * 0.42))
 	      : 0;
     const sessionsBody = bodyRows - detailRows - (detailRows > 0 ? 1 : 0);
@@ -1058,13 +1054,13 @@ function renderFrame(
     write(panelBot(totalW));
 
     // ── Detail panel (below sessions in narrow mode) ──
-    if ((selectedSessionN || showRuntimeN) && detailRows > 0) {
+    if ((selectedSessionN || showSummaryN) && detailRows > 0) {
       write(panelRow("", totalW));
-      const detailTitle = selectedSessionN ? (detailId ? "Detail" : "Inspector") : "Details / Runtime";
+      const detailTitle = selectedSessionN ? (detailId ? "Detail" : "Inspector") : "Details / Sessions";
       write(panelTop(detailTitle, totalW));
       const detailContent = selectedSessionN
         ? renderDetailLines(selectedSessionN, frame, totalW)
-        : renderRuntimeDetailsLines(shown, totalW);
+        : renderSessionSummaryLines(shown, totalW);
       for (const l of detailContent.slice(0, detailRows - 1)) write(panelRow(l, totalW));
       for (let i = Math.min(detailContent.length, detailRows - 1); i < detailRows - 1; i++) write(panelRow("", totalW));
       write(panelBot(totalW));

@@ -1,7 +1,6 @@
-import type { SessionPayload } from "./types.js";
+import type { SessionPayload, SystemEfficiencySnapshot } from "./types.js";
 import type { PlanRow } from "./planTypes.js";
 import { compactNumber } from "./displayUtils.js";
-import { aggregateRuntimeUsage, formatRuntimeBytes, type RuntimeContribution } from "./runtimeUsage.js";
 
 export const UI = {
   app: "flex flex-col h-screen px-6 py-5 gap-3.5 max-w-[1180px] mx-auto",
@@ -155,76 +154,68 @@ export function detailListMarkup(rows: Array<{ label: string; value: string }>, 
   ).join("")}</dl>`;
 }
 
-export function runtimeContributionsMarkup(sessions: readonly SessionPayload[]): string {
-  const usage = aggregateRuntimeUsage(sessions);
-  const sampled = usage.contributions;
-  const isCurrentUsage = sampled.length === 1;
-  const summary = usage.activeSessions === 0
-    ? "No active sessions"
-    : usage.sampledSessions === 0
-      ? `${usage.activeSessions} active · waiting for samples`
-      : `${usage.activeSessions} active · ${usage.sampledSessions} sampled`;
-
-  if (usage.activeSessions === 0 || sampled.length === 0) {
-    return `<section class="runtime-contributions runtime-contributions-empty" aria-label="Runtime usage">
-      <div class="runtime-contributions-head"><div><strong>Runtime</strong><span>All active sessions</span></div><span class="runtime-contributions-summary">${escapeHtml(summary)}</span></div>
-      <div class="runtime-empty-copy"><strong>${usage.activeSessions === 0 ? "No active session resources" : "Waiting for runtime samples"}</strong><span>CPU, GPU, memory, and process usage will appear here when an active session reports a snapshot.</span></div>
+export function systemEfficiencyMarkup(snapshot: SystemEfficiencySnapshot | undefined): string {
+  if (!snapshot) {
+    return `<section class="system-efficiency system-efficiency-empty" aria-label="System health">
+      <div class="system-efficiency-head"><strong>System</strong><span>Global health</span></div>
+      <div class="system-efficiency-unavailable" role="status">System metrics unavailable</div>
     </section>`;
   }
 
-  const rows: Array<{
-    label: string;
-    total: string;
-    share: (item: RuntimeContribution) => number | undefined;
-    current: (item: RuntimeContribution) => string;
-    actual: (item: RuntimeContribution) => number | undefined;
-    isCount?: boolean;
-  }> = [
-    { label: "CPU", total: percentageLabel(usage.cpuPercent), share: item => item.cpuShare, current: item => percentageLabel(item.cpuPercent), actual: item => item.cpuPercent },
-    { label: "GPU", total: usage.hasGpuData ? percentageLabel(usage.gpuPercent) : "—", share: item => item.gpuShare, current: item => percentageLabel(item.gpuPercent), actual: item => item.gpuPercent },
-    { label: "MEM", total: memoryLabel(usage.memoryPercent, usage.memoryBytes), share: item => item.memoryShare, current: item => memoryLabel(item.memoryPercent, item.memoryBytes), actual: item => item.memoryPercent },
-    { label: "PROC", total: processLabel(usage.processCount), share: item => item.processShare, current: item => processLabel(item.processCount), actual: item => item.processCount, isCount: true },
+  const cpu = clampPercent(snapshot.cpu_percent);
+  const memory = clampPercent(snapshot.memory_percent);
+  const serverCpu = clampPercent(snapshot.server_cpu_percent);
+  const networkTotal = (snapshot.network_down_bytes_per_second ?? 0) + (snapshot.network_up_bytes_per_second ?? 0);
+  const networkMax = Math.max(1_000_000, Math.pow(10, Math.ceil(Math.log10(Math.max(1, networkTotal)))));
+  const rows = [
+    systemMeterRow("CPU", `${percentLabel(cpu)} · Load ${snapshot.load_average.map(value => value.toFixed(2)).join(" / ")}`, cpu, 100),
+    systemMeterRow("Memory", `${formatBytes(snapshot.memory_used_bytes)} / ${formatBytes(snapshot.memory_total_bytes)} · ${percentLabel(memory)}`, memory, 100),
+    systemMeterRow("Network", `Down ${formatByteRate(snapshot.network_down_bytes_per_second)} · Up ${formatByteRate(snapshot.network_up_bytes_per_second)}`, networkTotal, networkMax),
+    systemMeterRow("SessionBar", `CPU ${percentLabel(serverCpu)} · Memory ${formatBytes(snapshot.server_memory_bytes)}`, serverCpu, 100),
   ];
-  const columns = sampled.map(item => `<div class="runtime-matrix-session" title="${escapeHtml(runtimeSessionLabel(item))}">${escapeHtml(runtimeSessionLabel(item))}</div>`).join("");
-  const body = rows.map(row => `<div class="runtime-matrix-label"><span>${row.label}</span><small>${escapeHtml(row.total)}</small></div>${sampled.map(item => {
-    const contribution = row.share(item);
-    const current = row.current(item);
-    const value = isCurrentUsage ? row.actual(item) : contribution;
-    const display = isCurrentUsage ? current : value === undefined ? "—" : `${value}%`;
-    const label = value === undefined
-      ? `${row.label} unavailable`
-      : isCurrentUsage
-        ? `${row.label} current usage: ${current}`
-        : `${row.label} ${contribution}% contribution · ${current} current usage`;
-    const classes = cx("runtime-matrix-cell", value === undefined && "is-unknown", !row.isCount && value === 0 && "is-zero", row.isCount && "is-count");
-    const fill = row.isCount ? "" : `<span class="runtime-matrix-cell-fill"></span>`;
-    return `<div class="${classes}"${row.isCount ? "" : ` style="--runtime-fill:${value ?? 0}%"`} aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${fill}<em>${escapeHtml(display)}</em></div>`;
-  }).join("")}`).join("");
-  const modeLabel = isCurrentUsage ? "current usage" : "contribution by resource";
-  return `<section class="runtime-contributions" aria-label="Runtime ${modeLabel}">
-    <div class="runtime-contributions-head"><div><strong>Runtime</strong><span>All active sessions · ${modeLabel}</span></div><span class="runtime-contributions-summary">${escapeHtml(summary)}</span></div>
-    <div class="runtime-matrix-scroll"><div class="runtime-matrix" style="--runtime-columns:${sampled.length}"><div class="runtime-matrix-corner">RESOURCE</div>${columns}${body}</div></div>
+  return `<section class="system-efficiency" aria-label="System health">
+    <div class="system-efficiency-head"><strong>System</strong><span>Global health</span></div>
+    <div class="system-efficiency-rows">${rows.join("")}</div>
   </section>`;
 }
 
-function runtimeSessionLabel(item: RuntimeContribution): string {
-  const label = item.sessionName || item.project || item.sessionId.split("__")[0] || item.sessionId;
-  return item.sharedProcess ? `${label} +${item.sessionIds.length - 1} · shared process` : label;
+function systemMeterRow(label: string, value: string, meterValue: number | undefined, max: number): string {
+  const meter = meterValue === undefined
+    ? `<span class="system-efficiency-meter is-unavailable" aria-hidden="true"></span>`
+    : `<meter class="system-efficiency-meter" min="0" max="${max}" value="${meterValue}" aria-label="${escapeHtml(label)}: ${escapeHtml(value)}"></meter>`;
+  return `<div class="system-efficiency-row"><span class="system-efficiency-label">${escapeHtml(label)}</span>${meter}<span class="system-efficiency-value">${escapeHtml(value)}</span></div>`;
 }
 
-function percentageLabel(value: number | undefined): string {
-  return value === undefined ? "—" : `${Math.round(value)}%`;
+function clampPercent(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.min(100, value));
 }
 
-function memoryLabel(percent: number | undefined, bytes: number | undefined): string {
-  const pieces = percent === undefined ? [] : [percentageLabel(percent)];
-  if (bytes !== undefined) pieces.push(formatRuntimeBytes(bytes));
-  return pieces.length > 0 ? pieces.join(" · ") : "—";
+function percentLabel(value: number | undefined): string {
+  return value === undefined ? "—" : `${value.toFixed(1)}%`;
 }
 
-function processLabel(value: number | undefined): string {
-  if (value === undefined) return "—";
-  return `${value} ${value === 1 ? "process" : "processes"}`;
+function formatBytes(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
+  if (value < 1024) return `${Math.round(value)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let scaled = value;
+  let unit = "B";
+  for (const next of units) {
+    scaled /= 1024;
+    unit = next;
+    if (scaled < 1024 || next === units.at(-1)) break;
+  }
+  const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+  return `${scaled.toFixed(digits).replace(/\.0+$/, "")} ${unit}`;
+}
+
+function formatByteRate(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
+  if (value < 1_000) return `${value.toFixed(1)} B/s`;
+  if (value < 1_000_000) return `${(value / 1_000).toFixed(1)} KB/s`;
+  if (value < 1_000_000_000) return `${(value / 1_000_000).toFixed(1)} MB/s`;
+  return `${(value / 1_000_000_000).toFixed(1)} GB/s`;
 }
 
 export function tabsMarkup(tabs: string[], activeIndex: number): string {

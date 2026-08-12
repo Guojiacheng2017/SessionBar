@@ -37,7 +37,6 @@ import {
   projectPathSummary,
   groupByProject as groupSessionsByProject,
 } from "./projectUtils.js";
-import { aggregateRuntimeUsage, formatRuntimeBytes, runtimeProgressBar } from "./runtimeUsage.js";
 
 type Session = SessionPayload;
 type FetchSessions = () => Promise<{ sessions: Session[]; error?: string }>;
@@ -725,24 +724,6 @@ function detailTextForProject(
   ].join("\n");
 }
 
-export function runtimeOverviewText(sessions: readonly Session[], width = 44): string {
-  const usage = aggregateRuntimeUsage(sessions);
-  const barWidth = Math.max(10, Math.min(20, Math.floor(width / 3)));
-  const lines = [
-    "RUNTIME / ALL ACTIVE SESSIONS",
-    `active ${usage.activeSessions} | sampled ${usage.sampledSessions}`,
-    "",
-    `CPU  ${runtimeValue(usage.cpuPercent, "%")} ${runtimeProgressBar(usage.cpuPercent, 100, barWidth)}`,
-    `GPU  ${usage.hasGpuData ? runtimeValue(usage.gpuPercent, "%") : "—"} ${runtimeProgressBar(usage.gpuPercent, 100, barWidth)}`,
-    `MEM  ${formatRuntimeBytes(usage.memoryBytes)} ${runtimeProgressBar(usage.memoryPercent, 100, barWidth)}`,
-    `PROC ${runtimeValue(usage.processCount, "")} ${runtimeProgressBar(usage.processCount, Math.max(16, usage.processCount || 16), barWidth)}`,
-  ];
-  if (usage.activeSessions === 0) lines.push("", "no active session resources");
-  else if (usage.sampledSessions === 0) lines.push("", "waiting for runtime samples");
-  else if (usage.sampledSessions < usage.activeSessions) lines.push("", `waiting for ${usage.activeSessions - usage.sampledSessions} sample${usage.activeSessions - usage.sampledSessions === 1 ? "" : "s"}`);
-  return lines.join("\n");
-}
-
 export function systemOverviewText(
   snapshot: SystemEfficiencySnapshot | undefined,
   width = 44,
@@ -757,7 +738,7 @@ export function systemOverviewText(
   const compact = safeWidth < 40;
   const lines = compact
     ? [
-        `CPU ${percentValue(cpu)} ${runtimeProgressBar(cpu, 100, barWidth)}`,
+        `CPU ${percentValue(cpu)} ${systemProgressBar(cpu, 100, barWidth)}`,
         `Load ${load ? load.map(value => value.toFixed(2)).join(" ") : "— — —"}`,
         `Memory ${compactBytes(snapshot?.memory_used_bytes)}/${compactBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)}`,
         `Network D${compactByteRate(snapshot?.network_down_bytes_per_second)} U${compactByteRate(snapshot?.network_up_bytes_per_second)}`,
@@ -765,11 +746,11 @@ export function systemOverviewText(
         `Sample ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
       ]
     : [
-        `CPU        ${percentValue(cpu)} ${runtimeProgressBar(cpu, 100, barWidth)}`,
+        `CPU        ${percentValue(cpu)} ${systemProgressBar(cpu, 100, barWidth)}`,
         `Load       ${load ? load.map(value => value.toFixed(2)).join("  ") : "—  —  —"}`,
-        `Memory     ${formatRuntimeBytes(snapshot?.memory_used_bytes)} / ${formatRuntimeBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)} ${runtimeProgressBar(memory, 100, barWidth)}`,
+        `Memory     ${formatSystemBytes(snapshot?.memory_used_bytes)} / ${formatSystemBytes(snapshot?.memory_total_bytes)} ${percentValue(memory)} ${systemProgressBar(memory, 100, barWidth)}`,
         `Network    down ${formatByteRate(snapshot?.network_down_bytes_per_second)}  up ${formatByteRate(snapshot?.network_up_bytes_per_second)}`,
-        `SessionBar CPU ${percentValue(snapshot?.server_cpu_percent)}  MEM ${formatRuntimeBytes(snapshot?.server_memory_bytes)}`,
+        `SessionBar CPU ${percentValue(snapshot?.server_cpu_percent)}  MEM ${formatSystemBytes(snapshot?.server_memory_bytes)}`,
         `Sample     ${sampleAge === undefined ? "waiting" : `${sampleAge}s ago`}`,
       ];
   return lines.map(line => truncatePlain(line, safeWidth)).join("\n");
@@ -788,15 +769,35 @@ function formatByteRate(value: number | undefined): string {
 }
 
 function compactBytes(value: number | undefined): string {
-  return formatRuntimeBytes(value).replace(" ", "");
+  return formatSystemBytes(value).replace(" ", "");
 }
 
 function compactByteRate(value: number | undefined): string {
   return formatByteRate(value).replace(" ", "");
 }
 
-function runtimeValue(value: number | undefined, suffix: string): string {
-  return value === undefined ? "—" : `${Math.round(value)}${suffix}`;
+function systemProgressBar(value: number | undefined, max: number, width: number): string {
+  const safeWidth = Math.max(1, Math.floor(width));
+  if (value === undefined || !Number.isFinite(value) || !Number.isFinite(max) || max <= 0) {
+    return "·".repeat(safeWidth);
+  }
+  const filled = Math.max(0, Math.min(safeWidth, Math.round((value / max) * safeWidth)));
+  return "█".repeat(filled) + "░".repeat(safeWidth - filled);
+}
+
+function formatSystemBytes(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "—";
+  if (value < 1024) return `${Math.round(value)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let scaled = value;
+  let unit = "B";
+  for (const next of units) {
+    scaled /= 1024;
+    unit = next;
+    if (scaled < 1024 || next === units.at(-1)) break;
+  }
+  const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+  return `${scaled.toFixed(digits).replace(/\.0+$/, "")} ${unit}`;
 }
 
 function detailTextForSession(session: Session, tab: DetailTab, width: number, now = Date.now()): StyledText {

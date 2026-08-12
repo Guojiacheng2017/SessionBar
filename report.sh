@@ -166,49 +166,12 @@ if [ -z "$EXPLICIT_SESSION_ID" ]; then
   fi
 fi
 touch "$ID_FILE" 2>/dev/null || true
-PROCESS_FILE="${SESSION_DIR}/sessionbar-process-${AGENT_SLUG}-${HASH}-${TTY_ID}"
-
-is_positive_integer() {
-  printf '%s' "$1" | grep -Eq '^[1-9][0-9]*$'
-}
-
-find_owning_agent_pid() {
-  local pid="${PPID:-$$}"
-  local parent=""
-  local command=""
-  local depth=0
-  while is_positive_integer "$pid" && [ "$depth" -lt 32 ]; do
-    command=$(ps -p "$pid" -o command= 2>/dev/null | tr '[:upper:]' '[:lower:]')
-    case "$command" in
-      *"$AGENT_SLUG"*)
-        printf '%s' "$pid"
-        return
-        ;;
-    esac
-    parent=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d '[:space:]')
-    if ! is_positive_integer "$parent" || [ "$parent" = "$pid" ]; then
-      break
-    fi
-    pid="$parent"
-    depth=$((depth + 1))
-  done
-  return 1
-}
-
-PROCESS_PID="${SESSIONBAR_PROCESS_PID:-${AGENTBAR_PROCESS_PID:-}}"
-if ! is_positive_integer "$PROCESS_PID"; then
-  PROCESS_PID=$(find_owning_agent_pid)
-fi
-if is_positive_integer "$PROCESS_PID"; then
-  printf '%s\n' "$PROCESS_PID" > "${PROCESS_FILE}.tmp.$$"
-  mv "${PROCESS_FILE}.tmp.$$" "$PROCESS_FILE" 2>/dev/null || true
-fi
 PROJ_PATH="${SESSIONBAR_PROJECT_DIR:-${AGENTBAR_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PROJECT_DIR}}}"
 SESSION_NAME="${SESSIONBAR_SESSION_NAME:-${AGENTBAR_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}}"
 
 # Cleanup on session end
 if [ "$STATUS" = "idle" ] && [ "${TASK}" = "Session ended" ]; then
-  rm -f "$ID_FILE" "$PROCESS_FILE"
+  rm -f "$ID_FILE"
 fi
 
 # Escape JSON string — use python3/node for correct handling of all control chars and Unicode
@@ -278,12 +241,9 @@ append_number_field "quota_percent" "${SESSIONBAR_QUOTA_PERCENT:-${AGENTBAR_QUOT
 append_string_field "quota_reset" "${SESSIONBAR_QUOTA_RESET:-${AGENTBAR_QUOTA_RESET:-}}"
 append_string_field "hook_event" "${SESSIONBAR_HOOK_EVENT:-${AGENTBAR_HOOK_EVENT:-}}"
 append_string_field "session_name" "$SESSION_NAME"
-if is_positive_integer "$PROCESS_PID"; then
-  append_number_field "process_pid" "$PROCESS_PID"
-fi
 
-# Runtime samples are optional hook overrides. The server samples the persisted
-# process root rather than this short-lived hook process.
+# Runtime samples remain accepted only as explicit integration payload fields
+# during the compatibility window. System monitoring does not consume them.
 RUNTIME_FIELDS=""
 append_runtime_number_field() {
   local key="$1"

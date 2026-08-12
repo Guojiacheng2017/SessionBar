@@ -9,7 +9,6 @@ import {
   preserveSystemSnapshot,
   providerSummaryLine,
   providerTableContent,
-  runtimeOverviewText,
   systemOverviewText,
   visibleModelFingerprint,
 } from "../dist/openTuiMonitor.js";
@@ -58,23 +57,6 @@ test("monitor body layout fits every panel within a 40-column renderer", () => {
   assert.ok(layout.detailContentWidth <= layout.detailPanelWidth - 4);
   assert.ok(systemOverviewText(systemSnapshot(), layout.detailContentWidth, 11_000)
     .split("\n").every(line => line.length <= layout.detailContentWidth));
-});
-
-test("runtime overview uses fixed-width progress bars instead of a sparkline", () => {
-  const content = runtimeOverviewText([
-    {
-      session_id: "codex-a",
-      status: "working",
-      session_type: "Codex",
-      task_name: "running",
-      timestamp: 1,
-      runtime: { cpu_percent: 50, memory_percent: 20, memory_bytes: 768 * 1024 * 1024, process_count: 2 },
-    },
-  ], 60);
-  assert.match(content, /RUNTIME \/ ALL ACTIVE SESSIONS/);
-  assert.match(content, /CPU\s+50%\s+██████████/);
-  assert.match(content, /MEM\s+768 MB/);
-  assert.doesNotMatch(content, /░░▒▓|sparkline/i);
 });
 
 test("system overview renders a deterministic six-row efficiency panel", () => {

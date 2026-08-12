@@ -640,7 +640,6 @@ function recoverSessions() {
           claude: "Claude Code", gemini: "Gemini CLI",
           codex: "Codex", copilot: "Copilot",
         };
-        const processPid = readProcessSidecar(f);
         sessions[sid] = {
           session_id: sid,
           session_type: typeMap[type] || type,
@@ -648,7 +647,6 @@ function recoverSessions() {
           status: "idle",
           task_name: "Ready",
           timestamp: Date.now(),
-          ...(processPid === undefined ? {} : { process_pid: processPid }),
         };
         console.log(`[recover] ${sid}`);
       } catch { /* corrupt ID file, skip */ }
@@ -658,20 +656,6 @@ function recoverSessions() {
       if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
     }
   } catch { /* state dir not readable */ }
-}
-
-function readProcessSidecar(idFile: string): number | undefined {
-  try {
-    const raw = readFileSync(
-      join(SESSION_ID_DIR, idFile.replace(/^sessionbar-id-/, "sessionbar-process-")),
-      "utf-8",
-    ).trim();
-    if (!/^[1-9][0-9]*$/.test(raw)) return undefined;
-    const processPid = Number(raw);
-    return Number.isInteger(processPid) && processPid > 0 ? processPid : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 // SSE heartbeat — detect dead connections

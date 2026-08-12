@@ -1,5 +1,5 @@
 // SessionBar web dashboard — Tailwind + vanilla TS
-import type { SessionPayload } from "./types.js";
+import type { SessionPayload, SystemEfficiencySnapshot } from "./types.js";
 import type { PlanRow } from "./planTypes.js";
 import { sessionDisplayName } from "./displayUtils.js";
 import {
@@ -11,10 +11,10 @@ import {
   iconMarkup,
   projectIconListMarkup,
   providerTableMarkup,
-  runtimeContributionsMarkup,
   statusDotMarkup,
   statusLabel,
   statusSummaryMarkup,
+  systemEfficiencyMarkup,
   tabsMarkup,
 } from "./webComponents.js";
 
@@ -50,6 +50,7 @@ let providers: PlanRow[] = [];
 let providersInitializing = true;
 let providersError: string | null = null;
 let providersLoaded = false;
+let systemSnapshot: SystemEfficiencySnapshot | undefined;
 const iconCache = new Map<string, string>();
 
 let sceneFrame = 0;
@@ -246,6 +247,18 @@ async function fetchProviders(): Promise<void> {
     providersError = error instanceof Error ? error.message : "Provider request failed";
   }
   renderProviders();
+}
+
+async function fetchSystem(): Promise<void> {
+  try {
+    const response = await fetch("/system/live", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`System request failed (${response.status})`);
+    const data = await response.json() as { system?: SystemEfficiencySnapshot | null };
+    if (data.system) systemSnapshot = data.system;
+  } catch {
+    // Preserve the last good snapshot while a sample or request recovers.
+  }
+  if (!selectedId && !focusedProject) render(lastSessions);
 }
 
 function formatMetric(value: number | undefined): string {
@@ -581,8 +594,8 @@ function render(sessions: SessionPayload[]) {
       { label: "Path", value: scope[0]?.project_path || "" },
     ]);
   } else {
-    detailHdr.innerHTML = `<span class="${UI.panelTitle}">Details / Runtime</span>`;
-    detailBody.innerHTML = runtimeContributionsMarkup(shown);
+    detailHdr.innerHTML = `<span class="${UI.panelTitle}">Details / System</span>`;
+    detailBody.innerHTML = systemEfficiencyMarkup(systemSnapshot);
   }
 
   syncSessionWorkspace();
@@ -628,7 +641,12 @@ reducedMotion.addEventListener("change", scheduleSceneMeasure);
 renderSceneSummary();
 renderProviders();
 void fetchProviders();
+void fetchSystem();
 const providerRefreshTimer = window.setInterval(() => { void fetchProviders(); }, 60_000);
-window.addEventListener("beforeunload", () => window.clearInterval(providerRefreshTimer));
+const systemRefreshTimer = window.setInterval(() => { void fetchSystem(); }, 2_000);
+window.addEventListener("beforeunload", () => {
+  window.clearInterval(providerRefreshTimer);
+  window.clearInterval(systemRefreshTimer);
+});
 
 connect();

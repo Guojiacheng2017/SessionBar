@@ -98,105 +98,13 @@ exit 1
   }]);
 });
 
-test("report.sh persists an overridden process root marker", () => {
+test("report.sh ignores process roots without sidecars or process lookup", () => {
   const root = mkdtempSync(join(tmpdir(), "sessionbar-report-process-root-"));
   const bin = join(root, "bin");
   const home = join(root, "home");
   const project = join(root, "Vision-Dash");
   const capture = join(root, "payload.json");
-  mkdirSync(bin, { recursive: true });
-  mkdirSync(home, { recursive: true });
-  mkdirSync(project, { recursive: true });
-  writeFileSync(join(bin, "curl"), `#!/bin/sh
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-d" ]; then
-    shift
-    printf '%s' "$1" > "$SESSIONBAR_CAPTURE"
-    exit 0
-  fi
-  shift
-done
-exit 1
-`);
-  execFileSync("chmod", ["755", join(bin, "curl")]);
-
-  execFileSync("bash", ["report.sh", "working", "persist process root", "8989"], {
-    cwd: new URL("..", import.meta.url),
-    env: {
-      ...process.env,
-      PATH: `${bin}:${process.env.PATH}`,
-      HOME: home,
-      SESSIONBAR_CAPTURE: capture,
-      SESSIONBAR_HOME: join(home, ".sessionbar"),
-      SESSIONBAR_AGENT: "codex",
-      SESSIONBAR_SESSION_ID: "codex-demo",
-      SESSIONBAR_PROJECT_DIR: project,
-      SESSIONBAR_PROCESS_PID: "4242",
-    },
-  });
-
-  const payload = JSON.parse(readFileSync(capture, "utf8"));
-  assert.equal(payload.process_pid, 4242);
-
-  const markerDir = join(home, ".sessionbar", "sessions");
-  const processMarkers = readdirSync(markerDir).filter(file => file.startsWith("sessionbar-process-"));
-  assert.equal(processMarkers.length, 1);
-  assert.equal(readFileSync(join(markerDir, processMarkers[0]), "utf8"), "4242\n");
-});
-
-test("report.sh omits a process root when no owning agent ancestor is found", () => {
-  const root = mkdtempSync(join(tmpdir(), "sessionbar-report-no-process-root-"));
-  const bin = join(root, "bin");
-  const home = join(root, "home");
-  const project = join(root, "Vision-Dash");
-  const capture = join(root, "payload.json");
-  mkdirSync(bin, { recursive: true });
-  mkdirSync(home, { recursive: true });
-  mkdirSync(project, { recursive: true });
-  writeFileSync(join(bin, "curl"), `#!/bin/sh
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-d" ]; then
-    shift
-    printf '%s' "$1" > "$SESSIONBAR_CAPTURE"
-    exit 0
-  fi
-  shift
-done
-exit 1
-`);
-  writeFileSync(join(bin, "ps"), "#!/bin/sh\nexit 0\n");
-  execFileSync("chmod", ["755", join(bin, "curl")]);
-  execFileSync("chmod", ["755", join(bin, "ps")]);
-
-  execFileSync("bash", ["report.sh", "working", "discover process root", "8989"], {
-    cwd: new URL("..", import.meta.url),
-    env: {
-      ...process.env,
-      PATH: `${bin}:${process.env.PATH}`,
-      HOME: home,
-      SESSIONBAR_CAPTURE: capture,
-      SESSIONBAR_HOME: join(home, ".sessionbar"),
-      SESSIONBAR_AGENT: "codex",
-      SESSIONBAR_SESSION_ID: "codex-demo",
-      SESSIONBAR_PROJECT_DIR: project,
-      SESSIONBAR_PROCESS_PID: "",
-      AGENTBAR_PROCESS_PID: "",
-    },
-  });
-
-  const payload = JSON.parse(readFileSync(capture, "utf8"));
-  assert.equal(payload.process_pid, undefined);
-
-  const markerDir = join(home, ".sessionbar", "sessions");
-  assert.equal(readdirSync(markerDir).some(file => file.startsWith("sessionbar-process-")), false);
-});
-
-test("report.sh discovers a Codex process root from the complete command line", () => {
-  const root = mkdtempSync(join(tmpdir(), "sessionbar-report-command-process-root-"));
-  const bin = join(root, "bin");
-  const home = join(root, "home");
-  const project = join(root, "Vision-Dash");
-  const capture = join(root, "payload.json");
+  const processLookup = join(root, "process-lookup.txt");
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
   mkdirSync(project, { recursive: true });
@@ -212,32 +120,36 @@ done
 exit 1
 `);
   writeFileSync(join(bin, "ps"), `#!/bin/sh
-case "$*" in
-  *"comm="*) printf '%s\\n' '/Applications/Ch' ;;
-  *"command="*) printf '%s\\n' '/Applications/ChatGPT.app/Contents/Resources/CoDeX -c hook-runner' ;;
-esac
+printf 'called\n' > "$SESSIONBAR_PROCESS_LOOKUP"
+exit 1
 `);
   execFileSync("chmod", ["755", join(bin, "curl")]);
   execFileSync("chmod", ["755", join(bin, "ps")]);
 
-  execFileSync("bash", ["report.sh", "working", "discover process root", "8989"], {
+  execFileSync("bash", ["report.sh", "working", "persist process root", "8989"], {
     cwd: new URL("..", import.meta.url),
     env: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
       HOME: home,
       SESSIONBAR_CAPTURE: capture,
+      SESSIONBAR_PROCESS_LOOKUP: processLookup,
       SESSIONBAR_HOME: join(home, ".sessionbar"),
-      SESSIONBAR_AGENT: "CoDeX",
+      SESSIONBAR_AGENT: "codex",
       SESSIONBAR_SESSION_ID: "codex-demo",
       SESSIONBAR_PROJECT_DIR: project,
-      SESSIONBAR_PROCESS_PID: "",
-      AGENTBAR_PROCESS_PID: "",
+      SESSIONBAR_PROCESS_PID: "4242",
     },
   });
 
   const payload = JSON.parse(readFileSync(capture, "utf8"));
-  assert.equal(payload.process_pid, process.pid);
+  assert.equal(payload.process_pid, undefined);
+
+  const markerDir = join(home, ".sessionbar", "sessions");
+  const retiredMarkerPrefix = ["sessionbar", "process", ""].join("-");
+  const processMarkers = readdirSync(markerDir).filter(file => file.startsWith(retiredMarkerPrefix));
+  assert.equal(processMarkers.length, 0);
+  assert.equal(readdirSync(root).includes("process-lookup.txt"), false);
 });
 
 test("report.sh reuses the hook session id when hook invocations have different parents", () => {

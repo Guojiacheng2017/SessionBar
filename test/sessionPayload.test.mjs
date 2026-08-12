@@ -102,20 +102,21 @@ test("validates and preserves runtime resource snapshots", () => {
   assert.equal(validateSessionPayload({ ...basePayload, runtime: { ...runtime, process_count: 1.5 } }), false);
   const merged = mergeSessionPayload(undefined, { ...basePayload, runtime }, 1_700_000_001_000);
   assert.deepEqual(merged.runtime, runtime);
+  const withoutRuntime = mergeSessionPayload(merged, { ...basePayload }, 1_700_000_002_000);
+  assert.equal(withoutRuntime.runtime, undefined);
 });
 
-test("validates positive integer process roots and preserves them when omitted", () => {
-  assert.equal(validateSessionPayload({ ...basePayload, process_pid: 4242 }), true);
-  assert.equal(validateSessionPayload({ ...basePayload, process_pid: 0 }), false);
-  assert.equal(validateSessionPayload({ ...basePayload, process_pid: 1.5 }), false);
-
+test("drops retired process roots while preserving explicit runtime compatibility", () => {
+  const runtime = { cpu_percent: 24.5, sampled_at: 1_700_000_000_000 };
   const merged = mergeSessionPayload({
     ...basePayload,
     source: "hook",
     process_pid: 4242,
-  }, { ...basePayload }, 1_700_000_001_000);
+  }, { ...basePayload, process_pid: 5252, runtime }, 1_700_000_001_000);
 
-  assert.equal(merged.process_pid, 4242);
+  assert.equal(validateSessionPayload({ ...basePayload, process_pid: "retired", runtime }), true);
+  assert.equal(merged.process_pid, undefined);
+  assert.deepEqual(merged.runtime, runtime);
 });
 
 test("rejects overlong quota reset labels", () => {

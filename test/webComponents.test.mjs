@@ -5,18 +5,10 @@ import {
   escapeHtml,
   projectIconListMarkup,
   providerTableMarkup,
-  runtimeContributionsMarkup,
   statusDotMarkup,
   statusSummaryMarkup,
+  systemEfficiencyMarkup,
 } from "../dist/webComponents.js";
-
-const workingSession = (runtime) => ({
-  session_id: "codex-demo__Vision-Dash",
-  session_name: "Build dashboard",
-  project: "Vision-Dash",
-  status: "working",
-  runtime,
-});
 
 test("renders status counts without a global progress bar", () => {
   const html = statusSummaryMarkup({ total: 7, working: 1, blocked: 0, error: 0, idle: 6 });
@@ -132,117 +124,35 @@ test("renders provider loading, empty, and error states", () => {
   assert.match(providerTableMarkup([], { error: "request failed" }), /data-providers-retry/);
 });
 
-test("renders a runtime contributions matrix for active sessions", () => {
-  const html = runtimeContributionsMarkup([
-    {
-      session_id: "codex-a__Vision-Dash",
-      session_name: "Build dashboard",
-      project: "Vision-Dash",
-      status: "working",
-      runtime: { cpu_percent: 30, memory_percent: 5, process_count: 2 },
-    },
-    {
-      session_id: "claude-b__Vision-Dash",
-      project: "Vision-Dash",
-      status: "working",
-      runtime: { cpu_percent: 10, memory_percent: 15, process_count: 1 },
-    },
-  ]);
-  assert.match(html, /runtime-contributions/);
-  assert.match(html, /Build dashboard/);
+test("renders one global system efficiency band", () => {
+  const html = systemEfficiencyMarkup({
+    cpu_percent: 37.5,
+    load_average: [3.19, 3.9, 3.44],
+    memory_used_bytes: 12.8 * 1024 ** 3,
+    memory_total_bytes: 16 * 1024 ** 3,
+    memory_percent: 80,
+    network_down_bytes_per_second: 80_000,
+    network_up_bytes_per_second: 10_000,
+    server_cpu_percent: 1.8,
+    server_memory_bytes: 79 * 1024 ** 2,
+    sampled_at: 10_000,
+  });
+
+  assert.match(html, /System/);
   assert.match(html, /CPU/);
-  assert.match(html, /MEM/);
-  assert.match(html, /75%/);
-  assert.match(html, /25%/);
-  assert.match(html, /Waiting for runtime samples|sampled/);
+  assert.match(html, /Memory/);
+  assert.match(html, /Network/);
+  assert.match(html, /SessionBar/);
+  assert.match(html, /37\.5%/);
+  assert.match(html, /12\.8 GB.*16 GB.*80\.0%/);
+  assert.match(html, /80\.0 KB\/s.*10\.0 KB\/s/);
+  assert.equal((html.match(/<meter/g) || []).length, 4);
+  assert.doesNotMatch(html, /runtime-matrix-session/);
 });
 
-test("renders actual current usage for one sampled active session", () => {
-  const html = runtimeContributionsMarkup([workingSession({
-    cpu_percent: 22,
-    memory_percent: 1,
-    memory_bytes: 196 * 1024 * 1024,
-    process_count: 1,
-  })]);
-  assert.match(html, /current usage/);
-  assert.match(html, />22%</);
-  assert.doesNotMatch(html, /100% contribution/);
-  assert.match(html, />1 process</);
-});
+test("renders an unavailable global system state without a session grid", () => {
+  const html = systemEfficiencyMarkup(undefined);
 
-test("renders zero current-usage metrics without a minimum fill", () => {
-  const html = runtimeContributionsMarkup([workingSession({
-    cpu_percent: 0,
-    gpu_percent: 0,
-    memory_percent: 0,
-    memory_bytes: 0,
-    process_count: 0,
-  })]);
-
-  assert.equal((html.match(/runtime-matrix-cell is-zero/g) || []).length, 3);
-  assert.match(html, /class="runtime-matrix-cell is-zero" style="--runtime-fill:0%" aria-label="CPU current usage: 0%"/);
-});
-
-test("keeps exact values in accessible contribution labels for multiple samples", () => {
-  const html = runtimeContributionsMarkup([
-    workingSession({
-      cpu_percent: 30,
-      memory_percent: 5,
-      memory_bytes: 512 * 1024 * 1024,
-      process_count: 2,
-    }),
-    {
-      ...workingSession({
-        cpu_percent: 10,
-        memory_percent: 15,
-        memory_bytes: 256 * 1024 * 1024,
-        process_count: 1,
-      }),
-      session_id: "claude-demo__Vision-Dash",
-    },
-  ]);
-
-  assert.match(html, /aria-label="CPU 75% contribution · 30% current usage"/);
-  assert.match(html, /title="MEM 25% contribution · 5% · 512 MB current usage"/);
-  assert.match(html, /aria-label="PROC 66\.67% contribution · 2 processes current usage"/);
-  assert.match(html, /GPU unavailable/);
-});
-
-test("renders sessions sharing one process root as shared current usage", () => {
-  const runtime = {
-    cpu_percent: 22,
-    memory_percent: 1,
-    memory_bytes: 196 * 1024 * 1024,
-    process_count: 2,
-  };
-  const html = runtimeContributionsMarkup([
-    { ...workingSession(runtime), session_id: "shared-a", session_name: "Shared A", process_pid: 4242 },
-    { ...workingSession(runtime), session_id: "shared-b", session_name: "Shared B", process_pid: 4242 },
-  ]);
-
-  assert.match(html, /current usage/);
-  assert.match(html, /shared process/i);
-  assert.equal((html.match(/class="runtime-matrix-session"/g) || []).length, 1);
-  assert.match(html, />22%</);
-  assert.doesNotMatch(html, /50% contribution/);
-});
-
-test("renders known zero contributions as no contribution instead of unavailable", () => {
-  const zeroRuntime = {
-    cpu_percent: 0,
-    gpu_percent: 0,
-    memory_percent: 0,
-    memory_bytes: 0,
-    process_count: 0,
-  };
-  const html = runtimeContributionsMarkup([
-    { ...workingSession(zeroRuntime), session_id: "zero-a" },
-    { ...workingSession(zeroRuntime), session_id: "zero-b" },
-  ]);
-
-  assert.match(html, /aria-label="CPU 0% contribution · 0% current usage"/);
-  assert.match(html, /aria-label="GPU 0% contribution · 0% current usage"/);
-  assert.match(html, /aria-label="MEM 0% contribution · 0% · 0 B current usage"/);
-  assert.match(html, /aria-label="PROC 0% contribution · 0 processes current usage"/);
-  assert.doesNotMatch(html, /CPU unavailable|GPU unavailable|MEM unavailable|PROC unavailable/);
+  assert.match(html, /System metrics unavailable/);
+  assert.doesNotMatch(html, /runtime-contributions|runtime-matrix|<meter/);
 });

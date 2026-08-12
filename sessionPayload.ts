@@ -35,7 +35,6 @@ export function validateSessionPayload(body: unknown): body is SessionReportPayl
   for (const field of NON_NEGATIVE_NUMBER_FIELDS) {
     if (payload[field] !== undefined && !isNonNegativeNumber(payload[field])) return false;
   }
-  if (payload.process_pid !== undefined && !isPositiveInteger(payload.process_pid)) return false;
   if (payload.quota_reset !== undefined && (typeof payload.quota_reset !== "string" || payload.quota_reset.length > 64)) return false;
   if (payload.hook_event !== undefined && !isShortNonEmptyString(payload.hook_event, 128)) return false;
   if (payload.session_name !== undefined && !isShortNonEmptyString(payload.session_name, 128)) return false;
@@ -61,21 +60,17 @@ export function mergeSessionPayload(
   now: number,
 ): SessionPayload {
   const reduced = reduceSessionEvents(prev, sessionSnapshotToHookEvents(data, now));
+  const { process_pid: _retiredProcessPid, ...session } = reduced;
   return {
-    ...reduced,
+    ...session,
     quota_percent: data.quota_percent ?? prev?.quota_percent,
     quota_reset: data.quota_reset ?? prev?.quota_reset,
-    process_pid: data.process_pid ?? prev?.process_pid,
-    runtime: data.runtime ?? prev?.runtime,
+    runtime: data.runtime,
   };
 }
 
 function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function isPositiveInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function isNumberInRange(value: unknown, min: number, max: number): value is number {
