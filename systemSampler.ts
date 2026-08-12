@@ -79,14 +79,18 @@ function counterDelta(previous: number | undefined, current: number | undefined)
   return current - previous;
 }
 
+function hasPositiveFiniteElapsed(value: number): boolean {
+  return Number.isFinite(value) && value > 0;
+}
+
 function rateDelta(previous: number | undefined, current: number | undefined, seconds: number): number | undefined {
   const delta = counterDelta(previous, current);
-  if (delta === undefined || seconds <= 0) return undefined;
+  if (delta === undefined || !hasPositiveFiniteElapsed(seconds)) return undefined;
   return delta / seconds;
 }
 
 function cpuPercent(previous: CpuTimes | undefined, current: CpuTimes, elapsedMs: number): number | undefined {
-  if (!previous || elapsedMs <= 0) return undefined;
+  if (!previous || !hasPositiveFiniteElapsed(elapsedMs)) return undefined;
   const totalDelta = counterDelta(previous.total, current.total);
   const idleDelta = counterDelta(previous.idle, current.idle);
   if (totalDelta === undefined || idleDelta === undefined || totalDelta <= 0 || idleDelta > totalDelta) return undefined;
@@ -95,7 +99,7 @@ function cpuPercent(previous: CpuTimes | undefined, current: CpuTimes, elapsedMs
 
 function serverCpuPercent(previous: number | undefined, current: number, elapsedMs: number): number | undefined {
   const delta = counterDelta(previous, current);
-  if (delta === undefined || elapsedMs <= 0) return undefined;
+  if (delta === undefined || !hasPositiveFiniteElapsed(elapsedMs)) return undefined;
   return (delta / (elapsedMs * 1_000)) * 100;
 }
 
@@ -104,7 +108,7 @@ export function deriveSystemSnapshot(
   current: SystemSampleInput,
 ): SystemEfficiencySnapshot {
   const elapsedMs = previous ? current.monotonic_ms - previous.monotonic_ms : 0;
-  const elapsedSeconds = elapsedMs > 0 ? elapsedMs / 1_000 : 0;
+  const elapsedSeconds = hasPositiveFiniteElapsed(elapsedMs) ? elapsedMs / 1_000 : 0;
   const memoryUsed = Number.isFinite(current.memory_used_bytes) ? current.memory_used_bytes ?? 0 : 0;
   const memoryTotal = Number.isFinite(current.memory_total_bytes) ? current.memory_total_bytes ?? 0 : 0;
   const memoryPercent = memoryTotal > 0 ? clampPercent((memoryUsed / memoryTotal) * 100) : 0;
@@ -147,6 +151,12 @@ function parseCounter(value: string | undefined): number | undefined {
   if (!value || !/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function validNetworkCounters(value: NetworkCounters | undefined): value is NetworkCounters {
+  return value !== undefined
+    && finiteNonNegative(value.received_bytes)
+    && finiteNonNegative(value.transmitted_bytes);
 }
 
 function isLoopbackInterface(name: string): boolean {
@@ -244,6 +254,7 @@ export function createSystemSampler(options: SystemSamplerOptions = {}): {
   const readServerMemory = options.serverMemoryBytes ?? (() => memoryUsage().rss);
   const execFile = options.execFile ?? defaultExecFile;
   let previous: SystemSampleInput | undefined;
+  let lastValidNetwork: SystemSampleInput | undefined;
   let latestSnapshot: SystemEfficiencySnapshot | undefined;
   let inFlight = false;
   let stopped = false;
@@ -252,11 +263,13 @@ export function createSystemSampler(options: SystemSamplerOptions = {}): {
     if (stopped || inFlight) return undefined;
     inFlight = true;
     try {
+      const memory = readMemory();
       const current: SystemSampleInput = {
         monotonic_ms: monotonicNow(),
         cpu: readCpuTimes(),
         load_average: readLoadAverage(),
-        ...readMemory(),
+        memory_used_bytes: memory.used_bytes,
+        memory_total_bytes: memory.total_bytes,
         process_cpu_micros: readProcessCpu(),
         server_memory_bytes: readServerMemory(),
         sampled_at: sampledAt(),
@@ -269,11 +282,18 @@ export function createSystemSampler(options: SystemSamplerOptions = {}): {
       } catch {
         network = undefined;
       }
-      current.network = network;
-      const snapshot = freezeSnapshot(deriveSystemSnapshot(previous, current));
+      current.network = validNetworkCounters(network) ? network : undefined;
+      const snapshot = deriveSystemSnapshot(previous, current);
+      if (current.network) {
+        const networkSnapshot = deriveSystemSnapshot(lastValidNetwork, current);
+        snapshot.network_down_bytes_per_second = networkSnapshot.network_down_bytes_per_second;
+        snapshot.network_up_bytes_per_second = networkSnapshot.network_up_bytes_per_second;
+        lastValidNetwork = current;
+      }
+      const immutableSnapshot = freezeSnapshot(snapshot);
       previous = current;
-      latestSnapshot = snapshot;
-      return snapshot;
+      latestSnapshot = immutableSnapshot;
+      return immutableSnapshot;
     } finally {
       inFlight = false;
     }
