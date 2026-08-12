@@ -4,7 +4,7 @@ import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync, readFile
 import { join, dirname, basename, resolve } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
-import { SessionPayload, SessionRuntimeSnapshot } from "./types.js";
+import { SessionPayload } from "./types.js";
 import { mergeSessionPayload, validateSessionPayload } from "./sessionPayload.js";
 import { syncToICloud } from "./icloud.js";
 import { removeSessionMarkerFiles, scopedSessionId } from "./sessionMarkers.js";
@@ -16,7 +16,7 @@ import { agentSignalToApiRow, computeAdvisorRows } from "./quotaAdvisor.js";
 import { computePlanRows } from "./planAdvisor.js";
 import type { PlanRow } from "./planTypes.js";
 import { RateBuffer } from "./rateBuffer.js";
-import { sampleRegisteredProcesses } from "./runtimeSampler.js";
+import { createSystemSampler } from "./systemSampler.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Start the HTTP server + polling loops only when run directly
@@ -71,19 +71,19 @@ const PROVIDER_POLL_ENABLED = process.env.SESSIONBAR_PROVIDER_POLL !== "0";
 const PROVIDER_POLL_MS = Math.max(30_000, parseInt(process.env.SESSIONBAR_PROVIDER_POLL_MS || String(5 * 60 * 1000), 10));
 const CCSWITCH_ENABLED = process.env.SESSIONBAR_CCSWITCH !== "0";
 const envProviderConfigs = PROVIDER_POLL_ENABLED ? providerConfigsFromEnv(process.env) : [];
-const DEFAULT_RUNTIME_SAMPLE_MS = 2000;
-const MIN_RUNTIME_SAMPLE_MS = 100;
-const MAX_RUNTIME_SAMPLE_MS = 2_147_483_647;
-const RUNTIME_SAMPLE_MS = parseRuntimeSampleMs(process.env.SESSIONBAR_RUNTIME_SAMPLE_MS);
+const DEFAULT_SYSTEM_SAMPLE_MS = 2000;
+const MIN_SYSTEM_SAMPLE_MS = 100;
+const MAX_SYSTEM_SAMPLE_MS = 2_147_483_647;
+const SYSTEM_SAMPLE_MS = parseSystemSampleMs(process.env.SESSIONBAR_SYSTEM_SAMPLE_MS);
+const systemSampler = createSystemSampler();
 let providerPollInterval: NodeJS.Timeout | undefined;
-let runtimeSampleInterval: NodeJS.Timeout | undefined;
-let runtimeSampleInFlight = false;
+let systemSampleInterval: NodeJS.Timeout | undefined;
 
-export function parseRuntimeSampleMs(value: string | undefined): number {
+export function parseSystemSampleMs(value: string | undefined): number {
   const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed >= MIN_RUNTIME_SAMPLE_MS && parsed <= MAX_RUNTIME_SAMPLE_MS
+  return Number.isInteger(parsed) && parsed >= MIN_SYSTEM_SAMPLE_MS && parsed <= MAX_SYSTEM_SAMPLE_MS
     ? parsed
-    : DEFAULT_RUNTIME_SAMPLE_MS;
+    : DEFAULT_SYSTEM_SAMPLE_MS;
 }
 
 // ---- idle auto-shutdown -------------------------------------------------
@@ -119,7 +119,8 @@ function cleanup() {
   clearInterval(heartbeatInterval);
   clearInterval(purgeInterval);
   if (providerPollInterval) clearInterval(providerPollInterval);
-  if (runtimeSampleInterval) clearInterval(runtimeSampleInterval);
+  if (systemSampleInterval) clearInterval(systemSampleInterval);
+  systemSampler.stop();
   if (idleTimer) clearTimeout(idleTimer);
   removeClaudeHooks();
   try { unlinkSync(PID_FILE); } catch { /* ignore */ }
@@ -157,81 +158,13 @@ function removeClaudeHooks() {
 const sessions: Record<string, SessionPayload> = {};
 const sseClients = new Set<express.Response>();
 
-const RUNTIME_METRIC_FIELDS = [
-  "cpu_percent",
-  "gpu_percent",
-  "memory_percent",
-  "memory_bytes",
-  "process_count",
-] as const;
-
-function runtimeMetricsEqual(
-  left: SessionRuntimeSnapshot | undefined,
-  right: SessionRuntimeSnapshot | undefined,
-): boolean {
-  if (!left || !right) return left === right;
-  return RUNTIME_METRIC_FIELDS.every(field => left[field] === right[field]);
+async function sampleSystem(): Promise<void> {
+  await systemSampler.sample();
 }
 
-export function applyRuntimeSamples(
-  targetSessions: Record<string, SessionPayload>,
-  samples: ReadonlyMap<number, SessionRuntimeSnapshot>,
-  sampledRoots: ReadonlySet<number>,
-): boolean {
-  let changed = false;
-  for (const session of Object.values(targetSessions)) {
-    if (session.status !== "working" && session.status !== "blocked") continue;
-    const rootPid = session.process_pid;
-    if (rootPid === undefined || !sampledRoots.has(rootPid)) continue;
-
-    const previous = session.runtime;
-    const sample = samples.get(rootPid);
-    let next: SessionRuntimeSnapshot | undefined;
-    if (sample) {
-      next = { ...sample };
-      if (next.gpu_percent === undefined && previous?.gpu_percent !== undefined) {
-        next.gpu_percent = previous.gpu_percent;
-      }
-    } else if (previous?.gpu_percent !== undefined) {
-      next = { gpu_percent: previous.gpu_percent };
-    }
-
-    if (!runtimeMetricsEqual(previous, next)) changed = true;
-    session.runtime = next;
-  }
-  return changed;
-}
-
-function activeRuntimeRoots(): Set<number> {
-  const roots = new Set<number>();
-  for (const session of Object.values(sessions)) {
-    if (session.status !== "working" && session.status !== "blocked") continue;
-    if (session.process_pid !== undefined) roots.add(session.process_pid);
-  }
-  return roots;
-}
-
-async function sampleSessionRuntimes(): Promise<void> {
-  if (runtimeSampleInFlight) return;
-  const roots = activeRuntimeRoots();
-  if (roots.size === 0) return;
-
-  runtimeSampleInFlight = true;
-  try {
-    const samples = await sampleRegisteredProcesses(roots);
-    if (!applyRuntimeSamples(sessions, samples, roots)) return;
-    broadcastSSE();
-    if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
-  } catch (error) {
-    console.warn(`[runtime] sampling failed: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    runtimeSampleInFlight = false;
-  }
-}
-
-function startRuntimeSampling(): void {
-  void sampleSessionRuntimes();
-  runtimeSampleInterval = setInterval(() => void sampleSessionRuntimes(), RUNTIME_SAMPLE_MS);
+function startSystemSampling(): void {
+  void sampleSystem();
+  systemSampleInterval = setInterval(() => void sampleSystem(), SYSTEM_SAMPLE_MS);
 }
 
 const rateBuffers = new Map<string, RateBuffer>();
@@ -804,6 +737,10 @@ app.get("/sessions/live", (_req, res) => {
   res.json(sorted());
 });
 
+app.get("/system/live", (_req, res) => {
+  res.json({ system: systemSampler.latest() ?? null });
+});
+
 // GET: aggregated provider plan rows (subscription + account/session API rows)
 app.get("/providers/live", (_req, res) => {
   if (subscriptionRows === null) {
@@ -848,7 +785,7 @@ if (isDirectRun) {
     console.log(`SessionBar on http://${HOST}:${PORT}`);
     if (WEB_ENABLED) console.log(`Dashboard: http://${HOST}:${PORT}`);
     recoverSessions();
-    startRuntimeSampling();
+    startSystemSampling();
     startProviderPolling();
   });
 

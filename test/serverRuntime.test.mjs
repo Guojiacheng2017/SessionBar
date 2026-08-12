@@ -8,26 +8,14 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { applyRuntimeSamples, parseRuntimeSampleMs } from "../dist/server.js";
+import { parseSystemSampleMs } from "../dist/server.js";
 
-function session(id, overrides = {}) {
-  return {
-    session_id: id,
-    session_type: "Codex",
-    status: "working",
-    task_name: "running",
-    timestamp: 1_700_000_000_000,
-    ...overrides,
-  };
-}
-
-test("runtime sample interval accepts only safe integers within the supported range", () => {
+test("system sample interval accepts only safe integers within the supported range", () => {
   for (const value of [
     undefined,
     "",
@@ -41,114 +29,12 @@ test("runtime sample interval accepts only safe integers within the supported ra
     "99",
     "2147483648",
   ]) {
-    assert.equal(parseRuntimeSampleMs(value), 2000, String(value));
+    assert.equal(parseSystemSampleMs(value), 2000, String(value));
   }
-  assert.equal(parseRuntimeSampleMs("100"), 100);
-  assert.equal(parseRuntimeSampleMs("2000"), 2000);
-  assert.equal(parseRuntimeSampleMs("2500"), 2500);
-  assert.equal(parseRuntimeSampleMs("2147483647"), 2_147_483_647);
-});
-
-test("applies host samples only to active sessions without changing activity timestamps", () => {
-  const sessions = {
-    working: session("working", {
-      process_pid: 101,
-      runtime: { cpu_percent: 1, gpu_percent: 37, sampled_at: 100 },
-    }),
-    blocked: session("blocked", { status: "blocked", process_pid: 102 }),
-    idle: session("idle", {
-      status: "idle",
-      process_pid: 103,
-      runtime: { cpu_percent: 8, sampled_at: 100 },
-    }),
-    error: session("error", { status: "error", process_pid: 104 }),
-  };
-  const samples = new Map([
-    [101, { cpu_percent: 12, memory_percent: 3, memory_bytes: 3000, process_count: 2, sampled_at: 200 }],
-    [102, { cpu_percent: 5, memory_percent: 1, memory_bytes: 1000, process_count: 1, sampled_at: 200 }],
-    [103, { cpu_percent: 99, memory_percent: 9, memory_bytes: 9000, process_count: 9, sampled_at: 200 }],
-    [104, { cpu_percent: 88, memory_percent: 8, memory_bytes: 8000, process_count: 8, sampled_at: 200 }],
-  ]);
-
-  const changed = applyRuntimeSamples(sessions, samples, new Set([101, 102, 103, 104]));
-
-  assert.equal(changed, true);
-  assert.deepEqual(sessions.working.runtime, {
-    cpu_percent: 12,
-    gpu_percent: 37,
-    memory_percent: 3,
-    memory_bytes: 3000,
-    process_count: 2,
-    sampled_at: 200,
-  });
-  assert.deepEqual(sessions.blocked.runtime, samples.get(102));
-  assert.deepEqual(sessions.idle.runtime, { cpu_percent: 8, sampled_at: 100 });
-  assert.equal(sessions.error.runtime, undefined);
-  assert.equal(sessions.working.timestamp, 1_700_000_000_000);
-  assert.equal(sessions.blocked.timestamp, 1_700_000_000_000);
-});
-
-test("clears dead-root host metrics after a successful table read and preserves explicit GPU", () => {
-  const sessions = {
-    dead: session("dead", {
-      process_pid: 201,
-      runtime: {
-        cpu_percent: 22,
-        gpu_percent: 41,
-        memory_percent: 4,
-        memory_bytes: 4000,
-        process_count: 3,
-        sampled_at: 100,
-      },
-    }),
-    unavailable: session("unavailable", {
-      process_pid: 202,
-      runtime: { cpu_percent: 7, sampled_at: 100 },
-    }),
-    notSampled: session("not-sampled", {
-      process_pid: 203,
-      runtime: { cpu_percent: 9, sampled_at: 100 },
-    }),
-  };
-
-  const changed = applyRuntimeSamples(sessions, new Map(), new Set([201, 202]));
-
-  assert.equal(changed, true);
-  assert.deepEqual(sessions.dead.runtime, { gpu_percent: 41 });
-  assert.equal(sessions.unavailable.runtime, undefined);
-  assert.deepEqual(sessions.notSampled.runtime, { cpu_percent: 9, sampled_at: 100 });
-});
-
-test("advances sampled_at without reporting a visible change when metrics are unchanged", () => {
-  const sessions = {
-    stable: session("stable", {
-      process_pid: 301,
-      runtime: {
-        cpu_percent: 10,
-        gpu_percent: 50,
-        memory_percent: 2,
-        memory_bytes: 2000,
-        process_count: 1,
-        sampled_at: 100,
-      },
-    }),
-  };
-  const samples = new Map([
-    [301, {
-      cpu_percent: 10,
-      memory_percent: 2,
-      memory_bytes: 2000,
-      process_count: 1,
-      sampled_at: 200,
-    }],
-  ]);
-
-  const changed = applyRuntimeSamples(sessions, samples, new Set([301]));
-
-  assert.equal(changed, false);
-  assert.equal(sessions.stable.runtime.sampled_at, 200);
-  assert.equal(sessions.stable.runtime.gpu_percent, 50);
-  assert.equal(sessions.stable.timestamp, 1_700_000_000_000);
+  assert.equal(parseSystemSampleMs("100"), 100);
+  assert.equal(parseSystemSampleMs("2000"), 2000);
+  assert.equal(parseSystemSampleMs("2500"), 2500);
+  assert.equal(parseSystemSampleMs("2147483647"), 2_147_483_647);
 });
 
 async function availablePort() {
@@ -183,49 +69,46 @@ function lineCount(path) {
   return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).length;
 }
 
-test("direct server restores roots and runs non-overlapping failure-safe active sampling", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "sessionbar-server-runtime-"));
+test("direct server serves cached system samples without Codex discovery or process-table reads", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-server-system-"));
   const home = join(root, "home");
   const sessionbarHome = join(root, "sessionbar");
   const sessionDir = join(sessionbarHome, "sessions");
   const codexHome = join(root, "codex");
+  const codexSessionDir = join(codexHome, "sessions");
   const bin = join(root, "bin");
-  const table = join(root, "process-table.txt");
-  const calls = join(root, "ps-calls.log");
-  const failures = join(root, "ps-failures.log");
-  const overlap = join(root, "ps-overlap.log");
-  const lock = join(root, "ps.lock");
-  const fail = join(root, "ps.fail");
+  const codexReads = join(root, "codex-reads.log");
+  const netstatCalls = join(root, "netstat-calls.log");
+  const psCalls = join(root, "ps-calls.log");
+  const fsProbe = join(root, "codex-read-probe.cjs");
   mkdirSync(home, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });
-  mkdirSync(codexHome, { recursive: true });
+  mkdirSync(codexSessionDir, { recursive: true });
   mkdirSync(bin, { recursive: true });
-
-  const validMarker = "sessionbar-id-codex-project-notty-valid";
-  const invalidMarker = "sessionbar-id-codex-project-notty-invalid";
-  writeFileSync(join(sessionDir, validMarker), "recovered-valid\n");
-  writeFileSync(join(sessionDir, validMarker.replace("sessionbar-id-", "sessionbar-process-")), "4242\n");
-  writeFileSync(join(sessionDir, invalidMarker), "recovered-invalid\n");
-  writeFileSync(join(sessionDir, invalidMarker.replace("sessionbar-id-", "sessionbar-process-")), "0\n");
-  writeFileSync(table, "4242 1 10 1000\n4243 4242 5 2000\n");
-  writeFileSync(join(bin, "ps"), `#!/bin/sh
-if ! mkdir "$SESSIONBAR_PS_LOCK" 2>/dev/null; then
-  printf 'overlap\n' >> "$SESSIONBAR_PS_OVERLAP"
-fi
-printf 'call\n' >> "$SESSIONBAR_PS_CALLS"
-sleep 0.08
-if [ -f "$SESSIONBAR_PS_FAIL" ]; then
-  printf 'failure\n' >> "$SESSIONBAR_PS_FAILURES"
-  rmdir "$SESSIONBAR_PS_LOCK" 2>/dev/null || true
-  exit 1
-fi
-cat "$SESSIONBAR_PS_TABLE"
-rmdir "$SESSIONBAR_PS_LOCK" 2>/dev/null || true
+  writeFileSync(join(bin, "netstat"), `#!/bin/sh
+printf 'call\\n' >> "$SESSIONBAR_NETSTAT_CALLS"
+printf '%s\\n' 'Name  Mtu   Network       Address            Ipkts Ierrs Ibytes  Opkts Oerrs Obytes  Coll'
+printf '%s\\n' 'en0   1500  <Link#4>      12:34:56:78:9a:bc  1     0     111     2     0     222     0'
 `);
+  writeFileSync(join(bin, "ps"), `#!/bin/sh
+printf 'call\\n' >> "$SESSIONBAR_PS_CALLS"
+`);
+  writeFileSync(fsProbe, `const fs = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+const originalReaddirSync = fs.readdirSync;
+fs.readdirSync = function(path, ...args) {
+  if (path === process.env.SESSIONBAR_CODEX_SESSION_DIR) {
+    fs.appendFileSync(process.env.SESSIONBAR_CODEX_READS, "read\\n");
+  }
+  return originalReaddirSync.call(this, path, ...args);
+};
+syncBuiltinESMExports();
+`);
+  chmodSync(join(bin, "netstat"), 0o755);
   chmodSync(join(bin, "ps"), 0o755);
 
   const port = await availablePort();
-  const child = spawn(process.execPath, ["dist/server.js"], {
+  const child = spawn(process.execPath, ["--require", fsProbe, "dist/server.js"], {
     cwd: new URL("..", import.meta.url),
     env: {
       ...process.env,
@@ -237,13 +120,11 @@ rmdir "$SESSIONBAR_PS_LOCK" 2>/dev/null || true
       SESSIONBAR_PROVIDER_POLL: "0",
       SESSIONBAR_CCSWITCH: "0",
       SESSIONBAR_IDLE_SHUTDOWN_MS: "60000",
-      SESSIONBAR_RUNTIME_SAMPLE_MS: "100",
-      SESSIONBAR_PS_TABLE: table,
-      SESSIONBAR_PS_CALLS: calls,
-      SESSIONBAR_PS_FAILURES: failures,
-      SESSIONBAR_PS_OVERLAP: overlap,
-      SESSIONBAR_PS_LOCK: lock,
-      SESSIONBAR_PS_FAIL: fail,
+      SESSIONBAR_SYSTEM_SAMPLE_MS: "100",
+      SESSIONBAR_CODEX_SESSION_DIR: codexSessionDir,
+      SESSIONBAR_CODEX_READS: codexReads,
+      SESSIONBAR_NETSTAT_CALLS: netstatCalls,
+      SESSIONBAR_PS_CALLS: psCalls,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -264,66 +145,21 @@ rmdir "$SESSIONBAR_PS_LOCK" 2>/dev/null || true
 
   const baseUrl = `http://127.0.0.1:${port}`;
   await waitFor(async () => {
-    const response = await fetch(`${baseUrl}/sessions/live`);
-    return response.ok;
+    const response = await fetch(`${baseUrl}/system/live`);
+    if (!response.ok) return undefined;
+    const body = await response.json();
+    return body.system;
   }, `server did not start (${childOutput})`);
 
-  const recovered = await fetch(`${baseUrl}/sessions/live`).then(response => response.json());
-  assert.equal(recovered.find(row => row.session_id === "recovered-valid").process_pid, 4242);
-  assert.equal(recovered.find(row => row.session_id === "recovered-invalid").process_pid, undefined);
-  await new Promise(resolve => setTimeout(resolve, 120));
-  assert.equal(lineCount(calls), 0, "idle recovered sessions must not trigger process-table reads");
+  const initial = await fetch(`${baseUrl}/system/live`).then(response => response.json());
+  assert.equal(typeof initial.system.memory_total_bytes, "number");
+  assert.equal(typeof initial.system.server_memory_bytes, "number");
+  assert.equal(Array.isArray(initial.system.load_average), true);
 
-  const postResponse = await fetch(`${baseUrl}/session/status`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      session_id: "recovered-valid",
-      session_type: "Codex",
-      status: "working",
-      task_name: "running",
-      runtime: { gpu_percent: 44 },
-    }),
-  });
-  assert.equal(postResponse.status, 200);
-
-  const firstSample = await waitFor(async () => {
-    const rows = await fetch(`${baseUrl}/sessions/live`).then(response => response.json());
-    const current = rows.find(row => row.session_id === "recovered-valid");
-    return current?.runtime?.cpu_percent === 15 ? current : undefined;
-  }, `active session was not sampled (${childOutput})`);
-  assert.equal(firstSample.process_pid, 4242);
-  assert.equal(firstSample.runtime.memory_bytes, 3_072_000);
-  assert.equal(firstSample.runtime.process_count, 2);
-  assert.equal(firstSample.runtime.gpu_percent, 44);
-
-  const laterSample = await waitFor(async () => {
-    const rows = await fetch(`${baseUrl}/sessions/live`).then(response => response.json());
-    const current = rows.find(row => row.session_id === "recovered-valid");
-    return current?.runtime?.sampled_at > firstSample.runtime.sampled_at ? current : undefined;
-  }, "sample timestamp did not advance");
-  assert.equal(laterSample.timestamp, firstSample.timestamp);
-  assert.equal(existsSync(overlap), false, "runtime passes overlapped");
-
-  writeFileSync(fail, "1\n");
-  writeFileSync(table, "");
-  await waitFor(() => lineCount(failures) >= 1, "controlled ps failure was not observed");
-  const afterFirstFailure = await fetch(`${baseUrl}/sessions/live`).then(response => response.json());
-  const preservedRuntime = afterFirstFailure.find(row => row.session_id === "recovered-valid").runtime;
-  await waitFor(() => lineCount(failures) >= 2, "second controlled ps failure was not observed");
-  const afterSecondFailure = await fetch(`${baseUrl}/sessions/live`).then(response => response.json());
-  assert.deepEqual(
-    afterSecondFailure.find(row => row.session_id === "recovered-valid").runtime,
-    preservedRuntime,
-  );
-
-  unlinkSync(fail);
-  const deadRoot = await waitFor(async () => {
-    const rows = await fetch(`${baseUrl}/sessions/live`).then(response => response.json());
-    const current = rows.find(row => row.session_id === "recovered-valid");
-    return current?.runtime && Object.keys(current.runtime).length === 1 ? current : undefined;
-  }, "successful empty process table did not clear stale host metrics");
-  assert.deepEqual(deadRoot.runtime, { gpu_percent: 44 });
-  assert.equal(deadRoot.timestamp, firstSample.timestamp);
-  assert.equal(existsSync(overlap), false, "runtime passes overlapped");
+  await new Promise(resolve => setTimeout(resolve, 220));
+  const later = await fetch(`${baseUrl}/system/live`).then(response => response.json());
+  assert.equal(typeof later.system.sampled_at, "number");
+  assert.ok(lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
+  assert.equal(lineCount(codexReads), 0, "system samples must not discover Codex sessions");
+  assert.equal(lineCount(psCalls), 0, "system samples must not read the process table");
 });
