@@ -75,6 +75,19 @@ export interface SessionRuntimeSnapshot {
   sampled_at?: number;
 }
 
+export interface SystemEfficiencySnapshot {
+  cpu_percent?: number;
+  load_average: [number, number, number];
+  memory_used_bytes: number;
+  memory_total_bytes: number;
+  memory_percent: number;
+  network_down_bytes_per_second?: number;
+  network_up_bytes_per_second?: number;
+  server_cpu_percent?: number;
+  server_memory_bytes: number;
+  sampled_at: number;
+}
+
 export interface SessionPayload {
   session_id: string;    // unique per session, e.g. "vision-dash-40393"
   session_type: string;  // label, e.g. "Claude Code", "Gemini CLI"
