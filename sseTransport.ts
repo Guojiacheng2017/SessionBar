@@ -67,7 +67,43 @@ export function createSSETransport<T>(
   let reader: SSEReader | null = null;
   let connecting: Promise<SSEReader | null> | null = null;
   let pendingRead: Promise<ReadableStreamReadResult<string> | undefined> | null = null;
+  let pendingReadResult: ReadableStreamReadResult<string> | undefined | typeof NO_EVENT = NO_EVENT;
+  const readWaiters = new Set<(value: ReadableStreamReadResult<string> | undefined) => void>();
   let closed = false;
+
+  function startRead(): void {
+    if (pendingRead || !reader) return;
+    pendingReadResult = NO_EVENT;
+    pendingRead = reader.read().catch(() => undefined);
+    void pendingRead.then(value => {
+      pendingReadResult = value;
+      for (const waiter of readWaiters) waiter(value);
+      readWaiters.clear();
+    });
+  }
+
+  function waitForRead(timeoutMs: number): Promise<WaitResult<ReadableStreamReadResult<string> | undefined>> {
+    if (pendingReadResult !== NO_EVENT) {
+      return Promise.resolve({ kind: "value", value: pendingReadResult });
+    }
+    return new Promise(resolve => {
+      let settled = false;
+      const finish = (result: WaitResult<ReadableStreamReadResult<string> | undefined>) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        controller.signal.removeEventListener("abort", onAbort);
+        readWaiters.delete(onValue);
+        resolve(result);
+      };
+      const onValue = (value: ReadableStreamReadResult<string> | undefined) => finish({ kind: "value", value });
+      const onAbort = () => finish({ kind: "aborted" });
+      const timer = setTimeout(() => finish({ kind: "timeout" }), Math.max(0, timeoutMs));
+      readWaiters.add(onValue);
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+      if (controller.signal.aborted) onAbort();
+    });
+  }
 
   function connection(): Promise<SSEReader | null> {
     if (connecting) return connecting;
@@ -104,12 +140,15 @@ export function createSSETransport<T>(
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) return "timeout";
 
-      if (!pendingRead) pendingRead = reader.read().catch(() => undefined);
+      startRead();
       const activeRead = pendingRead;
-      const outcome = await waitForValue(activeRead, remainingMs, controller.signal);
+      const outcome = await waitForRead(remainingMs);
       if (outcome.kind === "timeout") return "timeout";
       if (outcome.kind !== "value" || !outcome.value || closed) return "closed";
-      if (pendingRead === activeRead) pendingRead = null;
+      if (pendingRead === activeRead) {
+        pendingRead = null;
+        pendingReadResult = NO_EVENT;
+      }
       if (outcome.value.done) return "closed";
       buffer.value += outcome.value.value;
     }
@@ -120,6 +159,7 @@ export function createSSETransport<T>(
     if (closed) return;
     closed = true;
     controller.abort();
+    readWaiters.clear();
     const activeReader = reader;
     reader = null;
     if (activeReader) void Promise.resolve(activeReader.cancel()).catch(() => undefined);

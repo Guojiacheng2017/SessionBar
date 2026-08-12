@@ -31,6 +31,29 @@ test("an idle SSE read returns at its deadline without starting a second read", 
   transport.close();
 });
 
+test("repeated idle deadlines reuse one read and release timeout waiters", async () => {
+  const pendingRead = deferred();
+  let reads = 0;
+  const reader = {
+    read() {
+      reads += 1;
+      return pendingRead.promise;
+    },
+    cancel: async () => undefined,
+  };
+  const transport = createSSETransport(async () => reader);
+
+  for (let index = 0; index < 50; index += 1) {
+    assert.equal(await transport.next(1), "timeout");
+  }
+  assert.equal(reads, 1);
+
+  pendingRead.resolve({ done: false, value: "data: [{\"session_id\":\"quiet\"}]\n\n" });
+  assert.deepEqual(await transport.next(100), [{ session_id: "quiet" }]);
+  assert.equal(reads, 1);
+  transport.close();
+});
+
 test("closing SSE transport aborts and cancels an active read", async () => {
   const pendingRead = deferred();
   let signal;
