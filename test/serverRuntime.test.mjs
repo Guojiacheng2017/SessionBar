@@ -136,11 +136,13 @@ syncBuiltinESMExports();
     assert.equal(child.exitCode, null, `server exited before SIGTERM (${childOutput})`);
     const exited = new Promise(resolve => child.once("exit", (code, signal) => resolve({ code, signal })));
     assert.equal(child.kill("SIGTERM"), true, "SIGTERM was not delivered to the server");
+    let timeout;
+    const exitTimeout = new Promise(resolve => {
+      timeout = setTimeout(() => resolve(undefined), 1_000);
+    });
     try {
-      const exit = await Promise.race([
-        exited,
-        new Promise(resolve => setTimeout(() => resolve(undefined), 1_000)),
-      ]);
+      const exit = await Promise.race([exited, exitTimeout]);
+      clearTimeout(timeout);
       if (!exit) {
         if (child.exitCode === null) child.kill("SIGKILL");
         await exited;
@@ -152,6 +154,7 @@ syncBuiltinESMExports();
       await new Promise(resolve => setTimeout(resolve, systemSampleMs + 50));
       assert.equal(lineCount(netstatCalls), netstatCallsAfterExit, "system sampler continued after shutdown");
     } finally {
+      clearTimeout(timeout);
       rmSync(root, { recursive: true, force: true });
     }
   });
