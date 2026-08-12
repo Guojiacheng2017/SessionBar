@@ -81,7 +81,17 @@ This explicitly avoids claiming that a shared terminal, agent subprocess, or reu
 
 Replace the current runtime panel with a compact `System` panel inspired by Mole's status presentation while preserving SessionBar's existing monitor theme.
 
-The panel displays fixed rows so values changing width do not alter layout:
+For detail panels at least 64 columns wide, use a balanced dashboard layout:
+
+- a quiet `SYSTEM / HOST` heading with sample freshness aligned to the right
+- side-by-side CPU and memory metrics with prominent percentages, fixed-width bars, and semantic health colors
+- a three-column load-average row labelled `1 min`, `5 min`, and `15 min`
+- one network row that visually separates download and upload throughput
+- one SessionBar row that shows server CPU and resident memory together
+
+The dashboard is rendered as styled OpenTUI text within the existing details panel. It does not add nested bordered boxes, mouse handling, animation, history buffers, or another rendering loop. The current system snapshot remains the only data source.
+
+For detail panels narrower than 64 columns, retain the compact fixed-row layout so the sessions sidebar and details panel remain usable:
 
 - `CPU` with percentage and a fixed-width bar
 - `Load` with 1m, 5m, and 15m values
@@ -89,6 +99,8 @@ The panel displays fixed rows so values changing width do not alter layout:
 - `Network` with down/up rates
 - `SessionBar` with server CPU and RSS
 - `Sample` with relative freshness or an unavailable state
+
+All rows are width-bounded before they reach OpenTUI. Numeric changes must not alter panel geometry, and missing metrics render as unavailable values without collapsing a section.
 
 The project/session/details hierarchy remains unchanged. System health is global context and must not be repeated in session details.
 
