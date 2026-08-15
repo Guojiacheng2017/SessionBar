@@ -13,7 +13,89 @@ import {
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { consumeSystemSample, parseSystemSampleMs } from "../dist/server.js";
+import { codexActivityFromJsonl, codexMetadataRefreshDue, consumeSystemSample, discoveryRefreshDue, parseSystemSampleMs, readFirstJsonLine, recentCodexSessionDirs, SESSION_RETENTION_MS, systemSampleDelay } from "../dist/server/server.js";
+
+const serverSource = readFileSync(new URL("../src/server/server.ts", import.meta.url), "utf8");
+
+test("relay lifetime has no automatic idle-shutdown path", () => {
+  assert.doesNotMatch(serverSource, /IDLE_SHUTDOWN|scheduleIdleCheck|no clients.*shutting down/i);
+});
+
+test("projects and sessions remain in memory for thirty minutes without updates", () => {
+  assert.equal(SESSION_RETENTION_MS, 30 * 60 * 1000);
+  assert.match(serverSource, /now - s\.timestamp > SESSION_RETENTION_MS/);
+});
+
+test("Codex discovery is throttled between refresh windows", () => {
+  assert.equal(discoveryRefreshDue(0, 1000, 2000), true);
+  assert.equal(discoveryRefreshDue(1000, 2999, 2000), false);
+  assert.equal(discoveryRefreshDue(1000, 3000, 2000), true);
+});
+
+test("Codex app-server metadata refresh is throttled and never overlaps", () => {
+  assert.equal(codexMetadataRefreshDue(0, false, 1000, 15_000), true);
+  assert.equal(codexMetadataRefreshDue(1000, false, 15_999, 15_000), false);
+  assert.equal(codexMetadataRefreshDue(1000, false, 16_000, 15_000), true);
+  assert.equal(codexMetadataRefreshDue(0, true, 16_000, 15_000), false);
+});
+
+test("Codex discovery visits only date directories inside its window", () => {
+  const now = new Date(2026, 7, 13, 12).getTime();
+  assert.deepEqual(recentCodexSessionDirs("/sessions", now, 24 * 60 * 60 * 1000), [
+    "/sessions",
+    "/sessions/2026/08/12",
+    "/sessions/2026/08/13",
+  ]);
+});
+
+test("Codex metadata reads only the first JSONL record", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-jsonl-head-"));
+  const path = join(root, "large.jsonl");
+  try {
+    writeFileSync(path, `${JSON.stringify({ type: "session_meta", payload: { id: "expected" } })}\n${"x".repeat(2 * 1024 * 1024)}`);
+    assert.deepEqual(readFirstJsonLine(path), { type: "session_meta", payload: { id: "expected" } });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex task completion makes discovery idle before the mtime window expires", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-jsonl-status-"));
+  const path = join(root, "status.jsonl");
+  try {
+    writeFileSync(path, [
+      { type: "event_msg", payload: { type: "task_started" } },
+      { type: "response_item", payload: { type: "function_call", name: "exec_command", call_id: "1", arguments: "{}" } },
+      { type: "response_item", payload: { type: "function_call_output", call_id: "1" } },
+      { type: "event_msg", payload: { type: "task_complete" } },
+    ].map(value => JSON.stringify(value)).join("\n"));
+    const activity = codexActivityFromJsonl(path, true);
+    assert.equal(activity.working, false);
+    assert.equal(activity.taskName, "Ready");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Codex activity finds a task start before the bounded display tail", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-jsonl-long-status-"));
+  const path = join(root, "status.jsonl");
+  try {
+    writeFileSync(path, [
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "x".repeat(256 * 1024) } }),
+    ].join("\n"));
+    assert.equal(codexActivityFromJsonl(path, true).working, true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("system sampling backs off when no client is observing it", () => {
+  assert.equal(systemSampleDelay(9_000, 10_000, 2_000, 15_000), 2_000);
+  assert.equal(systemSampleDelay(0, 10_000, 2_000, 15_000), 15_000);
+  assert.equal(systemSampleDelay(1_000, 12_000, 2_000, 15_000), 15_000);
+});
 
 test("system sample interval accepts only safe integers within the supported range", () => {
   for (const value of [
@@ -57,6 +139,58 @@ test("server sampling boundary logs and consumes an unexpected rejection", async
   assert.equal(logged.length, 1);
   assert.match(logged[0][0], /system sample failed/i);
   assert.equal(logged[0][1], failure);
+});
+
+test("direct server stays on the same dynamic port while temporarily idle", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-server-idle-"));
+  const home = join(root, "home");
+  const sessionbarHome = join(root, "sessionbar");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(join(sessionbarHome, "sessions"), { recursive: true });
+
+  const child = spawn(process.execPath, ["dist/server/server.js"], {
+    cwd: new URL("..", import.meta.url),
+    env: {
+      ...process.env,
+      HOME: home,
+      SESSIONBAR_HOME: sessionbarHome,
+      SESSIONBAR_PORT: "0",
+      SESSIONBAR_IDLE_SHUTDOWN_MS: "50",
+      SESSIONBAR_PROVIDER_POLL: "0",
+      SESSIONBAR_CCSWITCH: "0",
+      SESSIONBAR_CODEX_APP_SERVER: "0",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.on("data", chunk => { output += chunk; });
+  child.stderr.on("data", chunk => { output += chunk; });
+  t.after(async () => {
+    if (child.exitCode === null) {
+      const exited = new Promise(resolve => child.once("exit", resolve));
+      child.kill("SIGTERM");
+      await exited;
+    }
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const portPath = join(sessionbarHome, "port");
+  const port = await waitFor(() => {
+    if (!existsSync(portPath)) return undefined;
+    const value = Number(readFileSync(portPath, "utf8").trim());
+    return Number.isInteger(value) && value > 0 ? value : undefined;
+  }, `server did not publish its dynamic port (${output})`);
+
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const response = await fetch(`http://127.0.0.1:${port}/health`);
+  const health = await response.json();
+  assert.equal(response.ok, true);
+  assert.equal(health.port, port);
+  assert.equal(health.web, true);
+  const dashboard = await fetch(`http://127.0.0.1:${port}/`);
+  assert.equal(dashboard.ok, true);
+  assert.match(await dashboard.text(), /SessionBar/);
+  assert.equal(child.exitCode, null, `server exited while idle (${output})`);
 });
 
 async function availablePort() {
@@ -131,7 +265,7 @@ syncBuiltinESMExports();
   chmodSync(join(bin, "ps"), 0o755);
 
   const port = await availablePort();
-  const child = spawn(process.execPath, ["--require", fsProbe, "dist/server.js"], {
+  const child = spawn(process.execPath, ["--require", fsProbe, "dist/server/server.js"], {
     cwd: new URL("..", import.meta.url),
     env: {
       ...process.env,
@@ -171,6 +305,7 @@ syncBuiltinESMExports();
         assert.fail(`server did not exit after SIGTERM (${childOutput})`);
       }
       assert.deepEqual(exit, { code: 0, signal: null }, `server did not exit cleanly (${childOutput})`);
+      assert.match(childOutput, /\[shutdown\] SIGTERM/, `server did not log its exit reason (${childOutput})`);
 
       const netstatCallsAfterExit = lineCount(netstatCalls);
       await new Promise(resolve => setTimeout(resolve, systemSampleMs + 50));
@@ -254,7 +389,7 @@ syncBuiltinESMExports();
 `);
 
   const port = await availablePort();
-  const child = spawn(process.execPath, ["--require", osProbe, "dist/server.js"], {
+  const child = spawn(process.execPath, ["--require", osProbe, "dist/server/server.js"], {
     cwd: new URL("..", import.meta.url),
     env: {
       ...process.env,

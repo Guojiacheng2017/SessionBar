@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const [html, css] = await Promise.all([
-  readFile(new URL("../index.html", import.meta.url), "utf8"),
-  readFile(new URL("../web.css", import.meta.url), "utf8"),
+  readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+  readFile(new URL("../public/web.css", import.meta.url), "utf8"),
 ]);
 
 test("uses the system color scheme as the Web UI theme source", () => {

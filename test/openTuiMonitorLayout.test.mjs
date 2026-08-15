@@ -5,18 +5,59 @@ import {
   createSingleFlightRefresh,
   createVisibleModelUpdater,
   monitorBodyLayout,
+  monitorPollDelay,
   monitorVisibleModel,
   nextVisibleFreshnessDelay,
   preserveSystemSnapshot,
+  preserveSessionDetailSnapshots,
   providerSummaryLine,
   providerTableContent,
   systemOverviewContent,
   systemOverviewText,
   visibleModelFingerprint,
-} from "../dist/openTuiMonitor.js";
+} from "../dist/tui/openTuiMonitor.js";
 
 const GIB = 1024 ** 3;
 const MIB = 1024 ** 2;
+
+test("monitor polling slows down while the terminal is unfocused", () => {
+  assert.equal(monitorPollDelay(true, 1000, 10_000), 1000);
+  assert.equal(monitorPollDelay(false, 1000, 10_000), 10_000);
+  assert.equal(monitorPollDelay(false, 20_000, 10_000), 20_000);
+});
+
+test("session detail tabs retain their last fields until explicitly replaced", () => {
+  const previous = [{
+    session_id: "session-a",
+    session_type: "Codex",
+    status: "working",
+    task_name: "old task",
+    timestamp: 1,
+    activity_tail: ["tool: npm test"],
+    context_percent: 42,
+    agent_signals: [{ signal: "openai.usage", timestamp: 1, used_percent: 20 }],
+    workflow_events: [{ raw_event: "PreToolUse", timestamp: 1 }],
+    flow: { nodes: [], edges: [] },
+  }];
+  const next = [{
+    session_id: "session-a",
+    session_type: "Codex",
+    status: "idle",
+    task_name: "Ready",
+    timestamp: 2,
+  }];
+
+  const [merged] = preserveSessionDetailSnapshots(previous, next);
+  assert.equal(merged.status, "idle");
+  assert.equal(merged.task_name, "Ready");
+  assert.deepEqual(merged.activity_tail, previous[0].activity_tail);
+  assert.equal(merged.context_percent, 42);
+  assert.deepEqual(merged.agent_signals, previous[0].agent_signals);
+  assert.deepEqual(merged.workflow_events, previous[0].workflow_events);
+  assert.deepEqual(merged.flow, previous[0].flow);
+
+  assert.deepEqual(preserveSessionDetailSnapshots(previous, []), []);
+});
 
 function systemSnapshot(overrides = {}) {
   return {
@@ -27,6 +68,8 @@ function systemSnapshot(overrides = {}) {
     memory_percent: 80,
     network_down_bytes_per_second: 80_000,
     network_up_bytes_per_second: 10_000,
+    device_temperature_celsius: 70.6,
+    battery_temperature_celsius: 30.9,
     server_cpu_percent: 1.8,
     server_memory_bytes: 79 * MIB,
     sampled_at: 10_000,
@@ -61,36 +104,53 @@ test("monitor body layout fits every panel within a 40-column renderer", () => {
     .split("\n").every(line => line.length <= layout.detailContentWidth));
 });
 
-test("system overview renders a deterministic six-row efficiency panel", () => {
+test("system overview renders a deterministic compact efficiency panel", () => {
   const text = systemOverviewText(systemSnapshot(), 44, 11_000);
   assert.match(text, /CPU.*37\.5%/);
-  assert.match(text, /Load.*3\.19.*3\.90.*3\.44/);
+  assert.match(text, /Load Average\n\s*1m\s+3\.19\n\s*5m\s+3\.90\n\s*15m\s+3\.44/);
+  assert.match(text, /Tasks running\/waiting vs cores/);
   assert.match(text, /Memory.*12\.8 GB.*16 GB.*80\.0%/);
-  assert.match(text, /Network.*80\.0 KB\/s.*10\.0 KB\/s/);
-  assert.match(text, /SessionBar.*1\.8%.*79 MB/);
+  assert.match(text, /Download.*80\.0 KB\/s/);
+  assert.match(text, /Upload.*10\.0 KB\/s/);
+  assert.match(text, /Device.*70\.6°C/);
+  assert.match(text, /Battery.*30\.9°C/);
   assert.match(text, /Sample.*1s/);
-  assert.equal(text.split("\n").length, 6);
+  assert.doesNotMatch(text, /SessionBar/i);
+  assert.equal(text.split("\n").length, 12);
   assert.ok(text.split("\n").every(line => line.length <= 44));
 });
 
-test("system overview remains six visual rows at 32 columns", () => {
+test("system overview keeps the load group legible at 32 columns", () => {
   const lines = systemOverviewText(systemSnapshot(), 32, 11_000).split("\n");
-  assert.equal(lines.length, 6);
+  assert.equal(lines.length, 12);
   assert.ok(lines.every(line => line.length <= 32));
-  assert.deepEqual(lines.map(line => line.split(/\s+/)[0]), ["CPU", "Load", "Memory", "Network", "SessionBar", "Sample"]);
+  assert.deepEqual(lines.slice(1, 6), [
+    "Load Average",
+    "  1m   3.19",
+    "  5m   3.90",
+    " 15m   3.44",
+    "Tasks running/waiting vs cores",
+  ]);
 });
 
 test("system overview uses the balanced dashboard at wide widths", () => {
   const lines = systemOverviewText(systemSnapshot(), 84, 11_000).split("\n");
-  assert.equal(lines.length, 12);
+  assert.equal(lines.length, 18);
   assert.match(lines[0], /SYSTEM \/ HOST.*LIVE 1s/);
   assert.match(lines[2], /CPU \/ HOST.*MEMORY/);
   assert.match(lines[3], /37\.5%.*80\.0%/);
   assert.match(lines[4], /█.*░.*█.*░/);
   assert.match(lines[7], /LOAD AVERAGE/);
-  assert.match(lines[8], /1 min.*5 min.*15 min/);
-  assert.match(lines[10], /NETWORK.*80\.0 KB\/s.*10\.0 KB\/s/);
-  assert.match(lines[11], /SESSIONBAR.*1\.8%.*79 MB/);
+  assert.match(lines[8], /^\s*1 min\s+3\.19/);
+  assert.match(lines[9], /^\s*5 min\s+3\.90/);
+  assert.match(lines[10], /^\s*15 min\s+3\.44/);
+  assert.match(lines[11], /Running or waiting tasks.*compare with CPU cores/);
+  assert.match(lines[13], /TEMPERATURE/);
+  assert.match(lines[14], /DEVICE \/ CPU.*BATTERY/);
+  assert.match(lines[15], /70\.6°C.*30\.9°C/);
+  assert.match(lines[16], /DOWNLOAD.*80\.0 KB\/s/);
+  assert.match(lines[17], /UPLOAD.*10\.0 KB\/s/);
+  assert.doesNotMatch(lines.join("\n"), /SessionBar/i);
   assert.ok(lines.every(line => line.length <= 84));
 });
 
@@ -149,6 +209,25 @@ function monitorState(overrides = {}) {
     ...overrides,
   };
 }
+
+test("monitor resolves the displayed port from current runtime state", () => {
+  const renderer = { width: 100, height: 30 };
+  let runtimePort = 60_073;
+  const opts = {
+    apiHost: "127.0.0.1",
+    port: runtimePort,
+    getPort: () => runtimePort,
+    stateDir: "~/.sessionbar",
+  };
+
+  assert.equal(monitorVisibleModel(monitorState(), renderer, 10_100, opts).online, "online :60073");
+  runtimePort = 60_388;
+  assert.equal(monitorVisibleModel(monitorState(), renderer, 10_100, opts).online, "online :60388");
+  assert.equal(
+    monitorVisibleModel(monitorState({ view: "providers" }), renderer, 10_100, opts).online,
+    "online :60388",
+  );
+});
 
 test("monitor visible model fingerprints formatted freshness, not wall-clock seconds", () => {
   const renderer = { width: 100, height: 30 };

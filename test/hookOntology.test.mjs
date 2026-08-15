@@ -5,7 +5,7 @@ import {
   canonicalHookStages,
   hookEventMappings,
   mapHookEvent,
-} from "../dist/hookOntology.js";
+} from "../dist/hooks/hookOntology.js";
 
 test("compaction and compression hooks map to one canonical workflow stage", () => {
   const examples = [

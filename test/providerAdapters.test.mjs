@@ -9,7 +9,7 @@ import {
   parseXaiPrepaidBalance,
   pollProvider,
   providerConfigsFromEnv,
-} from "../dist/providerAdapters.js";
+} from "../dist/providers/providerAdapters.js";
 
 function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -125,6 +125,14 @@ test("Kimi balance response becomes an available USD balance signal", () => {
     status: "ok",
     label: "Kimi API",
   }]);
+});
+
+test("Kimi CN balance is denominated in CNY", () => {
+  assert.equal(parseKimiBalance({
+    code: 0,
+    data: { available_balance: 126.76101 },
+    status: true,
+  }, "Kimi API", "CNY")[0].unit, "CNY");
 });
 
 test("xAI prepaid balance converts USD cents to a balance signal", () => {

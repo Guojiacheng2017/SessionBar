@@ -1,7 +1,14 @@
 #!/bin/bash
 STATUS="${1:-working}"
 TASK="${2:-Active}"
-SERVER_PORT="${3:-8989}"
+SESSIONBAR_STATE_HOME="${SESSIONBAR_HOME:-${AGENTBAR_HOME:-$HOME/.sessionbar}}"
+SERVER_PORT="${3:-${SESSIONBAR_PORT:-${SESSION_BAR_PORT:-}}}"
+if [ -z "$SERVER_PORT" ] && [ -r "$SESSIONBAR_STATE_HOME/port" ]; then
+  SERVER_PORT="$(tr -cd '0-9' < "$SESSIONBAR_STATE_HOME/port")"
+fi
+if [ -z "$SERVER_PORT" ]; then
+  exit 0
+fi
 
 AGENT_SLUG="${SESSIONBAR_AGENT:-${AGENTBAR_AGENT:-claude}}"
 AGENT_SLUG=$(printf '%s' "$AGENT_SLUG" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')

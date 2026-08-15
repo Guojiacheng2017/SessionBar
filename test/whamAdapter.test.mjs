@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { fetchOpenAISubscription } from "../dist/provider-plans/whamAdapter.js";
+import { fetchOpenAISubscription } from "../dist/providers/provider-plans/whamAdapter.js";
 
 const authJsonPath = join(tmpdir(), "wham-test-auth.json");
 const missingAuthPath = join(tmpdir(), "wham-nonexistent-auth.json");
+const consumptionStatePath = join(tmpdir(), "wham-test-reset-card-state.json");
 
 before(() => {
   writeFileSync(authJsonPath, JSON.stringify({
@@ -18,12 +19,23 @@ before(() => {
 after(() => {
   rmSync(authJsonPath, { force: true });
   rmSync(missingAuthPath, { force: true });
+  rmSync(consumptionStatePath, { force: true });
 });
 
 test("builds subscription row from wham usage + credits", async () => {
+  const now = Date.parse("2026-08-14T10:00:00.000Z");
   const row = await fetchOpenAISubscription({
     authJsonPath,
+    now,
     fetchImpl: async (url) => {
+      if (url.includes("profiles/me")) {
+        return new Response(JSON.stringify({
+          stats: { daily_usage_buckets: [
+            { start_date: "2026-08-12", tokens: 367_400_000 },
+            { start_date: "2026-08-13", tokens: 12_000_000 },
+          ] },
+        }), { status: 200 });
+      }
       if (url.includes("rate-limit-reset-credits")) {
         return new Response(JSON.stringify({
           available_count: 1,
@@ -42,6 +54,9 @@ test("builds subscription row from wham usage + credits", async () => {
   assert.equal(row.form, "subscription");
   assert.equal(row.provider, "openai");
   assert.match(row.cardTiming, /Card expires in/);
+  assert.equal(row.usageTrend.unit, "tokens");
+  assert.deepEqual(row.usageTrend.points.slice(-3), [367_400_000, 12_000_000, null]);
+  assert.deepEqual(row.usageTrend.labels.slice(-3), ["2026-08-12", "2026-08-13", "2026-08-14"]);
 });
 
 test("missing auth → null", async () => {
@@ -50,6 +65,27 @@ test("missing auth → null", async () => {
     fetchImpl: async () => new Response("{}", { status: 401 }),
   });
   assert.equal(row, null);
+});
+
+test("keeps a recently expired provider card visible without making it consumable", async () => {
+  const now = Date.parse("2026-08-13T10:00:00.000Z");
+  const row = await fetchOpenAISubscription({
+    authJsonPath,
+    now,
+    autoConsumeResetCards: true,
+    fetchImpl: async (url) => {
+      if (url.includes("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify({ credits: [
+          { id: "expired-card", expires_at: new Date(now - 2 * 86400000).toISOString() },
+        ] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        rate_limit: { primary_window: { used_percent: 40, reset_at: now + 3 * 86400000 } },
+      }), { status: 200 });
+    },
+  });
+  assert.ok(row);
+  assert.equal(row.cardTiming, "Card expired 2d ago");
 });
 
 test("reads account id from the current nested Codex auth shape", async () => {
@@ -70,5 +106,72 @@ test("reads account id from the current nested Codex auth shape", async () => {
     },
   });
   assert.ok(row);
-  assert.deepEqual(seenAccountIds, ["nested-account", "nested-account"]);
+  assert.deepEqual(seenAccountIds, ["nested-account", "nested-account", "nested-account"]);
+});
+
+test("auto-consumes the nearest reset card only when enabled", async () => {
+  const now = Date.parse("2026-08-13T10:00:00.000Z");
+  const requests = [];
+  let consumeResult;
+  let creditsReads = 0;
+  const row = await fetchOpenAISubscription({
+    authJsonPath,
+    now,
+    autoConsumeResetCards: true,
+    consumptionStatePath,
+    onResetCardConsume: (result) => { consumeResult = result; },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      if (String(url).endsWith("/consume")) {
+        return new Response(JSON.stringify({ status: "reset" }), { status: 200 });
+      }
+      if (String(url).includes("rate-limit-reset-credits")) {
+        creditsReads += 1;
+        return new Response(JSON.stringify({ credits: creditsReads === 1 ? [
+          { id: "nearest-card", status: "available", expires_at: now + 4 * 60 * 1000 },
+          { id: "later-card", status: "available", expires_at: now + 2 * 86400000 },
+        ] : [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        rate_limit: { primary_window: { used_percent: 40, reset_at: now + 3 * 86400000 } },
+      }), { status: 200 });
+    },
+  });
+  assert.ok(row);
+  const consume = requests.find(request => request.url.endsWith("/consume"));
+  assert.ok(consume, "expected a reset-card consume request");
+  assert.equal(consume.init.method, "POST");
+  assert.equal(consume.init.headers["ChatGPT-Account-Id"], "nested-account");
+  assert.equal(consume.init.headers["Content-Type"], "application/json");
+  const body = JSON.parse(consume.init.body);
+  assert.equal(body.credit_id, "nearest-card");
+  assert.match(body.redeem_request_id, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(consumeResult, {
+    outcome: "reset",
+    cardId: "nearest-card",
+    idempotencyKey: body.redeem_request_id,
+  });
+});
+
+test("does not consume an expiring reset card when the setting is disabled", async () => {
+  const now = Date.parse("2026-08-13T10:00:00.000Z");
+  const requests = [];
+  const row = await fetchOpenAISubscription({
+    authJsonPath,
+    now,
+    autoConsumeResetCards: false,
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      if (String(url).includes("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify({ credits: [
+          { id: "nearest-card", status: "available", expires_at: now + 4 * 60 * 1000 },
+        ] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        rate_limit: { primary_window: { used_percent: 40, reset_at: now + 3 * 86400000 } },
+      }), { status: 200 });
+    },
+  });
+  assert.ok(row);
+  assert.equal(requests.some(request => request.url.endsWith("/consume")), false);
 });

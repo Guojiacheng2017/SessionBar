@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createSSETransport } from "../dist/sseTransport.js";
+import { createSSETransport } from "../dist/tui/sseTransport.js";
 
 function deferred() {
   let resolve;

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { pruneSessionMarkerFiles, removeSessionMarkerFiles, scopedSessionId } from "../dist/sessionMarkers.js";
+import { pruneSessionMarkerFiles, removeSessionMarkerFiles, scopedSessionId } from "../dist/sessions/sessionMarkers.js";
 
 test("removes the marker file for a timed-out session id", () => {
   const dir = mkdtempSync(join(tmpdir(), "sessionbar-markers-"));

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { estimateRate } from "../dist/quota-engine/rateEstimator.js";
-import { computeAdvice } from "../dist/quota-engine/quotaEngine.js";
+import { estimateRate } from "../dist/providers/quota-engine/rateEstimator.js";
+import { computeAdvice } from "../dist/providers/quota-engine/quotaEngine.js";
 
 // ===== types =====
 test("types compile and are usable", () => {
@@ -184,7 +184,7 @@ test("card: spend when cap hit before reset and reset far", () => {
   assert.match(advice.cardTiming, /Use card now/);
 });
 
-test("card: expiring soon forces spend", () => {
+test("card: expiring within 24h shows the remaining duration", () => {
   const advice = computeAdvice(state({
     remaining: 900_000,
     rateSamples: [
@@ -193,7 +193,19 @@ test("card: expiring soon forces spend", () => {
     ],
     cards: [{ count: 1, expiresAt: NOW + 12 * 3_600_000 }], // expires in 12h
   }), NOW);
-  assert.match(advice.cardTiming, /Card expiring/);
+  assert.equal(advice.cardTiming, "Card expires in 12h");
+});
+
+test("card: expiry exactly 24h away still shows the remaining duration", () => {
+  const advice = computeAdvice(state({
+    remaining: 900_000,
+    rateSamples: [
+      { value: 5_000, at: NOW - 3_600_000 },
+      { value: 5_000, at: NOW - 7_200_000 },
+    ],
+    cards: [{ count: 1, expiresAt: NOW + 24 * 3_600_000 }],
+  }), NOW);
+  assert.equal(advice.cardTiming, "Card expires in 1d");
 });
 
 test("card: no cap hit → save", () => {
@@ -226,20 +238,17 @@ test("card: remaining=0 with a valid card -> spend it now, not save", () => {
   assert.doesNotMatch(advice.cardTiming, /Save card/);
 });
 
-test("card: already-expired card is not actionable", () => {
+test("card: recently expired card remains visible but is not actionable", () => {
   const advice = computeAdvice(state({
-    cards: [{ count: 1, expiresAt: NOW - 3_600_000 }], // expired 1h ago
+    cards: [{ count: 1, expiresAt: NOW - 2 * 24 * 3_600_000 }],
   }), NOW);
   assert.doesNotMatch(advice.cardTiming, /Use card now|Card expiring/);
-  assert.match(advice.cardTiming, /No cards/);
+  assert.equal(advice.cardTiming, "Card expired 2d ago");
 });
 
-test("card: all-expired cards -> No reset cards", () => {
+test("card: expired cards older than retention -> No reset cards", () => {
   const advice = computeAdvice(state({
-    cards: [
-      { count: 2, expiresAt: NOW - 3_600_000 },
-      { count: 1, expiresAt: NOW - 24 * 3_600_000 },
-    ],
+    cards: [{ count: 1, expiresAt: NOW - 31 * 24 * 3_600_000 }],
   }), NOW);
   assert.match(advice.cardTiming, /No cards/);
 });

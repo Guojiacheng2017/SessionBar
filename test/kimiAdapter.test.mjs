@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { fetchKimiSubscription } from "../dist/provider-plans/kimiAdapter.js";
+import { fetchKimiSubscription } from "../dist/providers/provider-plans/kimiAdapter.js";
 
 // hermetic fixture dir under os.tmpdir() — no /tmp hardcoding
 const fixtureDir = mkdtempSync(join(tmpdir(), "kimi-adapter-test-"));

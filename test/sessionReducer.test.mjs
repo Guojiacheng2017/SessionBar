@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reduceSessionEvents } from "../dist/sessionReducer.js";
+import { reduceSessionEvents } from "../dist/sessions/sessionReducer.js";
 
 const base = {
   agent_type: "Codex",

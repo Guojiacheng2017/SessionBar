@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyProviderPollResults } from "../dist/providerMonitor.js";
+import { applyProviderPollResults } from "../dist/providers/providerMonitor.js";
 
 const base = {
   session_type: "Codex",

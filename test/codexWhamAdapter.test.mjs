@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
-import { fetchResetCards } from "../dist/codexWhamAdapter.js";
+import { fetchResetCards } from "../dist/providers/codexWhamAdapter.js";
 
 // Hermetic auth fixture: written inside the test to os.tmpdir(), never to a
 // shared path like /tmp/fake-codex-auth.json (which is absent on a clean
@@ -54,6 +54,7 @@ test("returns cards from bare-array shape (backward compat)", async () => {
   });
   assert.equal(cards.length, 2);
   assert.equal(cards[0].count, 1);
+  assert.equal(cards[0].id, "c1");
   assert.ok(cards[0].expiresAt > now);
 });
 

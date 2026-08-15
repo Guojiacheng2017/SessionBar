@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { fetchGitHubCopilotSubscription } from "../dist/provider-plans/githubCopilotAdapter.js";
-import { computePlanRows } from "../dist/planAdvisor.js";
+import { fetchGitHubCopilotSubscription } from "../dist/providers/provider-plans/githubCopilotAdapter.js";
+import { computePlanRows } from "../dist/providers/planAdvisor.js";
 
 const credentialsPath = join(tmpdir(), "sessionbar-github-copilot-apps.json");
 const missingCredentialsPath = join(tmpdir(), "sessionbar-github-copilot-missing.json");

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   countSessions,
   createWebSystemMonitor,
@@ -9,11 +10,25 @@ import {
   statusDotMarkup,
   statusSummaryMarkup,
   systemEfficiencyMarkup,
-} from "../dist/webComponents.js";
-import { isSystemEfficiencySnapshot } from "../dist/types.js";
+} from "../dist/web/webComponents.js";
+
+const appSource = readFileSync(new URL("../src/web/app.ts", import.meta.url), "utf8");
+
+test("web polling backs off while the page is hidden", () => {
+  assert.match(appSource, /document\.hidden \? 15_000 : 2_000/);
+  assert.match(appSource, /document\.hidden \? 300_000 : 60_000/);
+  assert.match(appSource, /visibilitychange/);
+});
+import { isSystemEfficiencySnapshot } from "../dist/shared/types.js";
+import { UI } from "../dist/web/webComponents.js";
 
 const GIB = 1024 ** 3;
 const MIB = 1024 ** 2;
+
+test("main workspace panels use the shared panel card treatment", () => {
+  assert.match(UI.panel, /\bpanel-card\b/);
+  assert.doesNotMatch(UI.panel, /shadow-\[/);
+});
 
 function systemSnapshot(cpuPercent, sampledAt = 10_000) {
   return {
@@ -24,6 +39,8 @@ function systemSnapshot(cpuPercent, sampledAt = 10_000) {
     memory_percent: 80,
     network_down_bytes_per_second: 80_000,
     network_up_bytes_per_second: 10_000,
+    device_temperature_celsius: 70.6,
+    battery_temperature_celsius: 30.9,
     server_cpu_percent: 1.8,
     server_memory_bytes: 79 * MIB,
     sampled_at: sampledAt,
@@ -127,6 +144,31 @@ test("renders provider subscription and API rows with semantic columns", () => {
   assert.match(html, /Healthy/);
 });
 
+test("renders provider names with the shared session icon renderer", () => {
+  const iconCache = new Map();
+  const base = {
+    form: "subscription",
+    level: "green",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+  };
+  const html = providerTableMarkup([
+    { ...base, provider: "anthropic", label: "Claude Subscription" },
+    { ...base, provider: "openai", label: "OpenAI Subscription" },
+    { ...base, provider: "github", label: "GitHub Copilot Pro" },
+  ], { iconCache });
+
+  assert.equal((html.match(/provider-icon/g) || []).length, 3);
+  assert.match(html, /alt="Claude Code"/);
+  assert.match(html, /alt="Codex"/);
+  assert.match(html, /alt="Copilot"/);
+  assert.deepEqual([...iconCache.keys()], ["Claude Code", "Codex", "Copilot"]);
+});
+
 test("renders live AI credit usage for a subscription row", () => {
   const html = providerTableMarkup([{
     form: "subscription",
@@ -147,6 +189,88 @@ test("renders live AI credit usage for a subscription row", () => {
   assert.match(html, /2\.3K\/7K AI credits/);
 });
 
+test("renders Usage between Level and Reset with seven unlabeled daily bars", () => {
+  const html = providerTableMarkup([{
+    form: "api",
+    provider: "deepseek",
+    label: "DeepSeek API CNY",
+    level: "green",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+    remaining: 257,
+    unit: "CNY",
+    usageTrend: {
+      kind: "bars",
+      days: 7,
+      points: [1, 3, 2, 4, 0, null, 5],
+      labels: ["Aug 8", "Aug 9", "Aug 10", "Aug 11", "Aug 12", "Aug 13", "Aug 14"],
+      unit: "CNY",
+    },
+  }]);
+  assert.match(html, /Level<\/span><span role="columnheader">Usage<\/span><span role="columnheader">Reset/);
+  assert.equal((html.match(/provider-usage-bar\b/g) || []).length, 7);
+  assert.doesNotMatch(html, />\s*(?:1|2|3|4|5)\s*</);
+  assert.match(html, /data-tooltip="Aug 14 · 5\.00 CNY"/);
+  assert.match(html, /tabindex="0"/);
+  assert.match(html, /aria-label="Aug 13 · No data"/);
+});
+
+test("formats monetary usage tooltips without floating-point tails", () => {
+  const html = providerTableMarkup([{
+    form: "api",
+    provider: "kimi",
+    label: "Kimi API CN",
+    level: "green",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+    remaining: 122.08951,
+    unit: "CNY",
+    usageTrend: {
+      kind: "bars",
+      days: 7,
+      points: [null, null, null, null, null, null, 21.67542999999999],
+      labels: ["Aug 8", "Aug 9", "Aug 10", "Aug 11", "Aug 12", "Aug 13", "Aug 14"],
+      unit: "CNY",
+    },
+  }]);
+
+  assert.match(html, /data-tooltip="Aug 14 · 21\.68 CNY"/);
+  assert.doesNotMatch(html, /21\.67542999999999/);
+});
+
+test("renders Copilot usage as a line and missing data as a quiet placeholder", () => {
+  const base = {
+    form: "subscription",
+    level: "green",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+  };
+  const html = providerTableMarkup([
+    {
+      ...base,
+      provider: "github",
+      label: "GitHub Copilot Pro",
+      usageTrend: { kind: "line", days: 30, points: Array.from({ length: 30 }, (_, index) => index), unit: "AI credits" },
+    },
+    { ...base, form: "api", provider: "kimi", label: "Kimi API", usageTrend: { kind: "bars", days: 7, points: Array(7).fill(null) } },
+  ]);
+  assert.match(html, /provider-usage-line/);
+  assert.match(html, /<polyline/);
+  assert.match(html, /provider-usage-empty/);
+});
+
 test("renders provider loading, empty, and error states", () => {
   assert.match(providerTableMarkup([], { loading: true }), /Loading provider quota/);
   assert.match(providerTableMarkup([]), /No quota data/);
@@ -163,6 +287,8 @@ test("renders one global system efficiency band", () => {
     memory_percent: 80,
     network_down_bytes_per_second: 80_000,
     network_up_bytes_per_second: 10_000,
+    device_temperature_celsius: 70.6,
+    battery_temperature_celsius: 30.9,
     server_cpu_percent: 1.8,
     server_memory_bytes: 79 * 1024 ** 2,
     sampled_at: 10_000,
@@ -171,14 +297,25 @@ test("renders one global system efficiency band", () => {
   assert.match(html, /System/);
   assert.match(html, /CPU/);
   assert.match(html, /Memory/);
-  assert.match(html, /Network/);
-  assert.match(html, /SessionBar/);
+  assert.match(html, /Load Average/);
+  assert.match(html, /1 min.*3\.19.*5 min.*3\.90.*15 min.*3\.44/s);
+  assert.equal((html.match(/system-efficiency-load-row/g) || []).length, 3);
+  assert.match(html, /Running or waiting tasks · compare with CPU cores/);
+  assert.doesNotMatch(html, /system-efficiency-triple/);
+  assert.match(html, /Device \/ CPU.*70\.6°C/s);
+  assert.match(html, /Battery.*30\.9°C/s);
+  assert.match(html, /Download.*80\.0 KB\/s/s);
+  assert.match(html, /Upload.*10\.0 KB\/s/s);
+  assert.doesNotMatch(html, /SessionBar/);
   assert.match(html, /Sample/);
   assert.match(html, /2s ago/);
   assert.match(html, /37\.5%/);
-  assert.match(html, /12\.8 GB.*16 GB.*80\.0%/);
-  assert.match(html, /80\.0 KB\/s.*10\.0 KB\/s/);
-  assert.equal((html.match(/<meter/g) || []).length, 4);
+  assert.match(html, /80\.0%.*12\.8 GB.*16 GB/s);
+  assert.equal((html.match(/<meter/g) || []).length, 2);
+  assert.match(html, /system-efficiency-primary/);
+  assert.match(html, /system-efficiency-secondary/);
+  assert.match(html, /system-efficiency-freshness[^>]*>Sample · 2s ago/);
+  assert.match(html, /system-efficiency-card is-warning/);
   assert.doesNotMatch(html, /runtime-matrix-session/);
 });
 
@@ -193,9 +330,16 @@ test("renders an unavailable global system state without a session grid", () => 
 
 test("shared system snapshot validation rejects malformed successful payloads", () => {
   assert.equal(isSystemEfficiencySnapshot(systemSnapshot(37.5)), true);
+  assert.equal(isSystemEfficiencySnapshot({
+    ...systemSnapshot(37.5),
+    device_temperature_celsius: 70.6,
+    battery_temperature_celsius: 30.9,
+  }), true);
   assert.equal(isSystemEfficiencySnapshot({ ...systemSnapshot(37.5), load_average: "3.19" }), false);
   assert.equal(isSystemEfficiencySnapshot({ ...systemSnapshot(37.5), load_average: [3.19, "3.9", 3.44] }), false);
   assert.equal(isSystemEfficiencySnapshot({ ...systemSnapshot(37.5), memory_total_bytes: undefined }), false);
+  assert.equal(isSystemEfficiencySnapshot({ ...systemSnapshot(37.5), device_temperature_celsius: Number.NaN }), false);
+  assert.equal(isSystemEfficiencySnapshot({ ...systemSnapshot(37.5), battery_temperature_celsius: Number.POSITIVE_INFINITY }), false);
 });
 
 test("system polling updates only its region and preserves the last good snapshot", async () => {

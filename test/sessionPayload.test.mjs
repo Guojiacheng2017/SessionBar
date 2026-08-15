@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeSessionPayload, validateSessionPayload } from "../dist/sessionPayload.js";
+import { mergeSessionPayload, validateSessionPayload } from "../dist/sessions/sessionPayload.js";
 
 const basePayload = {
   session_id: "codex-demo__Vision-Dash",

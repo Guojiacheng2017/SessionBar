@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adaptNativeHookPayload } from "../dist/hookAdapters.js";
+import { adaptNativeHookPayload } from "../dist/hooks/hookAdapters.js";
 
 test("adapts common tool-start payloads into canonical report facts", () => {
   const examples = [

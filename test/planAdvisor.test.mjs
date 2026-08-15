@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computePlanRows } from "../dist/planAdvisor.js";
+import { computePlanRows } from "../dist/providers/planAdvisor.js";
 
 // Hermetic: drop kimi access-token env so the subscription adapters
 // short-circuit to "no credentials" unless a test sets them explicitly.

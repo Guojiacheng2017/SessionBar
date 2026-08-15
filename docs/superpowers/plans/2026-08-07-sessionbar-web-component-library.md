@@ -196,7 +196,7 @@ git commit -m "refactor: render dashboard with shared components"
 Run from `0agentbar`:
 
 ```bash
-SESSIONBAR_WEB=1 SESSIONBAR_PROVIDER_POLL=0 SESSIONBAR_CODEX_DISCOVERY_MS=1 SESSIONBAR_HOME=/private/tmp/vision-dash-sessionbar IDLE_SHUTDOWN_MS=600000 PORT=8990 node dist/server.js
+SESSIONBAR_WEB=1 SESSIONBAR_PROVIDER_POLL=0 SESSIONBAR_CODEX_DISCOVERY_MS=1 SESSIONBAR_HOME=/private/tmp/vision-dash-sessionbar IDLE_SHUTDOWN_MS=600000 PORT=8990 node dist/server/server.js
 ```
 
 - [ ] **Step 2: Load representative sessions**

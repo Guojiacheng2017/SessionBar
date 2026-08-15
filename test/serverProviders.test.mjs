@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { aggregateProviders, matchesSessionProvider, migrateLegacyHookSessions, sessionAdvisorRows } from "../dist/server.js";
+import { aggregateProviders, matchesSessionProvider, migrateLegacyHookSessions, sessionAdvisorRows } from "../dist/server/server.js";
 
 function planRow(overrides = {}) {
   return {

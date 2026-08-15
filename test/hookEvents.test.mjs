@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { nativePayloadToHookEvents, sessionSnapshotToHookEvents } from "../dist/hookEvents.js";
+import { nativePayloadToHookEvents, sessionSnapshotToHookEvents } from "../dist/hooks/hookEvents.js";
 
 const snapshot = {
   session_id: "codex-demo__Vision-Dash",

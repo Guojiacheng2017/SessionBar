@@ -1,0 +1,110 @@
+name: Project reminder
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  summarize:
+    name: Summarize open work
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Update reminder issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const marker = "<!-- project-reminder:managed -->";
+            const title = "Project reminder: open issues and PRs";
+
+            const [issues, pulls] = await Promise.all([
+              github.paginate(github.rest.issues.listForRepo, {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100,
+              }).then((items) => items.filter((item) => !item.pull_request)),
+              github.paginate(github.rest.pulls.list, {
+                owner,
+                repo,
+                state: "open",
+                per_page: 100,
+              }),
+            ]);
+
+            const formatItems = (items) => {
+              if (items.length === 0) return "_None._";
+              return items
+                .slice(0, 50)
+                .map((item) => `- #${item.number} ${item.title}`)
+                .join("\n");
+            };
+
+            const body = [
+              marker,
+              "This issue is updated automatically by the Project reminder workflow.",
+              "",
+              `Last update: ${new Date().toISOString()}`,
+              "",
+              `## Open issues (${issues.length})`,
+              "",
+              formatItems(issues),
+              "",
+              `## Open pull requests (${pulls.length})`,
+              "",
+              formatItems(pulls),
+              "",
+              "Use this as a lightweight project inbox. Close this issue only if you also disable the workflow.",
+            ].join("\n");
+
+            try {
+              await github.rest.issues.getLabel({
+                owner,
+                repo,
+                name: "project-reminder",
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.issues.createLabel({
+                owner,
+                repo,
+                name: "project-reminder",
+                color: "0969da",
+                description: "Automatically maintained project reminder",
+              });
+            }
+
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner,
+              repo,
+              state: "open",
+              labels: "project-reminder",
+              per_page: 100,
+            });
+
+            const reminder = existing.find((issue) => issue.title === title && !issue.pull_request);
+
+            if (reminder) {
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: reminder.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner,
+                repo,
+                title,
+                body,
+                labels: ["project-reminder"],
+              });
+            }

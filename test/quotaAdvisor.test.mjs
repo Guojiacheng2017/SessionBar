@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeAdvisorRows } from "../dist/quotaAdvisor.js";
+import { computeAdvisorRows } from "../dist/providers/quotaAdvisor.js";
 
 const baseSession = {
   session_id: "codex-abc__Vision-Dash",

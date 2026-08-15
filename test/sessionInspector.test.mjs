@@ -10,7 +10,7 @@ import {
   sessionFingerprint,
   sessionHandle,
   updateUnreadSessionState,
-} from "../dist/sessionInspector.js";
+} from "../dist/sessions/sessionInspector.js";
 
 const baseSession = {
   session_id: "codex-019ed3a2-a7ab-7a90-a6da-c1535a35afd0__Vision-Dash",

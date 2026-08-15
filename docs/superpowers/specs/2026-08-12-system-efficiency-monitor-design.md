@@ -98,7 +98,8 @@ For detail panels at least 64 columns wide, use a balanced dashboard layout:
 
 - a quiet `SYSTEM / HOST` heading with sample freshness aligned to the right
 - side-by-side CPU and memory metrics with prominent percentages, fixed-width bars, and semantic health colors
-- a three-column load-average row labelled `1 min`, `5 min`, and `15 min`
+- one compact vertical load-average group labelled `1 min`, `5 min`, and `15 min`
+- an always-visible explanation that load average counts running or CPU-waiting tasks and should be compared with CPU core count
 - separate `DOWNLOAD` and `UPLOAD` rows
 - a temperature section with `DEVICE / CPU` and `BATTERY` values
 - no SessionBar self-usage row
@@ -108,7 +109,7 @@ The dashboard is rendered as styled OpenTUI text within the existing details pan
 For detail panels narrower than 64 columns, retain the compact fixed-row layout so the sessions sidebar and details panel remain usable:
 
 - `CPU` with percentage and a fixed-width bar
-- `Load` with 1m, 5m, and 15m values
+- `Load` with vertically grouped 1m, 5m, and 15m values plus a width-safe explanation
 - `Memory` with percentage, used/total values, and a fixed-width bar
 - separate `Download` and `Upload` rows
 - `Device` and `Battery` temperature rows

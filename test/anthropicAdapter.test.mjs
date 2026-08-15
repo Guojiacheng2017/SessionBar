@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { fetchAnthropicSubscription } from "../dist/provider-plans/anthropicAdapter.js";
+import { fetchAnthropicSubscription } from "../dist/providers/provider-plans/anthropicAdapter.js";
 
 const credsPath = join(tmpdir(), "anthropic-test-creds.json");
 const missingCredsPath = join(tmpdir(), "anthropic-nonexistent-creds.json");

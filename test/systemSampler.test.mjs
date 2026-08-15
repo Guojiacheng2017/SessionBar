@@ -4,7 +4,7 @@ import {
   createSystemSampler,
   deriveSystemSnapshot,
   parseNetworkCounters,
-} from "../dist/systemSampler.js";
+} from "../dist/system/systemSampler.js";
 
 function observation(overrides = {}) {
   return {
@@ -40,6 +40,23 @@ test("derives CPU, network, and server CPU rates from monotonic deltas", () => {
   assert.equal(snapshot.network_down_bytes_per_second, 2_000);
   assert.equal(snapshot.network_up_bytes_per_second, 500);
   assert.equal(snapshot.server_cpu_percent, 25);
+});
+
+test("carries temperature readings through transient missing observations", () => {
+  const first = observation({
+    monotonic_ms: 1_000,
+    device_temperature_celsius: 70.6,
+    battery_temperature_celsius: 30.9,
+  });
+  const second = observation({
+    monotonic_ms: 3_000,
+    device_temperature_celsius: undefined,
+    battery_temperature_celsius: undefined,
+  });
+
+  const snapshot = deriveSystemSnapshot(first, second);
+  assert.equal(snapshot.device_temperature_celsius, 70.6);
+  assert.equal(snapshot.battery_temperature_celsius, 30.9);
 });
 
 test("clamps server CPU to the public percentage range", () => {
@@ -285,6 +302,31 @@ test("skips network collection on unsupported platforms without losing other met
   assert.equal(snapshot.network_down_bytes_per_second, undefined);
   assert.deepEqual(snapshot.load_average, [1, 0.5, 0.25]);
   assert.equal(snapshot.memory_used_bytes, 40);
+});
+
+test("adds cached temperature readings to system samples", async () => {
+  let sampleNumber = 0;
+  const readings = [
+    { device_temperature_celsius: 68.2, battery_temperature_celsius: 31.4 },
+    undefined,
+  ];
+  const sampler = createSystemSampler({
+    platform: "linux",
+    monotonicNow: () => (++sampleNumber) * 1_000,
+    sampledAt: () => sampleNumber * 1_000,
+    cpuTimes: () => ({ idle: sampleNumber * 100, total: sampleNumber * 200 }),
+    loadAverage: () => [1, 0.5, 0.25],
+    memory: () => ({ used_bytes: 40, total_bytes: 100 }),
+    processCpuMicros: () => sampleNumber * 100_000,
+    temperatureCollector: () => readings[sampleNumber - 1],
+  });
+
+  const first = await sampler.sample();
+  const second = await sampler.sample();
+  assert.equal(first.device_temperature_celsius, 68.2);
+  assert.equal(first.battery_temperature_celsius, 31.4);
+  assert.equal(second.device_temperature_celsius, 68.2);
+  assert.equal(second.battery_temperature_celsius, 31.4);
 });
 
 test("returns an immutable latest snapshot", async () => {

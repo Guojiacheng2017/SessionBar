@@ -5,8 +5,9 @@ import {
   parseCCSwitchKimiProviderOutput,
   readCCSwitchDeepSeekConfig,
   readCCSwitchKimiConfig,
-} from "../dist/ccSwitchAdapter.js";
-import { pollProvider } from "../dist/providerAdapters.js";
+} from "../dist/providers/ccSwitchAdapter.js";
+
+import { pollProvider } from "../dist/providers/providerAdapters.js";
 
 test("CC Switch provider output becomes a DeepSeek balance config", () => {
   const config = parseCCSwitchProviderOutput(JSON.stringify([{
@@ -133,4 +134,5 @@ test("Kimi poll keeps the CC Switch source label", async () => {
     }));
   });
   assert.equal(result.signals[0].label, "Kimi API (CC Switch)");
+  assert.equal(result.signals[0].unit, "CNY");
 });

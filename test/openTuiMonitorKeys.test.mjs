@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { nextDetailTabFromMonitorKey, nextViewFromMonitorKey } from "../dist/openTuiMonitor.js";
+import { nextDetailTabFromMonitorKey, nextViewFromMonitorKey } from "../dist/tui/openTuiMonitor.js";
 
 const key = (name, sequence = name, raw = sequence) => ({ name, sequence, raw });
 
