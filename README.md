@@ -258,6 +258,11 @@ Code contributions, bug reports, reproducible performance traces, and harness
 adapter improvements are welcome. By contributing, you agree that your changes
 may be distributed under the project's MIT License.
 
+## Acknowledgements
+
+Development of SessionBar has been assisted by OpenAI Codex, Claude, and
+DeepSeek for implementation support, debugging, and design iteration.
+
 ## License
 
 SessionBar is released under the [MIT License](LICENSE). Third-party packages
