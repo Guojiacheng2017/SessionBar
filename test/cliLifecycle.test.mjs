@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { detectHarnessAvailability, MAINSTREAM_HARNESSES } from "../dist/hooks/hookManager.js";
+import { detectHarnessAvailability, MAINSTREAM_HARNESSES, isSessionbarCommandFor, dedupeSessionbarHooks } from "../dist/hooks/hookManager.js";
 import { landingActions, parseLandingKeys } from "../dist/cli/landingMenu.js";
 
 const cliSource = readFileSync(new URL("../src/cli/cli.ts", import.meta.url), "utf8");
@@ -63,13 +63,13 @@ test("interactive hook registration covers every supported harness", () => {
   const start = hookSource.indexOf("export function injectHooksOnServerReady");
   const end = hookSource.indexOf("export async function setupHooks", start);
   const body = hookSource.slice(start, end);
-  for (const setup of ["setupClaudeHooks", "setupCodexHooks", "setupGeminiHooks", "setupCopilotHooks", "setupWorkbuddyHooks"]) {
+  for (const setup of ["setupClaudeHooks", "setupCodexHooks", "setupGeminiHooks", "setupCopilotHooks", "setupCodeBuddyHooks"]) {
     assert.match(body, new RegExp(`${setup}\\(global, reportPath\\)`));
   }
 });
 
 test("harness availability covers local and remote mainstream harnesses", () => {
-  assert.deepEqual(MAINSTREAM_HARNESSES.map(harness => harness.id), ["claude", "codex", "gemini", "copilot", "workbuddy"]);
+  assert.deepEqual(MAINSTREAM_HARNESSES.map(harness => harness.id), ["claude", "codex", "gemini", "copilot", "codebuddy-cli", "workbuddy-desktop"]);
   for (const scope of ["local", "remote"]) {
     const rows = detectHarnessAvailability(scope);
     assert.equal(rows.length, MAINSTREAM_HARNESSES.length);
@@ -85,6 +85,29 @@ test("harness availability covers local and remote mainstream harnesses", () => 
   assert.ok(detectHarnessAvailability("remote").every(row => row.configurable === true));
   assert.ok(detectHarnessAvailability("remote").every(row => row.configPath === undefined));
   assert.ok(MAINSTREAM_HARNESSES.every(harness => harness.remoteConfigKeys.some(key => key.includes("REMOTE_URL"))));
+});
+
+test("CodeBuddy hook matching handles quoted report paths", () => {
+  assert.equal(isSessionbarCommandFor("SESSIONBAR_AGENT=codebuddy '/tmp/report.sh' working", "codebuddy"), true);
+  assert.equal(isSessionbarCommandFor("SESSIONBAR_AGENT=workbuddy '/tmp/report.sh' working", "codebuddy"), false);
+});
+
+test("duplicate CodeBuddy hook entries are reduced to one", () => {
+  const config = { hooks: { SessionStart: [
+    { hooks: [{ command: "SESSIONBAR_AGENT=codebuddy '/tmp/report.sh' working" }] },
+    { hooks: [{ command: "SESSIONBAR_AGENT=codebuddy '/tmp/report.sh' working" }] },
+  ] } };
+  assert.equal(dedupeSessionbarHooks(config, "codebuddy"), 1);
+  assert.equal(config.hooks.SessionStart.length, 1);
+});
+
+test("WorkBuddy Desktop availability is distinct from CodeBuddy CLI", () => {
+  const rows = detectHarnessAvailability("local");
+  const cli = rows.find(row => row.id === "codebuddy-cli");
+  const desktop = rows.find(row => row.id === "workbuddy-desktop");
+  assert.ok(cli && desktop);
+  assert.notEqual(cli.id, desktop.id);
+  assert.match(desktop.configPath, /\.workbuddy$/);
 });
 
 test("harness availability command is read-only", () => {

@@ -29,6 +29,8 @@ import { createTemperatureCollector } from "../system/temperatureCollector.js";
 import { acquireInstanceLock, configuredPort, releaseRuntimeState, writeRuntimeState } from "./runtimeState.js";
 import { disableAutoConsumeResetCards, readSettings } from "./settings.js";
 import { decorateProviderUsageFromSessions, loadSessionUsageState, syncSessionUsage } from "../sessions/sessionUsageImporter.js";
+import { discoverClaudeDesktopSessions } from "../sessions/claudeDesktopDiscovery.js";
+import { discoverWorkBuddyDesktopSessions } from "../sessions/workbuddyDesktopDiscovery.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Start the HTTP server + polling loops only when run directly
@@ -75,8 +77,14 @@ const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), ".codex");
 const CODEX_SESSION_DIR = join(CODEX_HOME, "sessions");
 const CLAUDE_SESSION_DIR = join(homedir(), ".claude", "projects");
 const SESSION_USAGE_STATE_PATH = join(HOME, "session-usage-history.json");
+const WORKBUDDY_ROOT = process.env.WORKBUDDY_HOME || join(homedir(), ".workbuddy");
 const CODEX_DISCOVERY_WINDOW_MS = parseInt(process.env.SESSIONBAR_CODEX_DISCOVERY_MS || String(24 * 60 * 60 * 1000), 10);
 const CODEX_ACTIVE_MS = parseInt(process.env.SESSIONBAR_CODEX_ACTIVE_MS || String(10 * 60 * 1000), 10);
+const CLAUDE_DESKTOP_ROOT = process.env.SESSIONBAR_CLAUDE_DESKTOP_ROOT
+  ? process.env.SESSIONBAR_CLAUDE_DESKTOP_ROOT
+  : [join(homedir(), "Library", "Application Support", "Claude-3p", "local-agent-mode-sessions"), join(homedir(), "Library", "Application Support", "Claude-3p", "claude-code-sessions")];
+const CLAUDE_DESKTOP_DISCOVERY_WINDOW_MS = parseInt(process.env.SESSIONBAR_CLAUDE_DESKTOP_DISCOVERY_MS || String(24 * 60 * 60 * 1000), 10);
+const CLAUDE_DESKTOP_ACTIVE_MS = parseInt(process.env.SESSIONBAR_CLAUDE_DESKTOP_ACTIVE_MS || String(10 * 60 * 1000), 10);
 export const SESSION_RETENTION_MS = 30 * 60 * 1000;
 const CODEX_DISCOVERY_REFRESH_MS = Math.max(500, parseInt(process.env.SESSIONBAR_CODEX_REFRESH_MS || "2000", 10));
 const CODEX_APP_SERVER_ENABLED = process.env.SESSIONBAR_CODEX_APP_SERVER !== "0";
@@ -248,13 +256,14 @@ export function aggregateProviders(
  */
 export function matchesSessionProvider(row: PlanRow, session: SessionPayload): boolean {
   const type = (session.session_type || "").toLowerCase();
+  const provider = (session.model_provider || "").toLowerCase();
   switch (row.provider.toLowerCase()) {
     case "openai":
       return /codex|openai|chatgpt/.test(type);
     case "anthropic":
       return /claude|anthropic/.test(type);
     case "kimi":
-      return /kimi|moonshot/.test(type);
+      return /kimi|moonshot/.test(type) || provider === "kimi";
     default:
       return false;
   }
@@ -392,6 +401,10 @@ const codexDiscoveryCache = new Map<string, { mtimeMs: number; session: SessionP
 let lastCodexMetadataAt = 0;
 let codexMetadataRefreshInFlight = false;
 let codexMetadataCache: CodexThreadMetadata[] = [];
+let lastClaudeDesktopDiscoveryAt = 0;
+const claudeDesktopDiscoveryIds = new Set<string>();
+let lastWorkBuddyDesktopDiscoveryAt = 0;
+const workBuddyDesktopDiscoveryIds = new Set<string>();
 
 export function discoveryRefreshDue(lastRefreshAt: number, now: number, intervalMs: number): boolean {
   return lastRefreshAt <= 0 || now - lastRefreshAt >= intervalMs;
@@ -410,6 +423,50 @@ function refreshCodexSessionsIfDue(now = Date.now()): void {
   if (!discoveryRefreshDue(lastCodexDiscoveryAt, now, CODEX_DISCOVERY_REFRESH_MS)) return;
   lastCodexDiscoveryAt = now;
   refreshCodexSessions(now);
+  refreshClaudeDesktopSessionsIfDue(now);
+  refreshWorkBuddyDesktopSessionsIfDue(now);
+}
+
+function refreshClaudeDesktopSessionsIfDue(now = Date.now()): void {
+  if (!discoveryRefreshDue(lastClaudeDesktopDiscoveryAt, now, CODEX_DISCOVERY_REFRESH_MS)) return;
+  lastClaudeDesktopDiscoveryAt = now;
+  const discoveries = discoverClaudeDesktopSessions({
+    root: CLAUDE_DESKTOP_ROOT,
+    now,
+    activeMs: CLAUDE_DESKTOP_ACTIVE_MS,
+    windowMs: CLAUDE_DESKTOP_DISCOVERY_WINDOW_MS,
+  });
+  const live = new Set(discoveries.map(item => item.session_id));
+  for (const id of claudeDesktopDiscoveryIds) {
+    if (!live.has(id) && sessions[id]?.source === "native_registry") delete sessions[id];
+  }
+  for (const discovery of discoveries) {
+    sessions[discovery.session_id] = discovery;
+    claudeDesktopDiscoveryIds.add(discovery.session_id);
+  }
+  if (discoveries.length || live.size !== claudeDesktopDiscoveryIds.size) broadcastSSE();
+}
+
+function refreshWorkBuddyDesktopSessionsIfDue(now = Date.now()): void {
+  if (!discoveryRefreshDue(lastWorkBuddyDesktopDiscoveryAt, now, CODEX_DISCOVERY_REFRESH_MS)) return;
+  lastWorkBuddyDesktopDiscoveryAt = now;
+  const discoveries = discoverWorkBuddyDesktopSessions({ root: WORKBUDDY_ROOT, now });
+  const live = new Set(discoveries.map(item => item.session_id));
+  let changed = false;
+  for (const id of workBuddyDesktopDiscoveryIds) {
+    if (!live.has(id) && sessions[id]?.source === "native_registry") {
+      delete sessions[id];
+      workBuddyDesktopDiscoveryIds.delete(id);
+      changed = true;
+    }
+  }
+  for (const discovery of discoveries) {
+    const previous = sessions[discovery.session_id];
+    if (!previous || previous.timestamp !== discovery.timestamp || previous.status !== discovery.status) changed = true;
+    sessions[discovery.session_id] = discovery;
+    workBuddyDesktopDiscoveryIds.add(discovery.session_id);
+  }
+  if (changed) broadcastSSE();
 }
 
 function refreshCodexMetadataIfDue(now = Date.now()): void {

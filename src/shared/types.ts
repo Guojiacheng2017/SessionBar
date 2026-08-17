@@ -120,7 +120,7 @@ export interface SessionPayload {
   session_id: string;    // unique per session, e.g. "vision-dash-40393"
   session_type: string;  // label, e.g. "Claude Code", "Gemini CLI"
   session_name?: string; // human-readable session name, when reported by the agent
-  source?: "hook" | "codex_jsonl";
+  source?: "hook" | "codex_jsonl" | "native_registry";
   status: SessionStatus;
   task_name: string;
   activity_tail?: string[]; // short recent activity lines, agent-specific adapters may report this
