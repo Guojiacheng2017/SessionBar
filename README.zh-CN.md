@@ -249,6 +249,25 @@ npm test
 欢迎提交代码、Bug Report、可复现的性能数据以及 Harness Adapter 改进。提交
 贡献即表示同意相关修改可按本项目的 MIT License 发布。
 
+## 相关工作与长期方向
+
+目前已有多个独立项目探索编程 Agent 工作空间的不同部分。这里列出它们，是为了
+说明这一领域和 SessionBar 的位置，并不表示 SessionBar 的实现参考了这些项目：
+
+| 项目 | 主要方向 |
+| --- | --- |
+| [Orca](https://github.com/stablyai/orca) | 在桌面、移动端和远程环境中运行与控制 Agent Fleet。 |
+| [abtop](https://github.com/graykode/abtop) | 实时展示 Agent Session、Context、Token、Limit 和进程状态的终端可观测工具。 |
+| [Mole](https://github.com/tw93/mole) | 面向本地系统维护与监控的完整命令行交互体验。 |
+| [Rezi](https://github.com/RtlZeroMemory/Rezi) 与 [OpenTUI](https://github.com/anomalyco/opentui) | 用于构建有状态终端应用的 TypeScript Framework。 |
+
+SessionBar 的长期方向，是成为一台电脑上所有编程 Agent Session 的本地、低开销
+控制界面：不依赖具体 Harness，按 Project 组织，默认保护隐私，并同时提供 TUI
+和 Web UI。它应帮助用户发现、观察、比较、定位和恢复 Session，但不接管各个
+Agent 实际执行工作的方式。
+
+以上项目彼此独立。列出它们不代表依赖、隶属、背书或代码派生关系。
+
 ## 许可证
 
 SessionBar 使用 [MIT License](LICENSE)。第三方依赖仍遵循各自的许可证和

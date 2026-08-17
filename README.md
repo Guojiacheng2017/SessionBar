@@ -145,6 +145,12 @@ SESSIONBAR_SESSION_ID="agent-session-id" \
 
 `report.sh` accepts `report.sh <status> <task_name> <server_port>`.
 
+For an optional user-managed WorkBuddy balance adapter, set
+`SESSIONBAR_WORKBUDDY_BALANCE_COMMAND` to a read-only command that prints
+canonical JSON such as `{"remaining":2471,"used":2250.52,"unit":"credits"}`.
+SessionBar validates that snapshot; without it, WorkBuddy's local database is
+used only for consumption history and is never presented as account balance.
+
 | Variable | Purpose |
 | --- | --- |
 | `SESSIONBAR_AGENT` | Stable lowercase agent key, such as `claude` or `codex` |
@@ -258,10 +264,28 @@ Code contributions, bug reports, reproducible performance traces, and harness
 adapter improvements are welcome. By contributing, you agree that your changes
 may be distributed under the project's MIT License.
 
-## Acknowledgements
+## Related Work and Direction
 
-Development of SessionBar has been assisted by OpenAI Codex, Claude, and
-DeepSeek for implementation support, debugging, and design iteration.
+Several independent projects address adjacent parts of the coding-agent
+workspace. They are listed here to describe the field and SessionBar's
+position in it, not to claim that their implementations were used as references:
+
+| Project | Primary focus |
+| --- | --- |
+| [Orca](https://github.com/stablyai/orca) | Running and steering a fleet of coding agents across desktop, mobile, and remote environments. |
+| [abtop](https://github.com/graykode/abtop) | Real-time terminal observability for agent sessions, context, tokens, limits, and processes. |
+| [Mole](https://github.com/tw93/mole) | A polished command-line interface for local system maintenance and monitoring. |
+| [Rezi](https://github.com/RtlZeroMemory/Rezi) and [OpenTUI](https://github.com/anomalyco/opentui) | TypeScript frameworks for building stateful terminal applications. |
+
+SessionBar's long-term direction is a local, low-overhead control surface for
+every coding-agent session on a machine: independent of the harness that owns
+the session, organized by project, private by default, and available through
+both terminal and Web interfaces. It should make sessions easy to discover,
+observe, compare, focus, and resume without taking ownership of how each agent
+executes its work.
+
+The projects above are independent. Their inclusion does not imply dependency,
+affiliation, endorsement, or code derivation.
 
 ## License
 
