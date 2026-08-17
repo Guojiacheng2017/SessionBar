@@ -10,9 +10,20 @@ SessionBar 是一个本地优先的 AI 编程会话监控工具。它从不同 A
 Harness 中发现并规范化会话，按项目目录组织数据，并通过 TUI 或本地 Web
 界面展示。
 
-同一个项目可以同时包含多个 Claude Code、Codex、OpenCode、Gemini 或
-Copilot 会话。SessionBar 会分别跟踪每个会话，而不是将整个项目误认为单个
+同一个项目可以同时包含多个 Claude Code、Codex、Gemini、Copilot、CodeBuddy
+或 WorkBuddy 会话。SessionBar 会分别跟踪每个会话，而不是将整个项目误认为单个
 Agent 进程。
+
+### 支持的 Harness
+
+<p>
+  <kbd><img src="https://cdn.simpleicons.org/anthropic/D97757" width="14" height="14" alt=""> Claude Code</kbd>
+  <kbd><img src="https://cdn.simpleicons.org/openai/10A37F" width="14" height="14" alt=""> Codex</kbd>
+  <kbd><img src="https://cdn.simpleicons.org/googlegemini/8E75B2" width="14" height="14" alt=""> Gemini CLI</kbd>
+  <kbd><img src="https://cdn.simpleicons.org/githubcopilot/000000" width="14" height="14" alt=""> GitHub Copilot CLI</kbd>
+  <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> CodeBuddy CLI</kbd>
+  <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> WorkBuddy Desktop</kbd>
+</p>
 
 <table>
   <tr>
@@ -35,7 +46,7 @@ Agent 进程。
 - 以项目为第一层级，在项目内选择会话并查看详细信息。
 - 分别显示 Agent、会话 ID、任务、状态、更新时间、Context 和 Usage。
 - 提供 Overview、Activity、Usage、Flow、Raw 和 System 详情页。
-- 支持 Claude Code、Codex、OpenCode、Gemini CLI、Copilot 及可扩展 Hook。
+- 支持 Claude Code、Codex、Gemini CLI、GitHub Copilot CLI、CodeBuddy CLI、WorkBuddy Desktop 及可扩展 Hook。
 - 在不向 UI 暴露凭据的前提下展示 Provider 配额和用量。
 - 缓存 CPU、内存、负载、温度和网络状态。
 - 使用 alternate screen 稳定渲染；失去焦点时自动降低轮询频率。
@@ -53,8 +64,8 @@ Agent 进程。
 ### 从源码安装
 
 ```sh
-git clone <repository-url> sessionbar
-cd sessionbar/0agentbar
+git clone https://github.com/Guojiacheng2017/SessionBar.git sessionbar
+cd sessionbar
 npm install
 npm run build
 npm link
