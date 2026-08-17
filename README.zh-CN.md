@@ -17,9 +17,9 @@ Agent 进程。
 ### 支持的 Harness
 
 <p>
-  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claudecode-color.svg" width="14" height="14" alt=""> Claude Code</kbd>
-  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/codex-color.svg" width="14" height="14" alt=""> Codex</kbd>
-  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/geminicli-color.svg" width="14" height="14" alt=""> Gemini CLI</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude-color.svg" width="14" height="14" alt=""> Claude Code</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/openai.svg" width="14" height="14" alt=""> Codex</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/gemini-color.svg" width="14" height="14" alt=""> Gemini CLI</kbd>
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/copilot-color.svg" width="14" height="14" alt=""> GitHub Copilot CLI</kbd>
   <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> WorkBuddy Desktop</kbd>
 </p>
