@@ -42,6 +42,38 @@ test("provider signals attach only to matching agent sessions and preserve heart
   assert.equal(sessions.claude.agent_signals, undefined);
 });
 
+test("provider signals attach to a Desktop session through its discovered model provider", () => {
+  const sessions = {
+    desktop: {
+      ...base,
+      session_id: "claude-desktop-local_one__skills",
+      session_type: "Claude Desktop",
+      model_provider: "kimi",
+    },
+  };
+  const changed = applyProviderPollResults(sessions, [{
+    config: {
+      id: "ccswitch-kimi",
+      provider: "kimi",
+      label: "Kimi API (CC Switch)",
+      target: "Kimi",
+    },
+    signals: [{
+      signal: "kimi.balance",
+      kind: "balance",
+      source: "provider_api",
+      scope: "account",
+      remaining: 120,
+      unit: "CNY",
+      status: "ok",
+      label: "Kimi API (CC Switch)",
+    }],
+  }]);
+
+  assert.equal(changed, true);
+  assert.equal(sessions.desktop.agent_signals[0].signal, "kimi.balance");
+});
+
 test("a later provider poll replaces the same signal without growing the buffer", () => {
   const sessions = {
     codex: {

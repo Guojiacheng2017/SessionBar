@@ -11,7 +11,7 @@ export function applyProviderPollResults(
   let changed = false;
   for (const result of results) {
     for (const session of Object.values(sessions)) {
-      if (!matchesTarget(session, result.config.target)) continue;
+      if (!matchesTarget(session, result.config.target, result.config.provider)) continue;
       const previous = session.agent_signals ?? [];
       const incoming = result.signals.map(signal => {
         const previousSignal = previous.find(item => signalKey(item) === signalKey(signal));
@@ -30,8 +30,9 @@ export function applyProviderPollResults(
   return changed;
 }
 
-function matchesTarget(session: SessionPayload, target: string): boolean {
+function matchesTarget(session: SessionPayload, target: string, provider: string): boolean {
   const sessionType = (session.session_type || "").toLowerCase();
+  if ((session.model_provider || "").toLowerCase() === provider.toLowerCase()) return true;
   return target.split(",").some(part => {
     const needle = part.trim().toLowerCase();
     return needle === "*" || (needle.length > 0 && sessionType.includes(needle));

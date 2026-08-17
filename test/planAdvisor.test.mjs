@@ -14,6 +14,7 @@ const noCredsOpts = {
   openaiAuthPath: "/nonexistent/wham-auth.json",
   anthropicCredentialsPath: "/nonexistent/claude-credentials.json",
   githubCopilotCredentialsPath: "/nonexistent/github-copilot-apps.json",
+  workbuddyDbPath: "/nonexistent/workbuddy.db",
 };
 
 test("aggregates available subscription adapters without crashing", async () => {

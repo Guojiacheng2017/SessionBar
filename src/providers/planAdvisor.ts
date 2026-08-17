@@ -3,6 +3,7 @@ import type { ResetCardConsumeResult } from "./provider-plans/whamAdapter.js";
 import { fetchAnthropicSubscription } from "./provider-plans/anthropicAdapter.js";
 import { fetchKimiSubscription } from "./provider-plans/kimiAdapter.js";
 import { fetchGitHubCopilotSubscription } from "./provider-plans/githubCopilotAdapter.js";
+import { fetchWorkBuddyDesktopCredits } from "./workbuddyCreditsAdapter.js";
 import type { PlanRow } from "./planTypes.js";
 
 export interface PlanOpts {
@@ -15,6 +16,7 @@ export interface PlanOpts {
   kimiAccessToken?: string;
   githubCopilotCredentialsPath?: string;
   githubCopilotToken?: string;
+  workbuddyDbPath?: string;
 }
 
 /**
@@ -44,6 +46,10 @@ export async function computePlanRows(opts: PlanOpts = {}): Promise<PlanRow[]> {
       credentialsPath: opts.githubCopilotCredentialsPath,
       accessToken: opts.githubCopilotToken,
       now,
+    }),
+    fetchWorkBuddyDesktopCredits({
+      dbPath: opts.workbuddyDbPath,
+      balanceCommand: process.env.SESSIONBAR_WORKBUDDY_BALANCE_COMMAND,
     }),
   ]);
   const rows: PlanRow[] = [];
