@@ -61,6 +61,19 @@ of treating the project as a single agent process.
 - npm
 - Bun is recommended for the OpenTUI monitor runtime
 
+### Optional provider integration
+
+[CC Switch](https://github.com/farion1231/cc-switch) is optional. When its local
+database is available, SessionBar reads it without modification to provide
+seven-day token history for compatible API providers and to discover compatible
+DeepSeek or Kimi credentials. SessionBar does not install, start, or configure
+CC Switch.
+
+Without CC Switch, session monitoring and official provider adapters continue
+to work. DeepSeek and Kimi balances can instead use `SESSIONBAR_DEEPSEEK_API_KEY`
+and `SESSIONBAR_KIMI_API_KEY`; their local token history remains unavailable
+unless another supported usage source reports it.
+
 ## Installation
 
 ### Install from source
@@ -215,6 +228,12 @@ to the TUI, Web UI, session payloads, or logs.
 Supported sources currently include OpenAI/Codex, Anthropic, GitHub Copilot,
 DeepSeek, MiniMax, Kimi, xAI, and compatible CC Switch configurations. Provider
 polling runs every five minutes by default:
+
+- OpenAI/Codex subscription quota and completed daily token buckets come from
+  the official account APIs. When available, CC Switch supplies today's live
+  token total until the official daily bucket is published.
+- DeepSeek and Kimi balances come from their provider APIs. Their token trends
+  can come from CC Switch's local request history when present.
 
 ```sh
 SESSIONBAR_PROVIDER_POLL=0 sessionbar

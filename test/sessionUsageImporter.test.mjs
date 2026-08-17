@@ -72,4 +72,7 @@ test("local token samples take priority over Kimi monetary fallback", () => {
   const [decorated] = decorateProviderUsageFromSessions([row], { files: {}, daily: { kimi: { "2026-08-14": 42 } } }, Date.parse("2026-08-14T12:00:00Z"));
   assert.equal(decorated.usageTrend.unit, "tokens");
   assert.equal(decorated.usageTrend.points.at(-1), 42);
+  assert.equal(decorated.usageTrends.cash.unit, "CNY");
+  assert.equal(decorated.usageTrends.cash.points.at(-1), 4.2);
+  assert.equal(decorated.usageTrends.token.points.at(-1), 42);
 });

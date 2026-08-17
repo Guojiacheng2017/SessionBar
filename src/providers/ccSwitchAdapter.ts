@@ -68,7 +68,8 @@ export function parseCCSwitchProviderOutput(stdout: string): ProviderConfig | nu
     id: "ccswitch-deepseek",
     provider: "deepseek",
     api_key: apiKey,
-    label: "DeepSeek API (CC Switch)",
+    // CC Switch supplies credentials only; usage data comes from DeepSeek's API.
+    label: "DeepSeek API",
     // CC Switch's active Claude provider is the source for Claude Code sessions.
     target: "Claude Code",
     base_url: deepSeekBaseUrl(stringValue(row?.base_url)),
@@ -89,7 +90,8 @@ export function parseCCSwitchKimiProviderOutput(stdout: string): ProviderConfig 
     id: "ccswitch-kimi",
     provider: "kimi",
     api_key: apiKey,
-    label: "Kimi API (CC Switch)",
+    // CC Switch supplies credentials only; usage data comes from Moonshot's API.
+    label: "Kimi API",
     target: "Kimi",
     base_url: kimiBaseUrl(stringValue(row?.base_url)),
   };

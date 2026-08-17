@@ -58,6 +58,18 @@ Agent 进程。
 - npm
 - 建议安装 Bun，以运行 OpenTUI Monitor
 
+### 可选 Provider 集成
+
+[CC Switch](https://github.com/farion1231/cc-switch) 是可选集成。检测到其本地
+数据库后，SessionBar 会以只读方式获取兼容 API Provider 的七日 Token 历史，
+并发现兼容的 DeepSeek 或 Kimi 凭据。SessionBar 不会安装、启动或修改
+CC Switch。
+
+未安装 CC Switch 时，会话监控和官方 Provider Adapter 仍可正常工作。DeepSeek
+和 Kimi 余额也可分别通过 `SESSIONBAR_DEEPSEEK_API_KEY` 与
+`SESSIONBAR_KIMI_API_KEY` 接入；除非有其他受支持的数据源上报，否则不会显示
+这两者的本地 Token 历史。
+
 ## 安装
 
 ### 从源码安装
@@ -202,6 +214,11 @@ Provider 轮询与 Session 状态相互独立。凭据仅从环境变量或兼�
 
 当前数据源包括 OpenAI/Codex、Anthropic、GitHub Copilot、DeepSeek、MiniMax、
 Kimi、xAI 和兼容的 CC Switch 配置。默认每五分钟刷新：
+
+- OpenAI/Codex 的订阅配额和已完成日期的 Token bucket 来自官方账户 API；
+  安装 CC Switch 后，在官方当日 bucket 发布前由其补充今天的实时 Token 总量。
+- DeepSeek 与 Kimi 的余额来自各自 Provider API；安装 CC Switch 后，可用其
+  本地请求历史展示 Token 趋势。
 
 ```sh
 SESSIONBAR_PROVIDER_POLL=0 sessionbar

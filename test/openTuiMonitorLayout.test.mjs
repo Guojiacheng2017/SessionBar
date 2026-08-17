@@ -579,6 +579,14 @@ test("provider table renders a header plus one row per PlanRow with columns", ()
   assert.equal(content[2][1][0].text, "1.2M tokens left");
 });
 
+test("provider displays keep currency in values instead of names", () => {
+  const row = apiRow({ provider: "deepseek", label: "DeepSeek API CNY", unit: "CNY", remaining: 231.63 });
+  assert.match(providerSummaryLine(row), /^DeepSeek API API \|/);
+  const content = providerTableContent([row], { width: 120, height: 40 });
+  assert.equal(content[1][0][0].text, "DeepSeek API");
+  assert.equal(content[1][1][0].text, "231.6 CNY left");
+});
+
 test("provider table uses compact 3-column layout on narrow terminals", () => {
   const renderer = { width: 80, height: 40 };
   const content = providerTableContent([subscriptionRow()], renderer);

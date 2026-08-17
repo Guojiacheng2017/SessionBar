@@ -13,6 +13,7 @@ import {
   type TextTableContent,
 } from "@opentui/core";
 import type { PlanRow } from "../providers/planTypes.js";
+import { providerDisplayLabel } from "../providers/providerUsageMetrics.js";
 import type { SessionPayload, SystemEfficiencySnapshot } from "../shared/types.js";
 import {
   buildSessionDetailChunks,
@@ -576,7 +577,7 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
 
 export function providerSummaryLine(row: PlanRow): string {
   const form = providerFormLabel(row);
-  const label = row.label || row.provider || "?";
+  const label = providerDisplayLabel(row);
   if (row.form === "api") {
     const unit = row.unit ? ` ${row.unit}` : "";
     const parts = [
@@ -634,7 +635,7 @@ export function providerTableContent(rows: readonly PlanRow[], renderer: CliRend
   const visible = rows;
   for (const row of visible) {
     const rowFg = row.form === "api" ? PALETTE.cyan : levelColor(row.level);
-    const providerCell = cell(row.label || row.provider || "?", PALETTE.fg);
+    const providerCell = cell(providerDisplayLabel(row), PALETTE.fg);
     const leftCell = cell(providerLeftText(row), rowFg);
     const resetCell = cell(row.autoResetIn || "", PALETTE.muted);
     content.push(compact

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { PlanRow } from "./planTypes.js";
+import { withProviderUsageTrend } from "./providerUsageMetrics.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -64,14 +65,45 @@ export function decorateApiUsageFromCCSwitch(
   const days = recentDayKeys(now, 7);
   return rows.map(row => {
     if (/github|copilot/i.test(`${row.provider} ${row.label}`)) return row;
+    const existingTokenTrend = row.usageTrends?.token
+      ?? (row.usageTrend?.unit === "tokens" ? row.usageTrend : undefined);
     const provider = canonicalProvider(`${row.provider} ${row.label}`);
     const totals = provider ? usage[provider] : undefined;
-    const points = days.map(day => totals?.[day] ?? null);
-    if (!points.some(point => point !== null)) {
-      if (row.form !== "subscription" || row.usageTrend?.unit === "tokens") return row;
-      return { ...row, usageTrend: { kind: "bars", days: 7, points, labels: days, unit: "tokens" } };
+    if (provider === "openai" && existingTokenTrend?.source === "OpenAI API") {
+      const today = days.at(-1)!;
+      const liveToday = totals?.[today];
+      if (liveToday !== undefined) {
+        const official = new Map(existingTokenTrend.labels?.map((day, index) => [day, existingTokenTrend.points[index] ?? null]) ?? []);
+        const points = days.map((day, index) => day === today
+          ? liveToday
+          : official.get(day) ?? existingTokenTrend.points[index] ?? null);
+        return withProviderUsageTrend(row, "token", {
+          ...existingTokenTrend,
+          points,
+          labels: days,
+          source: "OpenAI API + CC Switch today",
+        });
+      }
+      return withProviderUsageTrend(row, "token", existingTokenTrend);
     }
-    return { ...row, usageTrend: { kind: "bars", days: 7, points, labels: days, unit: "tokens" } };
+    if (existingTokenTrend?.source && existingTokenTrend.points.some(point => point !== null)) {
+      return withProviderUsageTrend(row, "token", existingTokenTrend);
+    }
+    const points = days.map(day => totals?.[day] ?? null);
+    const tokenTrend = {
+      kind: "bars" as const,
+      days: 7 as const,
+      points,
+      labels: days,
+      unit: "tokens",
+      source: "CC Switch",
+    };
+    if (!points.some(point => point !== null)) {
+      if (existingTokenTrend) return withProviderUsageTrend(row, "token", existingTokenTrend);
+      if (row.form !== "subscription") return row;
+      return withProviderUsageTrend(row, "token", tokenTrend);
+    }
+    return withProviderUsageTrend(row, "token", tokenTrend);
   });
 }
 

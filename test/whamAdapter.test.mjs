@@ -55,6 +55,7 @@ test("builds subscription row from wham usage + credits", async () => {
   assert.equal(row.provider, "openai");
   assert.match(row.cardTiming, /Card expires in/);
   assert.equal(row.usageTrend.unit, "tokens");
+  assert.equal(row.usageTrend.source, "OpenAI API");
   assert.deepEqual(row.usageTrend.points.slice(-3), [367_400_000, 12_000_000, null]);
   assert.deepEqual(row.usageTrend.labels.slice(-3), ["2026-08-12", "2026-08-13", "2026-08-14"]);
 });

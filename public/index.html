@@ -96,8 +96,16 @@
         <div id="providers-header" class="providers-header">
             <div>
                 <h2 id="providers-heading" class="providers-heading">Providers</h2>
+                <p id="providers-daily-usage" class="providers-description provider-daily-usage"><span class="daily-usage-label">Today</span><span class="daily-usage-empty">No usage data yet</span></p>
             </div>
-            <span id="providers-status" class="providers-status">Loading</span>
+            <div class="providers-header-actions">
+                <div id="provider-usage-mode" class="provider-usage-mode" role="group" aria-label="Provider usage metric">
+                    <button type="button" data-provider-usage-mode="token" aria-pressed="true">Token</button>
+                    <button type="button" data-provider-usage-mode="cash" aria-pressed="false">Cash</button>
+                    <button type="button" data-provider-usage-mode="percentage" aria-pressed="false">Percentage</button>
+                </div>
+                <span id="providers-status" class="providers-status">Loading</span>
+            </div>
         </div>
         <div id="providers-body" class="providers-body"></div>
     </section>

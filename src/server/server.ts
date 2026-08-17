@@ -1009,16 +1009,7 @@ app.get("/providers/live", (_req, res) => {
     aggregateProviders(subscriptionRows, sessions, providerApiRows),
     providerUsageHistory,
   );
-  const officialOpenAI: Record<string, number> = {};
-  const officialRow = rows.find(row => row.form === "subscription" && row.provider === "openai" && row.usageTrend?.unit === "tokens");
-  officialRow?.usageTrend?.labels?.forEach((day, index) => {
-    const value = officialRow.usageTrend?.points[index];
-    if (value !== null && value !== undefined) officialOpenAI[day] = value;
-  });
-  const usage = Object.keys(officialOpenAI).length > 0
-    ? { ...ccSwitchUsage, openai: { ...(ccSwitchUsage.openai ?? {}), ...officialOpenAI } }
-    : ccSwitchUsage;
-  res.json({ providers: decorateProviderUsageFromSessions(decorateApiUsageFromCCSwitch(rows, usage), sessionUsageState) });
+  res.json({ providers: decorateProviderUsageFromSessions(decorateApiUsageFromCCSwitch(rows, ccSwitchUsage), sessionUsageState) });
 });
 
 // POST: refresh provider state after a local SessionBar setting changes.

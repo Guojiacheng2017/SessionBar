@@ -6,6 +6,15 @@ export interface ProviderUsageTrend {
   points: Array<number | null>;
   labels?: string[];
   unit?: string;
+  source?: string;
+}
+
+export type ProviderUsageMode = "token" | "cash" | "percentage";
+
+export interface ProviderUsageTrends {
+  token?: ProviderUsageTrend;
+  cash?: ProviderUsageTrend;
+  percentage?: ProviderUsageTrend;
 }
 
 export interface PlanRow {
@@ -26,4 +35,5 @@ export interface PlanRow {
   limit?: number;
   unit?: string;
   usageTrend?: ProviderUsageTrend;
+  usageTrends?: ProviderUsageTrends;
 }

@@ -43,10 +43,50 @@ test("CC Switch token history drives subscription usage while Copilot keeps offi
 
   assert.deepEqual(decorated[0].usageTrend.points.slice(-2), [120, 30]);
   assert.equal(decorated[0].usageTrend.unit, "tokens");
+  assert.equal(decorated[0].usageTrend.source, "CC Switch");
   assert.equal(decorated[1].usageTrend.points.at(-1), 70);
   assert.deepEqual(decorated[2].usageTrend.points.slice(-2), [400, 500]);
   assert.equal(decorated[2].usageTrend.unit, "tokens");
   assert.deepEqual(decorated[3].usageTrend, { kind: "line", days: 30, points: [10], unit: "AI credits" });
+});
+
+test("CC Switch keeps monetary and token histories available together", () => {
+  const cash = { kind: "bars", days: 7, points: [null, null, null, null, null, 2.5, 4.25], unit: "CNY" };
+  const row = { form: "api", provider: "deepseek", label: "DeepSeek API", usageTrend: cash, usageTrends: { cash } };
+
+  const [decorated] = decorateApiUsageFromCCSwitch([row], {
+    deepseek: { "2026-08-14": 300 },
+  }, now);
+
+  assert.strictEqual(decorated.usageTrends.cash, cash);
+  assert.equal(decorated.usageTrends.token.unit, "tokens");
+  assert.equal(decorated.usageTrends.token.source, "CC Switch");
+  assert.equal(decorated.usageTrends.token.points.at(-1), 300);
+});
+
+test("official OpenAI history uses CC Switch only for today's live total", () => {
+  const official = {
+    kind: "bars",
+    days: 7,
+    points: [null, null, null, null, null, 700, null],
+    labels: ["2026-08-08", "2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14"],
+    unit: "tokens",
+    source: "OpenAI API",
+  };
+  const row = {
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    usageTrend: official,
+  };
+
+  const [decorated] = decorateApiUsageFromCCSwitch([row], {
+    openai: { "2026-08-13": 400, "2026-08-14": 500 },
+  }, now);
+
+  assert.deepEqual(decorated.usageTrend.points.slice(-2), [700, 500]);
+  assert.equal(decorated.usageTrend.source, "OpenAI API + CC Switch today");
+  assert.deepEqual(decorated.usageTrends.token, decorated.usageTrend);
 });
 
 test("API placeholder remains available for local fallback when CC Switch has no matching history", () => {

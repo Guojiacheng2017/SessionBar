@@ -150,7 +150,14 @@ function parseDailyTokenUsage(body: unknown, now: number): PlanRow["usageTrend"]
     date.setDate(cursor.getDate() - (6 - index));
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   });
-  return { kind: "bars", days: 7, points: labels.map(day => totals.get(day) ?? null), labels, unit: "tokens" };
+  return {
+    kind: "bars",
+    days: 7,
+    points: labels.map(day => totals.get(day) ?? null),
+    labels,
+    unit: "tokens",
+    source: "OpenAI API",
+  };
 }
 
 export async function consumeResetCard(opts: {

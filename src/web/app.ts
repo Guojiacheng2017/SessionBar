@@ -1,6 +1,6 @@
 // SessionBar web dashboard — Tailwind + vanilla TS
 import type { SessionPayload } from "../shared/types.js";
-import type { PlanRow } from "../providers/planTypes.js";
+import type { PlanRow, ProviderUsageMode } from "../providers/planTypes.js";
 import { sessionDisplayName, sessionListColumns } from "../tui/displayUtils.js";
 import {
   UI,
@@ -11,6 +11,7 @@ import {
   escapeHtml,
   iconMarkup,
   projectIconListMarkup,
+  providerDailyUsageMarkup,
   providerTableMarkup,
   statusDotMarkup,
   statusLabel,
@@ -38,7 +39,9 @@ const providersPanel = document.getElementById("providers-panel")!;
 const providersSessionBar = document.getElementById("providers-session-bar")!;
 const providersHeader = document.getElementById("providers-header")!;
 const providersStatus = document.getElementById("providers-status")!;
+const providersDailyUsage = document.getElementById("providers-daily-usage")!;
 const providersBody = document.getElementById("providers-body")!;
+const providerUsageModeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-provider-usage-mode]")];
 
 let disconnectedBanner: HTMLDivElement | null = null;
 let selectedId: string | null = null;
@@ -55,6 +58,22 @@ let providersRetryTimer: number | undefined;
 let providerRefreshTimer: number | undefined;
 let systemRefreshTimer: number | undefined;
 const iconCache = new Map<string, string>();
+const PROVIDER_USAGE_MODE_KEY = "sessionbar:provider-usage-mode";
+let providerUsageMode = readProviderUsageMode();
+
+function readProviderUsageMode(): ProviderUsageMode {
+  try {
+    const value = window.localStorage.getItem(PROVIDER_USAGE_MODE_KEY);
+    if (value === "cash" || value === "percentage") return value;
+  } catch { /* storage is optional */ }
+  return "token";
+}
+
+function setProviderUsageMode(mode: ProviderUsageMode): void {
+  providerUsageMode = mode;
+  try { window.localStorage.setItem(PROVIDER_USAGE_MODE_KEY, mode); } catch { /* storage is optional */ }
+  renderProviders();
+}
 
 const systemMonitor = createWebSystemMonitor({
   detailHeader: detailHdr,
@@ -240,10 +259,15 @@ function renderProviders(): void {
   providersStatus.textContent = statusText;
   providersStatus.className = `providers-status${providersError ? " providers-status-error" : providersInitializing ? " providers-status-loading" : ""}`;
   providersHeader.classList.toggle("is-error", Boolean(providersError));
+  providersDailyUsage.innerHTML = providerDailyUsageMarkup(providers, providerUsageMode);
+  for (const button of providerUsageModeButtons) {
+    button.setAttribute("aria-pressed", String(button.dataset.providerUsageMode === providerUsageMode));
+  }
   providersBody.innerHTML = providerTableMarkup(providers, {
     loading: providersInitializing,
     error: providersError || undefined,
     iconCache,
+    usageMode: providerUsageMode,
   });
   providersBody.querySelector("[data-providers-retry]")?.addEventListener("click", () => { void fetchProviders(); });
   if (sceneExpandedHeight > 0) scheduleSceneMeasure();
@@ -658,6 +682,12 @@ window.addEventListener("resize", () => {
   scheduleSceneMeasure();
 });
 reducedMotion.addEventListener("change", scheduleSceneMeasure);
+for (const button of providerUsageModeButtons) {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.providerUsageMode;
+    if (mode === "token" || mode === "cash" || mode === "percentage") setProviderUsageMode(mode);
+  });
+}
 renderSceneSummary();
 renderProviders();
 void fetchProviders();

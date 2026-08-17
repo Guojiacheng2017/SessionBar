@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import * as webComponents from "../dist/web/webComponents.js";
 import {
   countSessions,
   createWebSystemMonitor,
@@ -13,12 +14,21 @@ import {
   systemEfficiencyMarkup,
 } from "../dist/web/webComponents.js";
 
+const providerDailyUsageMarkup = webComponents.providerDailyUsageMarkup ?? (() => "");
+
 const appSource = readFileSync(new URL("../src/web/app.ts", import.meta.url), "utf8");
 
 test("web polling backs off while the page is hidden", () => {
   assert.match(appSource, /document\.hidden \? 15_000 : 2_000/);
   assert.match(appSource, /document\.hidden \? 300_000 : 60_000/);
   assert.match(appSource, /visibilitychange/);
+});
+
+test("provider usage mode is persisted and controls both provider renderers", () => {
+  assert.match(appSource, /sessionbar:provider-usage-mode/);
+  assert.match(appSource, /providerDailyUsageMarkup\(providers, providerUsageMode\)/);
+  assert.match(appSource, /usageMode: providerUsageMode/);
+  assert.match(appSource, /localStorage\.setItem\(PROVIDER_USAGE_MODE_KEY, mode\)/);
 });
 import { isSystemEfficiencySnapshot } from "../dist/shared/types.js";
 import { UI } from "../dist/web/webComponents.js";
@@ -225,6 +235,8 @@ test("renders Usage between Level and Reset with seven unlabeled daily bars", ()
       unit: "CNY",
     },
   }]);
+  assert.match(html, />DeepSeek API</);
+  assert.doesNotMatch(html, />DeepSeek API CNY</);
   assert.match(html, /Level<\/span><span role="columnheader">Usage<\/span><span role="columnheader">Reset/);
   assert.equal((html.match(/provider-usage-bar\b/g) || []).length, 7);
   assert.doesNotMatch(html, />\s*(?:1|2|3|4|5)\s*</);
@@ -290,6 +302,119 @@ test("renders provider loading, empty, and error states", () => {
   assert.match(providerTableMarkup([]), /No quota data/);
   assert.match(providerTableMarkup([], { error: "request failed <now>" }), /request failed &lt;now&gt;/);
   assert.match(providerTableMarkup([], { error: "request failed" }), /data-providers-retry/);
+});
+
+test("renders one deduplicated overall daily usage line grouped by unit", () => {
+  const today = "2026-08-17";
+  const yesterday = "2026-08-16";
+  const trend = (points, unit, kind = "bars") => ({ kind, days: kind === "line" ? 30 : 7, points, labels: kind === "line" ? [yesterday, today] : [today], unit });
+  const rows = [
+    { provider: "openai", label: "OpenAI 5h", usageTrend: trend([1_000_000], "tokens") },
+    { provider: "openai", label: "OpenAI weekly", usageTrend: trend([1_000_000], "tokens") },
+    { provider: "kimi", label: "Kimi API", usageTrend: trend([200_000], "tokens") },
+    { provider: "github", label: "Copilot", usageTrend: trend([100, 125], "AI credits", "line") },
+    { provider: "workbuddy", label: "WorkBuddy", usageTrend: trend([5], "credits") },
+    { provider: "deepseek", label: "DeepSeek", usageTrend: trend([8.42], "CNY") },
+    { provider: "moonshot", label: "Moonshot", usageTrend: trend([1.06], "USD") },
+    { provider: "custom", label: "Custom", usageTrend: trend([12], "requests") },
+  ];
+
+  const html = providerDailyUsageMarkup(rows, "token");
+  assert.match(html, /Today/);
+  assert.match(html, /1\.2M tokens/);
+  assert.match(html, /125 AI credits/);
+  assert.match(html, /5 credits/);
+  assert.match(html, /¥8\.42 CNY/);
+  assert.match(html, /\$1\.06 USD/);
+  assert.match(html, /12 requests/);
+  assert.equal((html.match(/daily-usage-plus/g) || []).length, 5);
+});
+
+test("provider metric mode switches the entire provider usage presentation", () => {
+  const token = { kind: "bars", days: 7, points: [null, null, null, null, null, null, 125_000], unit: "tokens", source: "CC Switch" };
+  const cash = { kind: "bars", days: 7, points: [null, null, null, null, null, null, 4.25], unit: "CNY" };
+  const row = {
+    form: "api",
+    provider: "deepseek",
+    label: "DeepSeek API",
+    level: "green",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+    remaining: 247.1,
+    unit: "CNY",
+    usageTrend: token,
+    usageTrends: { token, cash },
+  };
+
+  const tokenTable = providerTableMarkup([row], { usageMode: "token" });
+  const cashTable = providerTableMarkup([row], { usageMode: "cash" });
+  assert.match(tokenTable, /125K tokens/);
+  assert.match(tokenTable, /CC Switch/);
+  assert.doesNotMatch(tokenTable, /4\.25 CNY/);
+  assert.match(cashTable, /4\.25 CNY/);
+  assert.doesNotMatch(cashTable, /CC Switch/);
+  assert.doesNotMatch(cashTable, /125K tokens/);
+  assert.match(tokenTable, /247\.1 CNY left/);
+  assert.match(cashTable, /247\.1 CNY left/);
+
+  assert.match(providerDailyUsageMarkup([row], "token"), /125K tokens/);
+  assert.doesNotMatch(providerDailyUsageMarkup([row], "token"), /4\.25 CNY/);
+  assert.match(providerDailyUsageMarkup([row], "cash"), /¥4\.25 CNY/);
+  assert.doesNotMatch(providerDailyUsageMarkup([row], "cash"), /125K tokens/);
+});
+
+test("provider metric mode keeps native-only credit metrics visible", () => {
+  const credits = { kind: "line", days: 30, points: [10, 12], unit: "AI credits" };
+  const row = { provider: "github", label: "Copilot", usageTrend: credits };
+  assert.match(providerDailyUsageMarkup([row], "token"), /12 AI credits/);
+  assert.match(providerDailyUsageMarkup([row], "cash"), /12 AI credits/);
+});
+
+test("percentage mode keeps cash metrics and shows token or credit providers as percentages", () => {
+  const token = { kind: "bars", days: 7, points: [1_000_000], unit: "tokens" };
+  const percentage = { kind: "bars", days: 7, points: [53], unit: "%" };
+  const cash = { kind: "bars", days: 7, points: [4.25], unit: "CNY" };
+  const base = {
+    form: "subscription",
+    level: "green",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+  };
+  const rows = [
+    { ...base, provider: "openai", label: "OpenAI Subscription", usageTrend: token, usageTrends: { token, percentage } },
+    { ...base, form: "api", provider: "deepseek", label: "DeepSeek API", usageTrend: cash, usageTrends: { cash } },
+  ];
+
+  const table = providerTableMarkup(rows, { usageMode: "percentage" });
+  assert.match(table, /53%/);
+  assert.match(table, /--usage-height:53%/);
+  assert.match(table, /4\.25 CNY/);
+  assert.doesNotMatch(table, /1M tokens/);
+
+  const summary = providerDailyUsageMarkup(rows, "percentage");
+  assert.match(summary, /Current/);
+  assert.match(summary, /OpenAI 53%/);
+  assert.match(summary, /¥4\.25 CNY/);
+  assert.doesNotMatch(summary, /57\.25%/);
+});
+
+test("renders a quiet daily usage fallback when today has no data", () => {
+  const html = providerDailyUsageMarkup([{
+    provider: "openai",
+    label: "OpenAI",
+    usageTrend: { kind: "bars", days: 7, points: [10, null], labels: ["2026-08-16", "2026-08-17"], unit: "tokens" },
+  }], "token");
+  assert.match(html, /Today/);
+  assert.match(html, /No usage data yet/);
+  assert.doesNotMatch(html, /10 tokens/);
 });
 
 test("renders one global system efficiency band", () => {

@@ -22,7 +22,7 @@ test("CC Switch provider output becomes a DeepSeek balance config", () => {
     id: "ccswitch-deepseek",
     provider: "deepseek",
     api_key: "ccswitch-secret",
-    label: "DeepSeek API (CC Switch)",
+    label: "DeepSeek API",
     target: "Claude Code",
     base_url: "https://api.deepseek.com",
   });
@@ -58,7 +58,7 @@ test("CC Switch Kimi provider output becomes a Kimi balance config", () => {
     id: "ccswitch-kimi",
     provider: "kimi",
     api_key: "ccswitch-kimi-secret",
-    label: "Kimi API (CC Switch)",
+    label: "Kimi API",
     target: "Kimi",
     base_url: "https://api.moonshot.cn",
   });
@@ -101,7 +101,7 @@ test("missing CC Switch database is an optional source", async () => {
   assert.equal(await readCCSwitchKimiConfig("/definitely/missing/sessionbar-home"), null);
 });
 
-test("DeepSeek poll keeps the CC Switch source label", async () => {
+test("DeepSeek poll labels the official API as the metric source", async () => {
   const config = parseCCSwitchProviderOutput(JSON.stringify([{
     name: "DeepSeek",
     app_type: "claude",
@@ -113,10 +113,10 @@ test("DeepSeek poll keeps the CC Switch source label", async () => {
     is_available: true,
     balance_infos: [{ currency: "CNY", total_balance: "298.87" }],
   })));
-  assert.equal(result.signals[0].label, "DeepSeek API (CC Switch) CNY");
+  assert.equal(result.signals[0].label, "DeepSeek API CNY");
 });
 
-test("Kimi poll keeps the CC Switch source label", async () => {
+test("Kimi poll labels the official API as the metric source", async () => {
   const config = parseCCSwitchKimiProviderOutput(JSON.stringify([{
     name: "Kimi",
     app_type: "claude-desktop",
@@ -133,6 +133,6 @@ test("Kimi poll keeps the CC Switch source label", async () => {
       status: true,
     }));
   });
-  assert.equal(result.signals[0].label, "Kimi API (CC Switch)");
+  assert.equal(result.signals[0].label, "Kimi API");
   assert.equal(result.signals[0].unit, "CNY");
 });

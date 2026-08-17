@@ -1,5 +1,6 @@
 import { isSystemEfficiencySnapshot, type SessionPayload, type SystemEfficiencySnapshot } from "../shared/types.js";
-import type { PlanRow } from "../providers/planTypes.js";
+import type { PlanRow, ProviderUsageMode } from "../providers/planTypes.js";
+import { providerDisplayLabel, providerUsageTrendForMode } from "../providers/providerUsageMetrics.js";
 import { compactNumber } from "../tui/displayUtils.js";
 
 export const UI = {
@@ -39,6 +40,7 @@ export interface ProviderTableState {
   loading?: boolean;
   error?: string;
   iconCache?: Map<string, string>;
+  usageMode?: ProviderUsageMode;
 }
 
 // LobeHub icon CDN — light variant for dark backgrounds, dark variant for light.
@@ -448,11 +450,12 @@ function providerUsageValue(value: number, unit?: string): string {
   if (unit === "CNY" || unit === "USD") {
     return `${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${unit}`;
   }
+  if (unit === "%") return `${formatProviderNumber(value)}%`;
   return `${compactNumber(value)}${unit ? ` ${unit}` : ""}`;
 }
 
-function providerUsageMarkup(row: PlanRow): string {
-  const trend = row.usageTrend;
+function providerUsageMarkup(row: PlanRow, mode: ProviderUsageMode): string {
+  const trend = providerUsageTrendForMode(row, mode);
   if (!trend || trend.points.every(point => point === null)) {
     return `<span class="provider-usage provider-usage-empty" role="cell" aria-label="Usage history unavailable"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>`;
   }
@@ -470,7 +473,7 @@ function providerUsageMarkup(row: PlanRow): string {
     ]).join(" ");
     return `<span class="provider-usage provider-usage-line" role="cell" aria-label="${trend.days}-day usage trend"><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="${points}" /></svg></span>`;
   }
-  const max = Math.max(1, ...values);
+  const max = trend.unit === "%" ? 100 : Math.max(1, ...values);
   const bars = trend.points.map((point, index) => {
     const height = point === null ? 0 : Math.max(point > 0 ? 12 : 4, Math.round(point / max * 100));
     const label = trend.labels?.[index] || `Day ${index + 1}`;
@@ -479,6 +482,79 @@ function providerUsageMarkup(row: PlanRow): string {
     return `<i class="provider-usage-bar${point === null ? " is-missing" : ""}" style="--usage-height:${height}%" data-tooltip="${tooltip}" aria-label="${tooltip}" tabindex="0"></i>`;
   }).join("");
   return `<span class="provider-usage provider-usage-bars" role="cell" aria-label="${trend.days}-day usage trend">${bars}</span>`;
+}
+
+interface DailyUsageEntry {
+  value: number;
+  unit: string;
+  rank: number;
+  label: string;
+}
+
+function dailyUsageEntry(row: PlanRow, mode: ProviderUsageMode): DailyUsageEntry | undefined {
+  const trend = providerUsageTrendForMode(row, mode);
+  const unit = trend?.unit?.trim();
+  if (!trend || !unit) return undefined;
+  const value = trend.points.at(-1);
+  if (value === null || value === undefined) return undefined;
+  const normalized = /^tokens?$/i.test(unit) ? "tokens"
+    : /^cny$/i.test(unit) ? "CNY"
+      : /^usd$/i.test(unit) ? "USD"
+        : unit;
+  const rank = normalized === "tokens" ? 0
+    : /credits?/i.test(normalized) ? 1
+      : normalized === "CNY" || normalized === "USD" ? 2
+        : normalized === "%" ? 3
+          : 4;
+  return { value, unit: normalized, rank, label: providerMetricLabel(row) };
+}
+
+function providerMetricLabel(row: PlanRow): string {
+  if (row.provider.toLocaleLowerCase() === "github") return "Copilot";
+  return (row.label || row.provider)
+    .replace(/\s+(?:Subscription|API)(?:\s*\([^)]*\))?$/i, "")
+    .trim();
+}
+
+function dailyUsageValue(entry: DailyUsageEntry): string {
+  if (entry.unit === "CNY" || entry.unit === "USD") {
+    const symbol = entry.unit === "CNY" ? "¥" : "$";
+    return `${symbol}${entry.value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 5 })} ${entry.unit}`;
+  }
+  if (entry.unit === "%") return `${entry.label} ${formatProviderNumber(entry.value)}%`;
+  return `${compactNumber(entry.value)} ${entry.unit}`;
+}
+
+export function providerDailyUsageMarkup(rows: readonly PlanRow[], mode: ProviderUsageMode = "token"): string {
+  const byProvider = new Map<string, DailyUsageEntry>();
+  for (const row of rows) {
+    const entry = dailyUsageEntry(row, mode);
+    if (!entry) continue;
+    const provider = (row.provider || row.label).toLocaleLowerCase();
+    const previous = byProvider.get(provider);
+    if (!previous || entry.rank < previous.rank) byProvider.set(provider, entry);
+  }
+
+  const selected = [...byProvider.values()];
+  const percentageValues = mode === "percentage"
+    ? selected
+      .filter(entry => entry.unit === "%")
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map(entry => `<span class="daily-usage-value">${escapeHtml(dailyUsageValue(entry))}</span>`)
+    : [];
+  const totals = new Map<string, DailyUsageEntry>();
+  for (const entry of selected) {
+    if (mode === "percentage" && entry.unit === "%") continue;
+    const previous = totals.get(entry.unit);
+    totals.set(entry.unit, previous ? { ...entry, value: previous.value + entry.value } : { ...entry });
+  }
+  const values = [...percentageValues, ...[...totals.values()]
+    .sort((a, b) => a.rank - b.rank || a.unit.localeCompare(b.unit))
+    .map(entry => `<span class="daily-usage-value">${escapeHtml(dailyUsageValue(entry))}</span>`)];
+  const content = values.length > 0
+    ? values.join(`<span class="daily-usage-plus" aria-hidden="true">+</span>`)
+    : `<span class="daily-usage-empty">No usage data yet</span>`;
+  return `<span class="daily-usage-label">${mode === "percentage" ? "Current" : "Today"}</span>${content}`;
 }
 
 export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTableState = {}): string {
@@ -498,15 +574,17 @@ export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTab
     </div>
     ${rows.map(row => {
       const tone = row.form === "api" ? "api" : row.level;
-      const label = row.label || row.provider || "?";
+      const label = providerDisplayLabel(row);
       const form = providerFormLabel(row);
       const hasFormInLabel = label.toLocaleLowerCase().includes(form.toLocaleLowerCase());
+      const usageSource = providerUsageTrendForMode(row, state.usageMode ?? "token")?.source;
+      const providerMeta = [hasFormInLabel ? "" : form, usageSource].filter(Boolean).join(" / ");
       const iconType = providerIconType(row);
       return `<div class="provider-row" role="row">
-        <span class="provider-name" role="cell"><span class="provider-icon">${iconMarkup(iconType, state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${hasFormInLabel ? "" : `<small>${escapeHtml(form)}</small>`}</span></span>
+        <span class="provider-name" role="cell"><span class="provider-icon">${iconMarkup(iconType, state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${providerMeta ? `<small>${escapeHtml(providerMeta)}</small>` : ""}</span></span>
         <span class="provider-left provider-left-${tone}" role="cell">${escapeHtml(providerLeftText(row))}</span>
         <span class="provider-level provider-level-${tone}" role="cell">${escapeHtml(providerLevelLabel(row))}</span>
-        ${providerUsageMarkup(row)}
+        ${providerUsageMarkup(row, state.usageMode ?? "token")}
         <span class="provider-reset" role="cell">${escapeHtml(providerResetText(row.autoResetIn || "—"))}</span>
         <span class="provider-card" role="cell">${escapeHtml(providerCardText(row.cardTiming || "—"))}</span>
       </div>`;

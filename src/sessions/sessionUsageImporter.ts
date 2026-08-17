@@ -1,6 +1,7 @@
 import { existsSync, openSync, readFileSync, readSync, closeSync, readdirSync, statSync, writeFileSync, renameSync } from "fs";
 import { join } from "path";
 import type { PlanRow } from "../providers/planTypes.js";
+import { withProviderUsageTrend } from "../providers/providerUsageMetrics.js";
 
 interface FileCursor {
   offset: number;
@@ -41,12 +42,15 @@ export function decorateProviderUsageFromSessions(rows: readonly PlanRow[], stat
   return rows.map(row => {
     const provider = canonicalProvider(row.provider || row.label);
     const isCopilot = /github|copilot/i.test(`${row.provider} ${row.label}`);
-    const hasTokenTrend = row.usageTrend?.unit === "tokens" && row.usageTrend.points.some(point => point !== null);
-    if (isCopilot || !provider || hasTokenTrend) return row;
+    const existingTokenTrend = row.usageTrends?.token
+      ?? (row.usageTrend?.unit === "tokens" ? row.usageTrend : undefined);
+    const hasTokenTrend = existingTokenTrend?.points.some(point => point !== null) === true;
+    if (isCopilot || !provider) return row;
+    if (hasTokenTrend && existingTokenTrend) return withProviderUsageTrend(row, "token", existingTokenTrend);
     const totals = provider ? state.daily[provider] : undefined;
     const points = days.map(day => totals?.[day] ?? null);
     if (!points.some(point => point !== null)) return row;
-    return { ...row, usageTrend: { kind: "bars", days: 7, points, labels: days, unit: "tokens" } };
+    return withProviderUsageTrend(row, "token", { kind: "bars", days: 7, points, labels: days, unit: "tokens" });
   });
 }
 
