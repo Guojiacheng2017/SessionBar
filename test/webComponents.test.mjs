@@ -5,6 +5,7 @@ import {
   countSessions,
   createWebSystemMonitor,
   escapeHtml,
+  iconMarkup,
   projectIconListMarkup,
   providerTableMarkup,
   statusDotMarkup,
@@ -167,6 +168,19 @@ test("renders provider names with the shared session icon renderer", () => {
   assert.match(html, /alt="Codex"/);
   assert.match(html, /alt="Copilot"/);
   assert.deepEqual([...iconCache.keys()], ["Claude Code", "Codex", "Copilot"]);
+});
+
+test("renders the bundled WorkBuddy Desktop icon", () => {
+  const html = iconMarkup("WorkBuddy Desktop");
+  assert.match(html, /provider-icons\/workbuddy\.svg/);
+});
+
+test("distinguishes Claude Desktop from Claude Code with a monitor badge", () => {
+  const desktop = iconMarkup("Claude Desktop");
+  const cli = iconMarkup("Claude Code");
+  assert.match(desktop, /claude-color\.png/);
+  assert.match(desktop, /agent-icon-badge--desktop/);
+  assert.doesNotMatch(cli, /agent-icon-badge/);
 });
 
 test("renders live AI credit usage for a subscription row", () => {

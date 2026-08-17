@@ -87,6 +87,49 @@ html {
 button, input { font: inherit; }
 input::placeholder { color: var(--sb-muted); opacity: 1; }
 
+.agent-icon {
+  position: relative;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+}
+
+.agent-icon-badge--desktop {
+  position: absolute;
+  right: -1px;
+  bottom: 3px;
+  box-sizing: border-box;
+  width: 8px;
+  height: 6px;
+  border: 1px solid var(--sb-ink-strong);
+  border-radius: 1px;
+  background: var(--sb-surface);
+  box-shadow: 0 0 0 1px var(--sb-surface);
+}
+
+.agent-icon-badge--desktop::before {
+  position: absolute;
+  bottom: -3px;
+  left: 3px;
+  width: 1px;
+  height: 2px;
+  background: var(--sb-ink-strong);
+  content: "";
+}
+
+.agent-icon-badge--desktop::after {
+  position: absolute;
+  bottom: -3px;
+  left: 1px;
+  width: 5px;
+  height: 1px;
+  background: var(--sb-ink-strong);
+  content: "";
+}
+
 .mono {
   font-family: "SF Mono", "Fira Code", "JetBrains Mono", Menlo, monospace;
 }

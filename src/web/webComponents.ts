@@ -47,6 +47,7 @@ const ICON_CDN = "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest"
 
 const ICONS: Record<string, string> = {
   "Claude Code": "claude",
+  "Claude Desktop": "claude",
   Codex: "openai",
   "Gemini CLI": "gemini",
   Copilot: "copilot",
@@ -66,6 +67,9 @@ const COLOR_ICONS = new Set(["claude", "copilot", "deepseek", "gemini", "minimax
 
 // Fallback: Google Favicon for agents not yet in LobeHub
 const FAVICONS: Record<string, string> = {};
+const LOCAL_ICONS: Record<string, string> = {
+  "WorkBuddy Desktop": "/provider-icons/workbuddy.svg",
+};
 
 const PROVIDER_ICON_TYPES: Record<string, string> = {
   anthropic: "Claude Code",
@@ -73,6 +77,7 @@ const PROVIDER_ICON_TYPES: Record<string, string> = {
   github: "Copilot",
   deepseek: "DeepSeek CLI",
   kimi: "Kimi CLI",
+  workbuddy: "WorkBuddy Desktop",
 };
 
 export function cx(...parts: Array<string | false | null | undefined>): string {
@@ -103,14 +108,20 @@ export function iconMarkup(type: string, cache = new Map<string, string>()): str
   if (cached) return cached;
   const name = ICONS[type];
   const domain = FAVICONS[type];
+  const local = LOCAL_ICONS[type];
   let html: string;
-  if (name) {
+  if (local) {
+    html = `<img class="w-[18px] h-[18px] rounded-[3px] shrink-0" src="${local}" alt="${escapeHtml(type)}">`;
+  } else if (name) {
     const asset = COLOR_ICONS.has(name) ? `${name}-color` : name;
     html = `<picture><source srcset="${ICON_CDN}/light/${asset}.png" media="(prefers-color-scheme: light)"><img class="w-[18px] h-[18px] rounded-[3px] shrink-0" src="${ICON_CDN}/dark/${asset}.png" alt="${escapeHtml(type)}"></picture>`;
   } else if (domain) {
     html = `<img class="w-[18px] h-[18px] rounded-[3px] shrink-0" src="https://www.google.com/s2/favicons?domain=${domain}&sz=32" alt="${escapeHtml(type)}">`;
   } else {
     html = `<span class="w-[18px] h-[18px] rounded-[3px] shrink-0 bg-icon text-[9px] inline-flex items-center justify-center text-muted" aria-label="${escapeHtml(type)}">${escapeHtml(type.slice(0, 1))}</span>`;
+  }
+  if (type === "Claude Desktop") {
+    html = `<span class="agent-icon agent-icon--badged">${html}<span class="agent-icon-badge agent-icon-badge--desktop" aria-hidden="true"></span></span>`;
   }
   cache.set(type, html);
   return html;
@@ -400,10 +411,10 @@ function providerFormLabel(row: PlanRow): string {
 function providerLeftText(row: PlanRow): string {
   if (row.form === "api") {
     const unit = row.unit ? ` ${row.unit}` : "";
-    if (row.remaining !== undefined) return `${row.remaining}${unit} left`;
-    if (row.used !== undefined && row.limit !== undefined) return `${row.used}/${row.limit}${unit}`;
-    if (row.used !== undefined) return `${row.used}${unit} used`;
-    if (row.limit !== undefined) return `${row.limit}${unit} limit`;
+    if (row.remaining !== undefined) return `${formatProviderNumber(row.remaining)}${unit} left`;
+    if (row.used !== undefined && row.limit !== undefined) return `${formatProviderNumber(row.used)}/${formatProviderNumber(row.limit)}${unit}`;
+    if (row.used !== undefined) return `${formatProviderNumber(row.used)}${unit} used`;
+    if (row.limit !== undefined) return `${formatProviderNumber(row.limit)}${unit} limit`;
     return "—";
   }
   const unit = row.unit ? ` ${row.unit}` : "";
@@ -411,6 +422,10 @@ function providerLeftText(row: PlanRow): string {
     return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit}`;
   }
   return row.remaining !== undefined ? `${Math.round(row.remaining)}%` : "—";
+}
+
+function formatProviderNumber(value: number): string {
+  return value.toLocaleString("en-US", { maximumFractionDigits: 5, useGrouping: false });
 }
 
 function providerLevelLabel(row: PlanRow): string {
