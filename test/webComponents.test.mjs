@@ -179,8 +179,14 @@ test("distinguishes Claude Desktop from Claude Code with a monitor badge", () =>
   const desktop = iconMarkup("Claude Desktop");
   const cli = iconMarkup("Claude Code");
   assert.match(desktop, /claude-color\.png/);
+  assert.match(cli, /claudecode-color\.png/);
   assert.match(desktop, /agent-icon-badge--desktop/);
   assert.doesNotMatch(cli, /agent-icon-badge/);
+});
+
+test("uses harness-specific LobeHub icons for Codex and Gemini CLI", () => {
+  assert.match(iconMarkup("Codex"), /codex-color\.png/);
+  assert.match(iconMarkup("Gemini CLI"), /geminicli-color\.png/);
 });
 
 test("renders live AI credit usage for a subscription row", () => {

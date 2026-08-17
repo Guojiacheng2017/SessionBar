@@ -46,10 +46,10 @@ export interface ProviderTableState {
 const ICON_CDN = "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest";
 
 const ICONS: Record<string, string> = {
-  "Claude Code": "claude",
+  "Claude Code": "claudecode",
   "Claude Desktop": "claude",
-  Codex: "openai",
-  "Gemini CLI": "gemini",
+  Codex: "codex",
+  "Gemini CLI": "geminicli",
   Copilot: "copilot",
   "DeepSeek CLI": "deepseek",
   "Kimi CLI": "moonshot",
@@ -63,7 +63,7 @@ const ICONS: Record<string, string> = {
   OpenCode: "",
 };
 
-const COLOR_ICONS = new Set(["claude", "copilot", "deepseek", "gemini", "minimax", "qwen"]);
+const COLOR_ICONS = new Set(["claude", "claudecode", "codex", "copilot", "deepseek", "geminicli", "minimax", "qwen"]);
 
 // Fallback: Google Favicon for agents not yet in LobeHub
 const FAVICONS: Record<string, string> = {};

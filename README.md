@@ -12,17 +12,16 @@ normalizes sessions from multiple agent harnesses, groups them by project
 directory, and presents the result in a terminal UI or local Web dashboard.
 
 One project can contain several concurrent Claude Code, Codex, Gemini,
-Copilot, CodeBuddy, or WorkBuddy sessions. SessionBar keeps those sessions separate instead
+Copilot, or WorkBuddy sessions. SessionBar keeps those sessions separate instead
 of treating the project as a single agent process.
 
 ### Supported harnesses
 
 <p>
-  <kbd><img src="https://cdn.simpleicons.org/anthropic/D97757" width="14" height="14" alt=""> Claude Code</kbd>
-  <kbd><img src="https://cdn.simpleicons.org/openai/10A37F" width="14" height="14" alt=""> Codex</kbd>
-  <kbd><img src="https://cdn.simpleicons.org/googlegemini/8E75B2" width="14" height="14" alt=""> Gemini CLI</kbd>
-  <kbd><img src="https://cdn.simpleicons.org/githubcopilot/000000" width="14" height="14" alt=""> GitHub Copilot CLI</kbd>
-  <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> CodeBuddy CLI</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claudecode-color.svg" width="14" height="14" alt=""> Claude Code</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/codex-color.svg" width="14" height="14" alt=""> Codex</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/geminicli-color.svg" width="14" height="14" alt=""> Gemini CLI</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/copilot-color.svg" width="14" height="14" alt=""> GitHub Copilot CLI</kbd>
   <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> WorkBuddy Desktop</kbd>
 </p>
 
@@ -49,7 +48,7 @@ of treating the project as a single agent process.
 - Project-first navigation with per-project session lists and session details.
 - Separate agent, session ID, task, status, freshness, context, and usage data.
 - Overview, Activity, Usage, Flow, Raw, and System detail views.
-- Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, CodeBuddy CLI, WorkBuddy Desktop, and extensible hook support.
+- Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, WorkBuddy Desktop, and extensible hook support.
 - Local provider quota and usage adapters without exposing credentials to the UI.
 - Cached CPU, memory, load, temperature, and network telemetry.
 - Stable alternate-screen rendering with slower polling while unfocused.
