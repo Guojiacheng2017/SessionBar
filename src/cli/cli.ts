@@ -203,8 +203,9 @@ async function ensureServerRunning(quiet = false): Promise<boolean> {
   ensureDir();
   if (await waitForReady(1)) return true;
   if (pidAlive()) {
+    if (await waitForReady(4)) return true;
     // A live PID without a reachable API is not useful for the app. Restart it
-    // so opening SessionBar consistently brings up the service.
+    // only after bounded retries rule out a transient sleep or scheduling gap.
     stopServer(true);
     await delay(300);
   }

@@ -33,6 +33,14 @@ test("service readiness does not register hooks as a side effect", () => {
   assert.doesNotMatch(serviceBody, /injectHooksOnServerReady|setupClaudeHooks/);
 });
 
+test("a live relay gets bounded health retries before it can be restarted", () => {
+  const serviceBody = functionBody("ensureServerRunning");
+  const retry = serviceBody.indexOf("if (await waitForReady(4)) return true;");
+  const restart = serviceBody.indexOf("stopServer(true)");
+  assert.notEqual(retry, -1);
+  assert.ok(restart > retry, "bounded health retry must happen before restart");
+});
+
 test("an active TUI restarts the relay once after a connection failure", () => {
   const fetchBody = cliSource.slice(
     cliSource.indexOf("async function fetchSessions"),
