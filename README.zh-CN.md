@@ -271,11 +271,14 @@ npm test
 4. 不猜测 Provider 数据，未知字段应保持不可用状态。
 5. 始终区分 Project Identity 和 Session Identity。
 
-## 更新日志
+## 最新动态
 
-### 尚未发布
+### 最近发布的功能
 
-- 防止已退出的旧进程删除当前 Server 的运行端口与锁文件。
+- 在一个按 Project 组织的界面中监控多个受支持编程 Harness 的 Session。
+- 通过 TUI 和 Web UI 查看 Projects、Sessions 与 Details。
+- 独立查看 Provider 的订阅、配额和用量信息，不与 Session Identity 混合。
+- 保持 Server 启动时动态选择的端口稳定，避免旧进程清理当前运行状态。
 
 ## 贡献者
 

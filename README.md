@@ -287,12 +287,16 @@ Before opening a pull request:
 4. Preserve unknown provider fields as unavailable instead of guessing.
 5. Keep project identity and session identity separate.
 
-## Changelog
+## What's New
 
-### Unreleased
+### Recently released features
 
-- Prevented an exiting stale process from deleting the active server's runtime
-  port and lock files.
+- Monitor sessions from supported coding harnesses in one project-oriented view.
+- Inspect Projects, Sessions, and Details from both the TUI and Web UI.
+- Review provider subscription, quota, and usage information without mixing it
+  into session identity.
+- Keep the active server's dynamically selected port stable and protected from
+  stale process cleanup.
 
 ## Contributions
 
