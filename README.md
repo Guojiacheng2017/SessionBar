@@ -289,14 +289,12 @@ Before opening a pull request:
 
 ## What's New
 
-### Recently released features
-
-- Monitor sessions from supported coding harnesses in one project-oriented view.
-- Inspect Projects, Sessions, and Details from both the TUI and Web UI.
-- Review provider subscription, quota, and usage information without mixing it
-  into session identity.
-- Keep the active server's dynamically selected port stable and protected from
-  stale process cleanup.
+- **2026-08-24 · Fixed:** Protected the active Server's dynamically selected
+  port and runtime state from stale process cleanup.
+- **2026-08-17 · Added:** Discovered Claude Desktop and WorkBuddy Desktop
+  sessions alongside CLI harness sessions.
+- **2026-08-17 · Added:** Introduced Provider usage modes for comparing token,
+  cost, and percentage-based usage.
 
 ## Contributions
 

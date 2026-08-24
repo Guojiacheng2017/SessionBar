@@ -273,12 +273,10 @@ npm test
 
 ## 最新动态
 
-### 最近发布的功能
-
-- 在一个按 Project 组织的界面中监控多个受支持编程 Harness 的 Session。
-- 通过 TUI 和 Web UI 查看 Projects、Sessions 与 Details。
-- 独立查看 Provider 的订阅、配额和用量信息，不与 Session Identity 混合。
-- 保持 Server 启动时动态选择的端口稳定，避免旧进程清理当前运行状态。
+- **2026-08-24 · 修复：** 保护当前 Server 动态选择的端口和运行状态，避免被旧进程清理。
+- **2026-08-17 · 新增：** 将 Claude Desktop 与 WorkBuddy Desktop Session
+  和 CLI Harness Session 一起发现并展示。
+- **2026-08-17 · 新增：** Provider 用量模式，可比较 Token、费用和百分比用量。
 
 ## 贡献者
 
