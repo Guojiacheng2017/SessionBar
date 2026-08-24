@@ -271,6 +271,12 @@ npm test
 4. 不猜测 Provider 数据，未知字段应保持不可用状态。
 5. 始终区分 Project Identity 和 Session Identity。
 
+## 更新日志
+
+### 尚未发布
+
+- 防止已退出的旧进程删除当前 Server 的运行端口与锁文件。
+
 ## 贡献者
 
 欢迎提交代码、Bug Report、可复现的性能数据以及 Harness Adapter 改进。提交

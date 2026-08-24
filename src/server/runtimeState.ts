@@ -58,10 +58,12 @@ export function releaseAppClient(home: string, pid = process.pid, alive: PidAliv
 export function readRuntimeState(home: string): SessionBarRuntimeState | undefined {
   const paths = runtimePaths(home);
   try {
-    const pid = Number(readFileSync(paths.pid, "utf8").trim().split("|")[0]);
+    const [pidText, , startedAtText] = readFileSync(paths.pid, "utf8").trim().split("|");
+    const pid = Number(pidText);
     const port = Number(readFileSync(paths.port, "utf8").trim());
+    const started_at = Number(startedAtText || 0);
     if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(port) || port <= 0 || port > 65_535) return undefined;
-    return { pid, port, started_at: 0 };
+    return { pid, port, started_at: Number.isFinite(started_at) ? started_at : 0 };
   } catch {
     return undefined;
   }
@@ -99,12 +101,17 @@ export function acquireInstanceLock(home: string, pid = process.pid): number | u
   return undefined;
 }
 
-export function releaseRuntimeState(home: string, lockFd?: number): void {
+export function releaseRuntimeState(home: string, lockFd?: number, ownerPid = process.pid): boolean {
   const paths = runtimePaths(home);
   if (lockFd !== undefined) {
     try { closeSync(lockFd); } catch { /* ignore */ }
   }
+  let lockOwner = 0;
+  try { lockOwner = Number(readFileSync(paths.lock, "utf8").trim()); } catch { /* absent */ }
+  const runtimeOwner = readRuntimeState(home)?.pid;
+  if (lockOwner !== ownerPid || (runtimeOwner !== undefined && runtimeOwner !== ownerPid)) return false;
   for (const path of [paths.lock, paths.pid, paths.port]) {
     if (existsSync(path)) try { unlinkSync(path); } catch { /* ignore */ }
   }
+  return true;
 }

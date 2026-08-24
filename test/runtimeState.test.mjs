@@ -34,9 +34,27 @@ test("runtime state shares the selected port and lock prevents a second instance
     assert.notEqual(lock, undefined);
     assert.equal(acquireInstanceLock(home, process.pid), undefined);
     writeRuntimeState(home, { pid: process.pid, port: 54321, started_at: 123 });
-    assert.deepEqual(readRuntimeState(home), { pid: process.pid, port: 54321, started_at: 0 });
-    releaseRuntimeState(home, lock);
+    assert.deepEqual(readRuntimeState(home), { pid: process.pid, port: 54321, started_at: 123 });
+    assert.equal(releaseRuntimeState(home, lock), true);
     assert.equal(readRuntimeState(home), undefined);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("an old process cannot clear a newer server's runtime port", () => {
+  const home = mkdtempSync(join(tmpdir(), "sessionbar-runtime-owner-"));
+  try {
+    const currentPid = process.pid;
+    const oldPid = currentPid + 100_000;
+    const lock = acquireInstanceLock(home, currentPid);
+    assert.notEqual(lock, undefined);
+    writeRuntimeState(home, { pid: currentPid, port: 54322, started_at: 456 });
+
+    assert.equal(releaseRuntimeState(home, undefined, oldPid), false);
+    assert.deepEqual(readRuntimeState(home), { pid: currentPid, port: 54322, started_at: 456 });
+
+    assert.equal(releaseRuntimeState(home, lock, currentPid), true);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

@@ -287,6 +287,13 @@ Before opening a pull request:
 4. Preserve unknown provider fields as unavailable instead of guessing.
 5. Keep project identity and session identity separate.
 
+## Changelog
+
+### Unreleased
+
+- Prevented an exiting stale process from deleting the active server's runtime
+  port and lock files.
+
 ## Contributions
 
 Code contributions, bug reports, reproducible performance traces, and harness
