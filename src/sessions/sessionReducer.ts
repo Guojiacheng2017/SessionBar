@@ -1,4 +1,4 @@
-import type { HookEvent, UsageSnapshotEvent, WorkflowEvent } from "../hooks/hookEvents.js";
+import type { HookEvent, UsageSnapshotEvent } from "../hooks/hookEvents.js";
 import type { SessionAgentSignal, SessionPayload, SessionUnknownEvent, SessionWorkflowEvent } from "../shared/types.js";
 
 const MAX_BUFFERED_EVENTS = 20;
@@ -64,7 +64,6 @@ export function reduceSessionEvents(prev: SessionPayload | undefined, events: re
         notes: event.notes,
       };
       session.workflow_events = [...(session.workflow_events ?? []), nextWorkflow].slice(-MAX_BUFFERED_EVENTS);
-      applyWorkflowState(session, event);
       session.timestamp = event.timestamp;
     } else if (event.type === "unknown") {
       const nextUnknown: SessionUnknownEvent = {
@@ -135,81 +134,6 @@ function applyUsageSnapshot(
 function usagePoint(session: SessionPayload | undefined): { tokens: number; timestamp: number } | undefined {
   if (!session || session.tokens === undefined) return undefined;
   return { tokens: session.tokens, timestamp: session.timestamp };
-}
-
-function applyWorkflowState(session: SessionPayload, event: WorkflowEvent): void {
-  if (event.confidence === "low" || event.mapping_type === "weak") return;
-
-  switch (event.canonical_stage_id) {
-    case "permission.request":
-      session.status = "blocked";
-      session.task_name = "Waiting for permission";
-      return;
-    case "permission.denied":
-      session.status = "blocked";
-      session.task_name = "Permission denied";
-      return;
-    case "tool.execute.failed":
-    case "agent.turn.stop_failed":
-    case "session.interrupt":
-      session.status = "error";
-      session.task_name = workflowTaskLabel(event);
-      return;
-    case "session.end":
-      session.status = "idle";
-      session.task_name = "Session ended";
-      return;
-    case "agent.turn.stop":
-    case "session.idle":
-      session.status = "idle";
-      session.task_name = "Ready";
-      return;
-    case "session.start":
-    case "prompt.submit":
-    case "tool.execute.before":
-    case "tool.selection.before":
-    case "model.request.before":
-    case "agent.loop.before":
-    case "context.compact.before":
-    case "subagent.start":
-      session.status = "working";
-      if (isGenericTaskName(session.task_name)) {
-        session.task_name = workflowTaskLabel(event);
-      }
-      return;
-  }
-}
-
-function workflowTaskLabel(event: WorkflowEvent): string {
-  switch (event.canonical_stage_id) {
-    case "tool.execute.before":
-      return "Using tool";
-    case "tool.selection.before":
-      return "Selecting tool";
-    case "model.request.before":
-      return "Thinking";
-    case "context.compact.before":
-      return "Compacting context";
-    case "prompt.submit":
-      return "Handling prompt";
-    case "agent.loop.before":
-      return "Agent running";
-    case "subagent.start":
-      return "Subagent running";
-    case "tool.execute.failed":
-      return "Tool failed";
-    case "agent.turn.stop_failed":
-      return "Stop failed";
-    case "session.interrupt":
-      return "Interrupted";
-    default:
-      return event.raw_event;
-  }
-}
-
-function isGenericTaskName(taskName: string | undefined): boolean {
-  if (!taskName) return true;
-  return ["Active", "Ready", "Working", "Session ended"].includes(taskName);
 }
 
 function agentSignalKey(signal: Pick<SessionAgentSignal, "signal" | "source" | "scope" | "kind">): string {

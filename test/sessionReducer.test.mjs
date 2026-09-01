@@ -188,7 +188,7 @@ test("unknown events are retained and do not block state updates", () => {
   assert.deepEqual(session.unknown_events[0].raw, raw);
 });
 
-test("common workflow events update lightweight session state", () => {
+test("common workflow events are visible without changing session state", () => {
   const session = reduceSessionEvents(undefined, [
     {
       ...base,
@@ -216,8 +216,8 @@ test("common workflow events update lightweight session state", () => {
     },
   ]);
 
-  assert.equal(session.status, "blocked");
-  assert.equal(session.task_name, "Waiting for permission");
+  assert.equal(session.status, "idle");
+  assert.equal(session.task_name, "Ready");
   assert.equal(session.workflow_events.length, 1);
   assert.equal(session.workflow_events[0].raw_event, "PermissionRequest");
   assert.equal(session.workflow_events[0].canonical_stage_id, "permission.request");
@@ -225,6 +225,34 @@ test("common workflow events update lightweight session state", () => {
   assert.equal(session.workflow_events[0].confidence, "high");
   assert.equal(session.workflow_events[0].timestamp, 1_700_000_001_000);
   assert.equal(session.unknown_events.length, 1);
+});
+
+test("all workflow stages preserve explicit state, usage, quota and structured flow", () => {
+  const previous = {
+    session_id: base.session_id, session_type: base.agent_type,
+    status: "idle", task_name: "Ready", timestamp: 1000,
+    tokens: 123, quota_percent: 42, progress: 70, flow: { nodes: [], edges: [] },
+    workflow_events: [],
+  };
+  for (const stage of [
+    "permission.request", "permission.denied", "tool.execute.failed",
+    "agent.turn.stop_failed", "session.interrupt", "session.end",
+    "agent.turn.stop", "session.idle", "session.start", "prompt.submit",
+    "tool.execute.before", "tool.selection.before", "model.request.before",
+    "agent.loop.before", "context.compact.before", "subagent.start",
+  ]) {
+    const next = reduceSessionEvents(previous, [{
+      ...base, type: "workflow_event", timestamp: 2000, raw_event: stage,
+      canonical_stage_id: stage, canonical_category: "test",
+      canonical_direction: "before", mapping_type: "same_concept", confidence: "high",
+    }]);
+    for (const field of ["status", "task_name", "tokens", "quota_percent", "progress", "flow"]) {
+      assert.deepEqual(next[field], previous[field], `${stage}: ${field}`);
+    }
+    assert.equal(next.timestamp, 2000);
+    assert.equal(next.workflow_events.length, 1);
+    assert.equal(previous.workflow_events.length, 0);
+  }
 });
 
 test("weak workflow events are retained without driving session state", () => {
