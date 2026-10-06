@@ -5,6 +5,7 @@ import {
   createSingleFlightRefresh,
   createVisibleModelUpdater,
   monitorBodyLayout,
+  monitorWorkspaceLayout,
   monitorPollDelay,
   monitorVisibleModel,
   nextVisibleFreshnessDelay,
@@ -102,6 +103,28 @@ test("monitor body layout fits every panel within a 40-column renderer", () => {
   assert.ok(layout.detailContentWidth <= layout.detailPanelWidth - 4);
   assert.ok(systemOverviewText(systemSnapshot(), layout.detailContentWidth, 11_000)
     .split("\n").every(line => line.length <= layout.detailContentWidth));
+});
+
+test("wide monitor workspace gives Projects, Sessions, and Details independent columns", () => {
+  const layout = monitorWorkspaceLayout(154);
+  assert.equal(layout.direction, "row");
+  assert.ok(layout.projectWidth >= 26);
+  assert.ok(layout.sessionsWidth >= 34);
+  assert.ok(layout.detailsWidth >= 36);
+  assert.equal(layout.projectWidth + layout.sessionsWidth + layout.detailsWidth + 2, 152);
+  assert.equal(layout.projectHeight, "100%");
+  assert.equal(layout.detailsHeight, "100%");
+});
+
+test("narrow monitor workspace stacks all three panels without dropping one", () => {
+  const layout = monitorWorkspaceLayout(80);
+  assert.equal(layout.direction, "column");
+  assert.equal(layout.projectWidth, "100%");
+  assert.equal(layout.sessionsWidth, "100%");
+  assert.equal(layout.detailsWidth, "100%");
+  assert.equal(layout.projectHeight, 8);
+  assert.equal(layout.sessionsHeight, 9);
+  assert.equal(layout.detailsHeight, "auto");
 });
 
 test("system overview renders a deterministic compact efficiency panel", () => {
@@ -209,6 +232,22 @@ function monitorState(overrides = {}) {
     ...overrides,
   };
 }
+
+test("visible content uses the actual three-pane workspace widths", () => {
+  for (const width of [40, 80, 119, 120, 140, 154, 200]) {
+    const workspace = monitorWorkspaceLayout(width);
+    const model = monitorVisibleModel(monitorState(), { width, height: 44 }, 11_000);
+    const panelWidth = value => typeof value === "number" ? value : width - 2;
+    assert.equal(model.detailsWidth, panelWidth(workspace.detailsWidth));
+    assert.equal(model.sessionsWidth, panelWidth(workspace.sessionsWidth));
+    const content = typeof model.detailsContent === "string"
+      ? model.detailsContent : model.detailsContent.chunks.map(chunk => chunk.text).join("");
+    assert.ok(content.split("\n").every(line => line.length <= model.detailsWidth - 4), `details overflow at ${width}`);
+    if (workspace.direction === "row") {
+      assert.deepEqual(model.projectsContent[0].map(chunks => chunks.map(chunk => chunk.text).join("")), ["", "Project", "#", "Age"]);
+    }
+  }
+});
 
 test("monitor resolves the displayed port from current runtime state", () => {
   const renderer = { width: 100, height: 30 };
@@ -517,10 +556,11 @@ function apiRow(overrides = {}) {
 }
 
 test("provider summary line renders subscription rows with level/pacing/card/reset", () => {
-  const line = providerSummaryLine(subscriptionRow());
+  const line = providerSummaryLine(subscriptionRow({ measuredRate: 0.66, unit: "%" }));
   assert.match(line, /Subscription/);
   assert.match(line, /level green/);
   assert.match(line, /pacing ok/);
+  assert.match(line, /rate 0\.7%\/h avg/);
   assert.match(line, /card reset 3d/);
   assert.match(line, /reset 5h/);
 });

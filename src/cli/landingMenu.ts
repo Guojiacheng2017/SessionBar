@@ -178,7 +178,7 @@ export interface LandingMenuDeps {
   teardownHooks: (global: boolean, quiet?: boolean) => void;
 
   // Config
-  port: number;
+  getPort: () => number;
 }
 
 // ---- Main orchestrator ---------------------------------------------------
@@ -191,7 +191,7 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     ensureAppRunning, fetchSessions, fetchWebStatus, pidAlive,
     launchMonitor, launchSetup, launchStatus, launchSettings, launchWeb,
     teardownHooks,
-    port,
+    getPort,
   } = deps;
 
   // ---- Colour palette ----------------------------------------------------
@@ -278,6 +278,7 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
 
   const renderLanding = async () => {
     setMenuScreen(true);
+    const port = getPort();
 
     if (tty && menuFrameLines > 0) process.stdout.write(`\x1b[${menuFrameLines}F\x1b[J`);
     else console.log("");

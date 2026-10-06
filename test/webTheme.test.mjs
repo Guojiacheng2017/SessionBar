@@ -9,7 +9,8 @@ const [html, css] = await Promise.all([
 
 test("uses the system color scheme as the Web UI theme source", () => {
   assert.match(html, /color-scheme" content="light dark"/);
-  assert.match(html, /darkMode:\s*['"]media['"]/);
+  assert.match(html, /href="\.\/tailwind\.css"/);
+  assert.doesNotMatch(html, /cdn\.tailwindcss\.com|tailwind\.config/);
   assert.doesNotMatch(html, /<html[^>]+class=["'][^"']*\bdark\b/i);
   assert.match(css, /@media\s*\(prefers-color-scheme:\s*dark\)/);
   assert.match(css, /--sb-canvas:\s*#f4f6fa/);

@@ -33,7 +33,7 @@ export function computeAdvice(state: QuotaState, now: number): Advice {
   let level: Advice["level"] = "green";
   if (remaining === 0) {
     level = "red";
-  } else if (remaining < limit * 0.05 && measuredRate > 0) {
+  } else if (remaining < limit * 0.05) {
     level = "red";
   } else if (projectedCapHitAt !== null) {
     const windowMs = resetAt - now;
@@ -42,7 +42,7 @@ export function computeAdvice(state: QuotaState, now: number): Advice {
     level = "yellow";
   }
 
-  let pacing = pacingText(remaining, measuredRate, sustainableRate, level);
+  let pacing = pacingText(remaining, measuredRate, sustainableRate, level, state.rateUnit);
   if (windowReset) {
     // expired window: never report a normal green/OK pacing with sustainable 0
     level = "yellow";
@@ -52,19 +52,26 @@ export function computeAdvice(state: QuotaState, now: number): Advice {
   const cardTiming = cardTimingText(state.cards ?? [], projectedCapHitAt, resetAt, now, remaining);
   const autoResetIn = autoResetText(resetAt, now);
 
-  return { sustainableRate, actualVsSustainable, projectedCapHitAt, level, pacing, cardTiming, autoResetIn };
+  return { measuredRate, sustainableRate, actualVsSustainable, projectedCapHitAt, level, pacing, cardTiming, autoResetIn };
 }
 
-function pacingText(remaining: number, measuredRate: number, sustainableRate: number, level: string): string {
+function pacingText(
+  remaining: number,
+  measuredRate: number,
+  sustainableRate: number,
+  level: string,
+  rateUnit = "tokens",
+): string {
   if (remaining === 0) return "Exhausted";
-  if (measuredRate <= 0) return "Observing";
-  const rate = Math.round(sustainableRate);
+  const rate = sustainableRate.toLocaleString("en-US", { maximumFractionDigits: 2, useGrouping: false });
+  const rateText = rateUnit === "%" ? `${rate}%/h` : `${rate} ${rateUnit}/h`;
   if (level === "red") {
-    if (measuredRate > sustainableRate) return `≤ ${rate} tokens/h`;
+    if (measuredRate > sustainableRate) return `≤ ${rateText}`;
     return "<5% left";
   }
-  if (level === "yellow") return `≤ ${rate} tokens/h`;
-  return `${rate}/h, OK`;
+  if (measuredRate <= 0) return "Observing";
+  if (level === "yellow") return `≤ ${rateText}`;
+  return `${rateText}, OK`;
 }
 
 function cardTimingText(

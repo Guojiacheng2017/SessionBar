@@ -12,6 +12,7 @@ const WHAM_PROFILE = "https://chatgpt.com/backend-api/wham/profiles/me";
 const WHAM_CREDITS = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const WHAM_CONSUME = `${WHAM_CREDITS}/consume`;
 const MS_PER_HOUR = 3_600_000;
+const WEEKLY_WINDOW_MS = 7 * 24 * MS_PER_HOUR;
 const AUTO_CONSUME_WINDOW_MS = 5 * 60_000;
 
 interface WhamOpts {
@@ -89,19 +90,27 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
     // codex /status "54% left (resets Aug 8)" derives from used_percent=46 + reset_at.
     const rateLimit = sub(usage, "rate_limit");
     const primary = sub(rateLimit, "primary_window");
-    const utilization = num(primary?.used_percent ?? usage.utilization);    const resetRaw = primary?.reset_at ?? usage.reset_at;
+    const utilization = num(primary?.used_percent ?? usage.utilization);
+    const resetRaw = primary?.reset_at ?? usage.reset_at;
     const resetAt = resetRaw ? parseTs(resetRaw) : undefined;
     if (utilization === undefined) return null; // no weekly quota data -> skip
 
     // wham/usage only provides used_percent + reset, no numeric quota -> use 100 as an abstract percent quota
     const limit = 100;
     const remaining = Math.max(0, Math.round(limit * (1 - utilization / 100)));
+    const dailyRate = weeklyAverageDailyRate(utilization, resetAt, now);
     const state: QuotaState = {
       window: "weekly",
       limit,
       remaining,
       resetAt: resetAt ?? now + 7 * 24 * MS_PER_HOUR,
-      rateSamples: [],
+      // QuotaEngine projects in hours. This is a calendar-day baseline, not an
+      // hourly EMA, so convert it to an hourly equivalent for projection only.
+      rateSamples: dailyRate === undefined ? [] : [
+        { value: dailyRate / 24, at: now - 1 },
+        { value: dailyRate / 24, at: now },
+      ],
+      rateUnit: "%",
       cards,
     };
     const advice = computeAdvice(state, now);
@@ -112,6 +121,8 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
       label: "OpenAI Subscription",
       level: advice.level,
       pacing: advice.pacing,
+      measuredRate: advice.measuredRate,
+      ...(dailyRate === undefined ? {} : { measuredRateLabel: `${formatRate(dailyRate)}%/day avg` }),
       cardTiming: advice.cardTiming,
       autoResetIn: advice.autoResetIn,
       sustainableRate: advice.sustainableRate,
@@ -126,6 +137,22 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
   } catch {
     return null;
   }
+}
+
+function weeklyAverageDailyRate(
+  utilization: number,
+  resetAt: number | undefined,
+  now: number,
+): number | undefined {
+  if (resetAt === undefined) return undefined;
+  const windowStartedAt = resetAt - WEEKLY_WINDOW_MS;
+  const elapsedDays = (now - windowStartedAt) / (24 * MS_PER_HOUR);
+  if (!Number.isFinite(elapsedDays) || elapsedDays <= 0) return undefined;
+  return Math.max(0, utilization) / elapsedDays;
+}
+
+function formatRate(value: number): string {
+  return value.toLocaleString("en-US", { maximumFractionDigits: 2, useGrouping: false });
 }
 
 function parseDailyTokenUsage(body: unknown, now: number): PlanRow["usageTrend"] | undefined {

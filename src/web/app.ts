@@ -13,11 +13,29 @@ import {
   projectIconListMarkup,
   providerDailyUsageMarkup,
   providerTableMarkup,
+  sceneSummaryMarkup,
   statusDotMarkup,
   statusLabel,
   statusSummaryMarkup,
   tabsMarkup,
 } from "./webComponents.js";
+
+interface SplideInstance {
+  index: number;
+  sync(other: SplideInstance): SplideInstance;
+  mount(): SplideInstance;
+  destroy(completely?: boolean): void;
+  go(control: number | string): SplideInstance;
+  on(event: string, callback: (...args: unknown[]) => void): SplideInstance;
+}
+
+interface SplideConstructor {
+  new (target: Element, options?: Record<string, unknown>): SplideInstance;
+}
+
+declare global {
+  interface Window { Splide?: SplideConstructor; }
+}
 
 const portEl   = document.getElementById("port")!;
 const countsEl = document.getElementById("counts")!;
@@ -57,9 +75,19 @@ let providersFetchInFlight = false;
 let providersRetryTimer: number | undefined;
 let providerRefreshTimer: number | undefined;
 let systemRefreshTimer: number | undefined;
+let sessionAgeTimer: number | undefined;
+let providerGalleryMain: SplideInstance | null = null;
+let providerGalleryTabs: SplideInstance | null = null;
+let providerGalleryIndex = 0;
 const iconCache = new Map<string, string>();
 const PROVIDER_USAGE_MODE_KEY = "sessionbar:provider-usage-mode";
 let providerUsageMode = readProviderUsageMode();
+
+function commitMarkup(element: Element, markup: string): boolean {
+  if (element.innerHTML === markup) return false;
+  element.innerHTML = markup;
+  return true;
+}
 
 function readProviderUsageMode(): ProviderUsageMode {
   try {
@@ -105,6 +133,7 @@ const sceneHoldDistance = 24;
 const sceneMomentumSpeed = 0.35;
 const sceneMomentumGrace = 180;
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const providerGalleryMedia = window.matchMedia("(max-width: 640px)");
 
 function extractProject(s: SessionPayload): string {
   if (s.project) return s.project;
@@ -150,24 +179,17 @@ function syncSessionWorkspace(): void {
   sessionWorkspace.style.removeProperty("height");
 }
 
-function sceneSummaryMarkup(): string {
+function currentSceneSummaryMarkup(): string {
   const counts = countSessions(lastSessions);
   const selected = selectedId ? lastSessions.find(s => s.session_id === selectedId) : undefined;
   const current = selected ? sessionDisplayName(selected) : focusedProject || "All sessions";
-  const sessionLabel = counts.total === 1 ? "session" : "sessions";
-  const states = [
-    counts.working > 0 ? `${statusDotMarkup("working")}<span>${counts.working} working</span>` : "",
-    counts.idle > 0 ? `${statusDotMarkup("idle")}<span>${counts.idle} idle</span>` : "",
-    counts.blocked > 0 ? `${statusDotMarkup("blocked")}<span>${counts.blocked} blocked</span>` : "",
-    counts.error > 0 ? `${statusDotMarkup("error")}<span>${counts.error} error${counts.error === 1 ? "" : "s"}</span>` : "",
-  ].filter(Boolean).join('<span class="session-compact-separator" aria-hidden="true">·</span>');
-  return `<span class="session-compact-title">Sessions</span><span class="session-compact-meta"><strong>${counts.total}</strong><span>${sessionLabel}</span>${states}<span class="session-compact-current">${escapeHtml(current)}</span></span>`;
+  return sceneSummaryMarkup(counts, current);
 }
 
 function renderSceneSummary(): void {
-  const markup = sceneSummaryMarkup();
-  sessionCompact.innerHTML = markup;
-  providersSessionBar.innerHTML = markup;
+  const markup = currentSceneSummaryMarkup();
+  commitMarkup(sessionCompact, markup);
+  commitMarkup(providersSessionBar, markup);
 }
 
 function clamp(value: number): number {
@@ -269,8 +291,61 @@ function renderProviders(): void {
     iconCache,
     usageMode: providerUsageMode,
   });
+  mountProviderGallery();
   providersBody.querySelector("[data-providers-retry]")?.addEventListener("click", () => { void fetchProviders(); });
   if (sceneExpandedHeight > 0) scheduleSceneMeasure();
+}
+
+function mountProviderGallery(): void {
+  if (providerGalleryMain) providerGalleryIndex = providerGalleryMain.index;
+  providerGalleryMain?.destroy(true);
+  providerGalleryTabs?.destroy(true);
+  providerGalleryMain = null;
+  providerGalleryTabs = null;
+  if (!providerGalleryMedia.matches || !window.Splide || providers.length === 0) return;
+  const mainElement = providersBody.querySelector(".provider-gallery-main");
+  const tabsElement = providersBody.querySelector(".provider-gallery-tabs");
+  if (!mainElement || !tabsElement) return;
+  const tabs = new window.Splide(tabsElement, {
+    autoWidth: true,
+    gap: "6px",
+    pagination: false,
+    arrows: false,
+    isNavigation: true,
+    focus: "center",
+    trimSpace: true,
+    drag: "free",
+    snap: true,
+    keyboard: "focused",
+    start: Math.min(providerGalleryIndex, providers.length - 1),
+  });
+  const main = new window.Splide(mainElement, {
+    type: "slide",
+    perPage: 1,
+    gap: "10px",
+    pagination: false,
+    arrows: false,
+    drag: true,
+    speed: 320,
+    flickMaxPages: 1,
+    autoHeight: true,
+    keyboard: "focused",
+    start: Math.min(providerGalleryIndex, providers.length - 1),
+  });
+  main.sync(tabs);
+  main.on("moved", (index) => { if (typeof index === "number") providerGalleryIndex = index; });
+  main.mount();
+  tabs.mount();
+  tabsElement.addEventListener("click", event => {
+    const tab = (event.target as Element | null)?.closest<HTMLElement>("[data-provider-gallery-index]");
+    if (!tab) return;
+    const index = Number(tab.dataset.providerGalleryIndex);
+    if (!Number.isInteger(index)) return;
+    providerGalleryIndex = index;
+    main.go(index);
+  }, { capture: true });
+  providerGalleryMain = main;
+  providerGalleryTabs = tabs;
 }
 
 async function fetchProviders(): Promise<void> {
@@ -513,7 +588,7 @@ function render(sessions: SessionPayload[]) {
   portEl.className = UI.connection;
 
   // Status summary — intentionally text-only; no proportional progress bar.
-  countsEl.innerHTML = statusSummaryMarkup(countSessions(sessions));
+  commitMarkup(countsEl, statusSummaryMarkup(countSessions(sessions)));
   renderSceneSummary();
 
   // Projects
@@ -525,7 +600,7 @@ function render(sessions: SessionPayload[]) {
   }
   const sorted = [...groups.entries()].sort((a,b)=>Math.max(...b[1].map(s=>s.timestamp||0))-Math.max(...a[1].map(s=>s.timestamp||0)));
 
-  projectsHdr.innerHTML = `<span class="${UI.panelTitle}">Projects (${sorted.length})</span>`;
+  commitMarkup(projectsHdr, `<span class="${UI.panelTitle}">Projects (${sorted.length})</span>`);
   let pH = "";
   for (const [proj, ss] of sorted) {
     const ws = ss.filter(s=>s.status==="working").length;
@@ -556,40 +631,14 @@ function render(sessions: SessionPayload[]) {
       +`<span class="project-row-meta" aria-label="${escapeHtml(`${projectMeta}, ${lastActiveLabel}`)}"><span class="project-row-status">${escapeHtml(projectMeta)}</span><span class="project-row-age">${escapeHtml(lastActive)}</span></span>`
       +"</button>";
   }
-  projectsBody.innerHTML = pH || `<div class="${UI.empty}">No projects</div>`;
-  projectsBody.querySelectorAll("[data-project]").forEach(el=>{el.addEventListener("click",()=>{
-    focusedProject = (el as HTMLElement).dataset.project === focusedProject ? null : (el as HTMLElement).dataset.project!;
-    selectedId = null;
-    expandedProjectIcons = null;
-    render(lastSessions);
-  })});
-  projectsBody.querySelectorAll("[data-project-icons]").forEach(el=>{
-    const toggle = (event: Event) => {
-      event.stopPropagation();
-      const stack = el as HTMLElement;
-      const project = stack.dataset.projectIcons!;
-      const expanding = expandedProjectIcons !== project;
-      if (expandedProjectIcons && expanding) {
-        const previous = [...projectsBody.querySelectorAll<HTMLElement>("[data-project-icons]")]
-          .find(item => item.dataset.projectIcons === expandedProjectIcons);
-        if (previous && previous !== stack) setProjectIconStackExpanded(previous, false);
-      }
-      expandedProjectIcons = expanding ? project : null;
-      setProjectIconStackExpanded(stack, expanding);
-    };
-    el.addEventListener("click", toggle);
-    el.addEventListener("keydown", event => {
-      const keyEvent = event as KeyboardEvent;
-      if (keyEvent.key === "Enter" || keyEvent.key === " ") toggle(event);
-    });
-  });
+  commitMarkup(projectsBody, pH || `<div class="${UI.empty}">No projects</div>`);
 
   // Sessions
   const scope = focusedProject ? shown.filter(s=>extractProject(s)===focusedProject) : shown;
   if (selectedId && !scope.find(s=>s.session_id===selectedId)) selectedId = null;
   const sSorted = [...scope].sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
   syncSessionWorkspace();
-  sessionsHdr.innerHTML = `<span class="${UI.panelTitle}">${focusedProject ? `Sessions / ${escapeHtml(focusedProject)}` : `All Sessions (${sSorted.length})`}</span>`;
+  commitMarkup(sessionsHdr, `<span class="${UI.panelTitle}">${focusedProject ? `Sessions / ${escapeHtml(focusedProject)}` : `All Sessions (${sSorted.length})`}</span>`);
   let sH = "";
   for (const s of sSorted) {
     const st = s.status||"idle";
@@ -605,39 +654,25 @@ function render(sessions: SessionPayload[]) {
       +`<span class="w-[34px] text-right shrink-0 text-muted text-[12px]">${age(s.timestamp||Date.now())}</span>`
       +"</button>";
   }
-  sessionsBody.innerHTML = sH || `<div class="${UI.empty}">No sessions</div>`;
-  sessionsBody.querySelectorAll("[data-sid]").forEach(el=>{el.addEventListener("click",()=>{
-    const sid = (el as HTMLElement).dataset.sid||null;
-    if (window.innerWidth < 1024) {
-      const s = scope.find(s=>s.session_id===sid);
-      if (s) showMobileDetail(s);
-    } else {
-      selectedId = sid;
-      render(lastSessions);
-    }
-  })});
+  commitMarkup(sessionsBody, sH || `<div class="${UI.empty}">No sessions</div>`);
 
   // Detail — desktop
   const sel = selectedId ? sSorted.find(s=>s.session_id===selectedId) : null;
   if (sel) {
     const tabs = ["Overview","Activity","Usage","Flow","Raw"];
-    detailHdr.innerHTML =
+    commitMarkup(detailHdr,
       `<span class="${UI.panelTitle}">Details / ${escapeHtml(sel.session_type||"Session")}</span>` +
-      `<span class="detail-tabs">${tabsMarkup(tabs, detailTab)}</span>`;
-    detailHdr.querySelectorAll(".detail-tab").forEach(el=>{el.addEventListener("click",()=>{
-      detailTab = parseInt((el as HTMLElement).dataset.tab||"0");
-      render(lastSessions);
-    })});
-    detailBody.innerHTML = detailHTML(sel);
+      `<span class="detail-tabs">${tabsMarkup(tabs, detailTab)}</span>`);
+    commitMarkup(detailBody, detailHTML(sel));
   } else if (focusedProject) {
-    detailHdr.innerHTML = `<span class="${UI.panelTitle}">Details / Project</span>`;
+    commitMarkup(detailHdr, `<span class="${UI.panelTitle}">Details / Project</span>`);
     const agents = [...new Set(scope.map(s=>s.session_type||"?"))].join(", ");
-    detailBody.innerHTML = detailListMarkup([
+    commitMarkup(detailBody, detailListMarkup([
       { label: "Project", value: focusedProject },
       { label: "Sessions", value: String(scope.length) },
       { label: "Agents", value: agents },
       { label: "Path", value: scope[0]?.project_path || "" },
-    ]);
+    ]));
   } else {
     systemMonitor.render();
   }
@@ -666,6 +701,49 @@ function connect() {
 
 filterInput.addEventListener("input", () => { if (lastSessions.length) render(lastSessions); });
 filterInput.addEventListener("keydown", e => { if (e.key==="Escape") { filterInput.value=""; focusedProject=null; if (lastSessions.length) render(lastSessions); } });
+projectsBody.addEventListener("click", event => {
+  const target = event.target as Element | null;
+  const stack = target?.closest<HTMLElement>("[data-project-icons]");
+  if (stack) {
+    event.stopPropagation();
+    const project = stack.dataset.projectIcons!;
+    expandedProjectIcons = expandedProjectIcons === project ? null : project;
+    render(lastSessions);
+    return;
+  }
+  const row = target?.closest<HTMLElement>("[data-project]");
+  if (!row) return;
+  focusedProject = row.dataset.project === focusedProject ? null : row.dataset.project!;
+  selectedId = null;
+  expandedProjectIcons = null;
+  render(lastSessions);
+});
+projectsBody.addEventListener("keydown", event => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const stack = (event.target as Element | null)?.closest<HTMLElement>("[data-project-icons]");
+  if (!stack) return;
+  event.preventDefault();
+  expandedProjectIcons = expandedProjectIcons === stack.dataset.projectIcons ? null : stack.dataset.projectIcons!;
+  render(lastSessions);
+});
+sessionsBody.addEventListener("click", event => {
+  const row = (event.target as Element | null)?.closest<HTMLElement>("[data-sid]");
+  if (!row) return;
+  const sid = row.dataset.sid || null;
+  if (window.innerWidth < 1024) {
+    const session = lastSessions.find(item => item.session_id === sid);
+    if (session) showMobileDetail(session);
+    return;
+  }
+  selectedId = sid;
+  render(lastSessions);
+});
+detailHdr.addEventListener("click", event => {
+  const tab = (event.target as Element | null)?.closest<HTMLElement>(".detail-tab");
+  if (!tab) return;
+  detailTab = Number.parseInt(tab.dataset.tab || "0", 10);
+  render(lastSessions);
+});
 document.addEventListener("click", event => {
   if (!expandedProjectIcons) return;
   const target = event.target as Element | null;
@@ -682,6 +760,7 @@ window.addEventListener("resize", () => {
   scheduleSceneMeasure();
 });
 reducedMotion.addEventListener("change", scheduleSceneMeasure);
+providerGalleryMedia.addEventListener("change", mountProviderGallery);
 for (const button of providerUsageModeButtons) {
   button.addEventListener("click", () => {
     const mode = button.dataset.providerUsageMode;
@@ -710,9 +789,19 @@ function scheduleSystemRefresh() {
   }, document.hidden ? 15_000 : 2_000);
 }
 
+function scheduleSessionAgeRefresh() {
+  if (sessionAgeTimer !== undefined) window.clearTimeout(sessionAgeTimer);
+  sessionAgeTimer = window.setTimeout(() => {
+    sessionAgeTimer = undefined;
+    if (lastSessions.length) render(lastSessions);
+    scheduleSessionAgeRefresh();
+  }, document.hidden ? 15_000 : 1_000);
+}
+
 document.addEventListener("visibilitychange", () => {
   scheduleProviderRefresh();
   scheduleSystemRefresh();
+  scheduleSessionAgeRefresh();
   if (!document.hidden) {
     void systemMonitor.refresh();
     void fetchProviders();
@@ -720,10 +809,12 @@ document.addEventListener("visibilitychange", () => {
 });
 scheduleProviderRefresh();
 scheduleSystemRefresh();
+scheduleSessionAgeRefresh();
 window.addEventListener("beforeunload", () => {
   if (providerRefreshTimer !== undefined) window.clearTimeout(providerRefreshTimer);
   if (providersRetryTimer !== undefined) window.clearTimeout(providersRetryTimer);
   if (systemRefreshTimer !== undefined) window.clearTimeout(systemRefreshTimer);
+  if (sessionAgeTimer !== undefined) window.clearTimeout(sessionAgeTimer);
   systemMonitor.stop();
 });
 

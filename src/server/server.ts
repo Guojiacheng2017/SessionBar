@@ -1,6 +1,5 @@
 import express from "express";
-import cors from "cors";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, Dirent } from "fs";
+import { writeFileSync, unlinkSync, existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, Dirent } from "fs";
 import { join, dirname, basename, resolve } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
@@ -31,6 +30,9 @@ import { disableAutoConsumeResetCards, readSettings } from "./settings.js";
 import { decorateProviderUsageFromSessions, loadSessionUsageState, syncSessionUsage } from "../sessions/sessionUsageImporter.js";
 import { discoverClaudeDesktopSessions } from "../sessions/claudeDesktopDiscovery.js";
 import { discoverWorkBuddyDesktopSessions } from "../sessions/workbuddyDesktopDiscovery.js";
+import { ensurePrivateDirectory } from "../shared/privateState.js";
+import { loadProviderLastGood, retainProviderLastGood, saveProviderLastGood } from "../providers/providerLastGood.js";
+import { isLoopbackHost, localRequestBoundary } from "./localRequestBoundary.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Start the HTTP server + polling loops only when run directly
@@ -40,25 +42,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const isDirectRun = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 const REQUESTED_PORT = configuredPort() ?? 0;
 const HOST = process.env.SESSIONBAR_HOST || "127.0.0.1";
+if (isDirectRun && !isLoopbackHost(HOST)) throw new Error("This release supports loopback HTTP only; LAN access is not released.");
 
 const app = express();
+app.disable("x-powered-by");
+app.use(localRequestBoundary);
 app.use(express.json());
-app.use(cors({
-  origin(origin, callback) {
-    callback(null, isAllowedOrigin(origin));
-  },
-}));
-
-function isAllowedOrigin(origin?: string): boolean {
-  if (!origin) return true;
-  try {
-    const url = new URL(origin);
-    const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-    return localHosts.has(url.hostname);
-  } catch {
-    return false;
-  }
-}
 
 // The dashboard shares the relay lifecycle. Keeping these routes registered
 // avoids restarting a dynamically-bound server just to open the Web UI.
@@ -73,6 +62,8 @@ app.get("/", (_req, res) => {
 const HOME = process.env.SESSIONBAR_HOME || process.env.AGENTBAR_HOME || join(homedir(), ".sessionbar");
 const SESSION_ID_DIR = join(HOME, "sessions");
 const PROVIDER_USAGE_HISTORY_PATH = join(HOME, "provider-usage-history.json");
+const PROVIDER_LAST_GOOD_PATH = join(HOME, "provider-last-good.json");
+const PROVIDER_LAST_GOOD_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), ".codex");
 const CODEX_SESSION_DIR = join(CODEX_HOME, "sessions");
 const CLAUDE_SESSION_DIR = join(homedir(), ".claude", "projects");
@@ -122,8 +113,8 @@ export function systemSampleDelay(lastClientAt: number, now: number, foregroundM
     : Math.max(foregroundMs, backgroundMs);
 }
 
-if (!existsSync(HOME)) mkdirSync(HOME, { recursive: true });
-if (!existsSync(SESSION_ID_DIR)) mkdirSync(SESSION_ID_DIR, { recursive: true });
+ensurePrivateDirectory(HOME);
+ensurePrivateDirectory(SESSION_ID_DIR);
 
 function cleanup() {
   clearInterval(heartbeatInterval);
@@ -211,7 +202,9 @@ const rateBuffers = new Map<string, RateBuffer>();
 // null means the first poll cycle hasn't completed yet — endpoints return
 // an initializing indicator so the TUI can show "Initializing..." instead
 // of "No quota data".
-let subscriptionRows: PlanRow[] | null = null;
+let providerLastGood = loadProviderLastGood(PROVIDER_LAST_GOOD_PATH, Date.now(), PROVIDER_LAST_GOOD_MAX_AGE_MS);
+let subscriptionRows: PlanRow[] | null = providerLastGood.rows.length > 0 || !PROVIDER_POLL_ENABLED
+  ? providerLastGood.rows.filter(row => row.form === "subscription") : null;
 export function getSubscriptionRows(): PlanRow[] | null { return subscriptionRows; }
 
 // Account-level API rows come directly from provider polling. They are kept
@@ -290,6 +283,7 @@ function advisorFingerprint(): string {
 }
 
 async function refreshProviderSignals() {
+  if (!PROVIDER_POLL_ENABLED) return;
   const now = Date.now();
   let changed = false;
   const providerConfigs = await activeProviderConfigs();
@@ -305,7 +299,7 @@ async function refreshProviderSignals() {
   // Refresh global subscription rows every poll — adapters read their own
   // credential files, so rows appear regardless of providerConfigs.
   const settings = readSettings(HOME);
-  subscriptionRows = await computePlanRows({
+  const freshSubscriptionRows = await computePlanRows({
     now,
     autoConsumeResetCards: settings.autoConsumeResetCards,
     consumptionStatePath: join(HOME, "reset-card-consumption.json"),
@@ -323,9 +317,15 @@ async function refreshProviderSignals() {
   const before = advisorFingerprint();
   for (const session of Object.values(sessions)) {
     const apiRows = await computeAdvisorRows(session, rateBuffers, now);
-    session.advisorRows = sessionAdvisorRows(session, apiRows, subscriptionRows ?? []);
+    session.advisorRows = apiRows;
   }
-  const aggregatedRows = aggregateProviders(subscriptionRows ?? [], sessions, providerApiRows);
+  const aggregatedRows = aggregateProviders(freshSubscriptionRows, sessions, providerApiRows);
+  providerLastGood = retainProviderLastGood(providerLastGood, aggregatedRows, now, PROVIDER_LAST_GOOD_MAX_AGE_MS);
+  saveProviderLastGood(PROVIDER_LAST_GOOD_PATH, providerLastGood);
+  subscriptionRows = providerLastGood.rows.filter(row => row.form === "subscription");
+  for (const session of Object.values(sessions)) {
+    session.advisorRows = sessionAdvisorRows(session, session.advisorRows ?? [], subscriptionRows);
+  }
   providerUsageHistory = recordProviderUsage(
     providerUsageHistory,
     aggregatedRows,
@@ -364,6 +364,7 @@ async function activeProviderConfigs() {
 }
 
 function startProviderPolling() {
+  if (!PROVIDER_POLL_ENABLED) return;
   // Start unconditionally — refreshProviderSignals resolves optional provider
   // sources internally, so the advisor still ticks (card expiry / reset
   // countdowns) even when no provider API keys are configured.
@@ -1006,7 +1007,7 @@ app.get("/providers/live", (_req, res) => {
     return;
   }
   const rows = decorateProviderUsage(
-    aggregateProviders(subscriptionRows, sessions, providerApiRows),
+    providerLastGood.rows.filter(row => Date.now() - (row.lastSeenAt ?? 0) <= PROVIDER_LAST_GOOD_MAX_AGE_MS),
     providerUsageHistory,
   );
   res.json({ providers: decorateProviderUsageFromSessions(decorateApiUsageFromCCSwitch(rows, ccSwitchUsage), sessionUsageState) });
@@ -1024,7 +1025,6 @@ app.get("/sessions/stream", (req, res) => {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    "Access-Control-Allow-Origin": "*",
   });
   res.on("error", () => { sseClients.delete(res); });
   sseClients.add(res);

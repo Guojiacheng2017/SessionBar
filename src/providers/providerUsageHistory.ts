@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, renameSync, writeFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { writePrivateState } from "../shared/privateState.js";
 import type { PlanRow, ProviderUsageTrend } from "./planTypes.js";
 import { usageModeForUnit, withProviderUsageTrend } from "./providerUsageMetrics.js";
 
@@ -7,6 +8,15 @@ interface DailySample {
   first: number;
   latest: number;
   consumed?: number;
+  latestAt?: number;
+  changes?: Array<{
+    at: number;
+    value: number;
+    inferred?: boolean;
+    restoration?: boolean;
+    excludedFromUsage?: boolean;
+    observed?: boolean;
+  }>;
 }
 
 interface ProviderHistoryEntry {
@@ -28,6 +38,7 @@ export function recordProviderUsage(
   now = Date.now(),
 ): ProviderUsageHistory {
   const next: ProviderUsageHistory = structuredClone(history);
+  repairLegacySyntheticPoints(next);
   const day = localDayKey(now);
   for (const row of rows) {
     const reading = metricReading(row);
@@ -39,22 +50,63 @@ export function recordProviderUsage(
       : { metric: reading.metric, samples: [] };
     const current = entry.samples.at(-1);
     if (current?.day === day) {
-      const accumulated = current.consumed
-        ?? consumptionDelta(entry.metric, current.first, current.latest);
-      current.consumed = accumulated + consumptionDelta(entry.metric, current.latest, reading.value);
-      current.latest = reading.value;
+      if (reading.value !== current.latest) {
+        const accumulated = current.consumed
+          ?? consumptionDelta(entry.metric, current.first, current.latest);
+        current.consumed = accumulated + consumptionDelta(entry.metric, current.latest, reading.value);
+        if (tracksQuotaChanges(row)) {
+          current.changes ??= Number.isFinite(current.latestAt)
+            ? [{ at: Number(current.latestAt), value: current.latest }]
+            : [];
+          current.changes.push({ at: now, value: reading.value, observed: true });
+        }
+        current.latest = reading.value;
+        current.latestAt = now;
+      }
     } else {
       entry.samples.push({
         day,
         first: reading.value,
         latest: reading.value,
         consumed: 0,
+        latestAt: now,
+        ...(tracksQuotaChanges(row) ? {
+          changes: [{ at: now, value: reading.value, observed: true }],
+        } : {}),
       });
     }
     entry.samples = entry.samples.slice(-MAX_HISTORY_DAYS);
     next[key] = entry;
   }
   return next;
+}
+
+function tracksQuotaChanges(row: PlanRow): boolean {
+  return row.form === "subscription" && row.unit?.trim() === "%";
+}
+
+function repairLegacySyntheticPoints(history: ProviderUsageHistory): void {
+  for (const [key, entry] of Object.entries(history)) {
+    if (!key.startsWith("openai:subscription:") || entry.metric !== "remaining") continue;
+    for (const sample of entry.samples) {
+      const points = sample.changes;
+      if (!points) continue;
+      for (let i = 1; i < points.length - 1; i++) {
+        const point = points[i];
+        const before = points[i - 1];
+        const after = points[i + 1];
+        // Earlier builds injected a zero exactly 1ms before the next observation.
+        if (point.observed || point.excludedFromUsage || point.value !== 0 || after.value <= 0
+          || !(point.inferred || after.at - point.at === 1)) continue;
+        const excess = consumptionDelta("remaining", before.value, 0)
+          - consumptionDelta("remaining", before.value, after.value);
+        sample.consumed = Math.max(0, (sample.consumed
+          ?? consumptionDelta(entry.metric, sample.first, sample.latest)) - excess);
+        point.inferred = true;
+        point.excludedFromUsage = true;
+      }
+    }
+  }
 }
 
 export function decorateProviderUsage(
@@ -117,7 +169,17 @@ function percentageTrend(
   });
   const hasPercentageSample: boolean = points.some(point => point !== null);
   if (!hasPercentageSample) points[points.length - 1] = current;
-  return { kind: "bars", days: 7, points, labels, unit: "%" };
+  const source = percentageSource(row);
+  return { kind: "bars", days: 7, points, labels, unit: "%", ...(source ? { source } : {}) };
+}
+
+function percentageSource(row: PlanRow): string | undefined {
+  if (row.form !== "subscription") return undefined;
+  const provider = row.provider.toLocaleLowerCase();
+  if (provider === "openai") return "OpenAI API";
+  if (provider === "github") return "GitHub API";
+  if (provider === "anthropic") return "Anthropic API";
+  return undefined;
 }
 
 function currentUsagePercent(row: PlanRow): number | undefined {
@@ -134,7 +196,7 @@ function currentUsagePercent(row: PlanRow): number | undefined {
 function percentOfLimit(row: PlanRow, value: number): number | null {
   const limit = Number(row.limit);
   if (!Number.isFinite(limit) || limit <= 0) return null;
-  return clampPercent(value / limit * 100);
+  return Math.max(0, value / limit * 100);
 }
 
 function clampPercent(value: number): number {
@@ -145,9 +207,10 @@ export function loadProviderUsageHistory(path: string): ProviderUsageHistory {
   if (!existsSync(path)) return {};
   try {
     const value = JSON.parse(readFileSync(path, "utf8"));
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? normalizeHistoryKeys(value as ProviderUsageHistory)
-      : {};
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const history = normalizeHistoryKeys(value as ProviderUsageHistory);
+    repairLegacySyntheticPoints(history);
+    return history;
   } catch {
     return {};
   }
@@ -201,10 +264,8 @@ function sampleConsumption(metric: "used" | "remaining", sample: DailySample): n
 }
 
 export function saveProviderUsageHistory(path: string, history: ProviderUsageHistory): void {
-  const temporary = `${path}.tmp`;
   try {
-    writeFileSync(temporary, JSON.stringify(history));
-    renameSync(temporary, path);
+    writePrivateState(path, JSON.stringify(history));
   } catch {
     // Usage history is an enhancement; provider refreshes must remain available.
   }

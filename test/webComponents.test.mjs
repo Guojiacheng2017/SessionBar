@@ -173,7 +173,7 @@ test("renders provider names with the shared session icon renderer", () => {
     { ...base, provider: "github", label: "GitHub Copilot Pro" },
   ], { iconCache });
 
-  assert.equal((html.match(/provider-icon/g) || []).length, 3);
+  assert.equal((html.match(/provider-icon/g) || []).length, 6);
   assert.match(html, /alt="Claude Code"/);
   assert.match(html, /alt="Codex"/);
   assert.match(html, /alt="Copilot"/);
@@ -238,7 +238,7 @@ test("renders Usage between Level and Reset with seven unlabeled daily bars", ()
   assert.match(html, />DeepSeek API</);
   assert.doesNotMatch(html, />DeepSeek API CNY</);
   assert.match(html, /Level<\/span><span role="columnheader">Usage<\/span><span role="columnheader">Reset/);
-  assert.equal((html.match(/provider-usage-bar\b/g) || []).length, 7);
+  assert.equal((html.match(/provider-usage-bar\b/g) || []).length, 14);
   assert.doesNotMatch(html, />\s*(?:1|2|3|4|5)\s*</);
   assert.match(html, /data-tooltip="Aug 14 · 5\.00 CNY"/);
   assert.match(html, /tabindex="0"/);
@@ -395,7 +395,7 @@ test("percentage mode keeps cash metrics and shows token or credit providers as 
 
   const table = providerTableMarkup(rows, { usageMode: "percentage" });
   assert.match(table, /53%/);
-  assert.match(table, /--usage-height:53%/);
+  assert.match(table, /--usage-height:100%/);
   assert.match(table, /4\.25 CNY/);
   assert.doesNotMatch(table, /1M tokens/);
 

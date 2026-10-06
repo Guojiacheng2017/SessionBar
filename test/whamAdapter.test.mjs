@@ -60,6 +60,34 @@ test("builds subscription row from wham usage + credits", async () => {
   assert.deepEqual(row.usageTrend.labels.slice(-3), ["2026-08-12", "2026-08-13", "2026-08-14"]);
 });
 
+test("derives a calendar-day quota pace from utilization and reset time", async () => {
+  const now = Date.parse("2026-08-19T09:00:00.000Z");
+  const resetAt = now + 18 * 60 * 60 * 1000;
+  const row = await fetchOpenAISubscription({
+    authJsonPath,
+    now,
+    fetchImpl: async (url) => {
+      if (String(url).includes("rate-limit-reset-credits")) {
+        return new Response(JSON.stringify({ credits: [] }), { status: 200 });
+      }
+      if (String(url).includes("profiles/me")) {
+        return new Response(JSON.stringify({}), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        rate_limit: { primary_window: { used_percent: 99, reset_at: resetAt } },
+      }), { status: 200 });
+    },
+  });
+
+  assert.ok(row);
+  assert.equal(row.level, "red");
+  assert.ok(Math.abs(row.measuredRate - 0.66) < 0.001, `rate=${row.measuredRate}`);
+  assert.equal(row.measuredRateLabel, "15.84%/day avg");
+  assert.ok(row.actualVsSustainable > 10);
+  assert.ok(row.projectedCapHitAt > now && row.projectedCapHitAt < resetAt);
+  assert.match(row.pacing, /%\/h/);
+});
+
 test("missing auth → null", async () => {
   const row = await fetchOpenAISubscription({
     authJsonPath: missingAuthPath,

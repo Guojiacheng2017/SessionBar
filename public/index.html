@@ -5,35 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="light dark">
     <title>SessionBar</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'media',
-        theme: {
-          extend: {
-            colors: {
-              bg:              'var(--sb-canvas)',
-              surface:         'var(--sb-surface)',
-              'surface-raised':'var(--sb-surface-raised)',
-              'surface-hover': 'var(--sb-surface-hover)',
-              'surface-highlight': 'var(--sb-surface-highlight)',
-              border:          'var(--sb-border)',
-              'line-subtle':   'var(--sb-line-subtle)',
-              muted:           'var(--sb-muted)',
-              ink:             'var(--sb-ink)',
-              'ink-strong':    'var(--sb-ink-strong)',
-              'ink-inverse':   'var(--sb-ink-inverse)',
-              icon:            'var(--sb-icon-bg)',
-              track:           'var(--sb-track)',
-              accent:          'var(--sb-accent)',
-              green:           'var(--sb-green)',
-              amber:           'var(--sb-amber)',
-              red:             'var(--sb-red)',
-            }
-          }
-        }
-      }
-    </script>
+    <link rel="stylesheet" href="./vendor/splide/splide-core.min.css">
+    <link rel="stylesheet" href="./tailwind.css">
     <link rel="stylesheet" href="./web.css">
 </head>
 <body class="bg-bg text-ink text-[14px] leading-relaxed overflow-x-hidden min-h-screen">
@@ -43,9 +16,11 @@
 <section class="dashboard-page sessions-page" aria-label="Sessions dashboard">
 
     <!-- Header -->
-    <div class="flex items-center justify-between gap-4 shrink-0">
+    <div class="app-header">
         <h1 class="text-[17px] font-bold tracking-[-0.3px] text-ink-strong">SessionBar</h1>
-        <span id="port" class="mono text-[11px] text-green bg-green/10 border border-green/20 rounded-full px-2.5 py-1">offline</span>
+        <div class="app-header-actions">
+            <span id="port" class="connection-pill">offline</span>
+        </div>
     </div>
 
     <!-- Status summary -->
@@ -53,7 +28,7 @@
 
     <!-- Filter -->
     <div class="flex gap-2 items-center shrink-0">
-        <input id="filter" type="text" placeholder="Filter projects, tasks, or types…"
+        <input id="filter" type="text" placeholder="Filter projects, tasks, or types…" aria-label="Filter sessions"
             class="flex-1 px-3.5 py-2.5 bg-surface border border-border rounded-lg text-[13px] text-ink outline-none focus:border-accent/40 focus:ring-[3px] focus:ring-accent/10 transition">
         <span id="filter-hint" class="text-[12px] text-muted whitespace-nowrap"></span>
     </div>
@@ -118,6 +93,7 @@
 
 </div>
 
+<script src="./vendor/splide/splide.min.js"></script>
 <script type="module" src="./dist/web/app.js"></script>
 </body>
 </html>

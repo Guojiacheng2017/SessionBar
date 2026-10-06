@@ -45,13 +45,158 @@ test("records balance decreases as seven daily consumption bars", () => {
   assert.deepEqual(decorated.usageTrends.cash.points.slice(-2), [8, 5]);
 });
 
-test("quota resets and balance top-ups never become negative consumption", () => {
+test("usage sums observed decreases without inserting zero", () => {
   let history = {};
-  history = recordProviderUsage(history, [row({ remaining: 10 })], start);
-  history = recordProviderUsage(history, [row({ remaining: 100 })], start + 60_000);
+  const quota = row({
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    remaining: 100,
+    limit: 100,
+    unit: "%",
+  });
+  history = recordProviderUsage(history, [quota], start);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 60 }], start + 60_000);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 100 }], start + 120_000);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 95 }], start + 180_000);
 
-  const [decorated] = decorateProviderUsage([row({ remaining: 100 })], history, start + 60_000);
-  assert.equal(decorated.usageTrend.points.at(-1), 0);
+  const [decorated] = decorateProviderUsage([{ ...quota, remaining: 95 }], history, start + 180_000);
+  assert.equal(decorated.usageTrends.percentage.points.at(-1), 45);
+  assert.equal(decorated.usageTrends.percentage.source, "OpenAI API");
+  assert.deepEqual(
+    history[providerUsageKey(quota)].samples.at(-1).changes.map(change => change.value),
+    [100, 60, 100, 95],
+  );
+});
+
+test("cross-day increases do not fabricate consumption", () => {
+  let history = {};
+  const quota = row({
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    remaining: 8,
+    limit: 100,
+    unit: "%",
+  });
+  history = recordProviderUsage(history, [quota], start);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 100 }], start + DAY);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 95 }], start + DAY + 60_000);
+
+  const [decorated] = decorateProviderUsage([{ ...quota, remaining: 95 }], history, start + DAY + 60_000);
+  assert.deepEqual(decorated.usageTrends.percentage.points.slice(-2), [0, 5]);
+  assert.deepEqual(
+    history[providerUsageKey(quota)].samples.at(-1).changes.map(change => change.value),
+    [100, 95],
+  );
+});
+
+test("legacy aggregates remain unchanged without raw observations", () => {
+  const quota = row({
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    remaining: 95,
+    limit: 100,
+    unit: "%",
+  });
+  const key = providerUsageKey(quota);
+  let history = {
+    [key]: {
+      metric: "remaining",
+      samples: [
+        { day: "2026-08-01", first: 8, latest: 8, consumed: 0 },
+        { day: "2026-08-02", first: 100, latest: 95, consumed: 5 },
+      ],
+    },
+  };
+
+  history = recordProviderUsage(history, [quota], start + DAY + 60_000);
+  const sample = history[key].samples.at(-1);
+  assert.equal(sample.consumed, 5);
+  assert.equal(sample.changes, undefined);
+});
+
+test("legacy fabricated zero stays auditable but is excluded exactly once", () => {
+  const quota = row({
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    remaining: 94,
+    limit: 100,
+    unit: "%",
+  });
+  const key = providerUsageKey(quota);
+  let history = {
+    [key]: {
+      metric: "remaining",
+      samples: [{
+        day: "2026-08-01",
+        first: 94,
+        latest: 94,
+        consumed: 100,
+        latestAt: start + 5 * 60_000,
+        changes: [
+          { at: start, value: 94 },
+          { at: start + 60_000, value: 74 },
+          { at: start + 120_000 - 1, value: 0 },
+          { at: start + 120_000, value: 100 },
+          { at: start + 5 * 60_000, value: 94 },
+        ],
+      }],
+    },
+  };
+
+  history = recordProviderUsage(history, [quota], start + 6 * 60_000);
+  const sample = history[key].samples.at(-1);
+  assert.equal(sample.consumed, 26);
+  assert.equal(sample.changes[2].excludedFromUsage, true);
+  assert.deepEqual(sample.changes.map(change => change.value), [94, 74, 0, 100, 94]);
+});
+
+test("daily percentage usage can exceed one quota window", () => {
+  let history = {};
+  const quota = row({
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    remaining: 100,
+    limit: 100,
+    unit: "%",
+  });
+  history = recordProviderUsage(history, [quota], start);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 0 }], start + 60_000);
+  history = recordProviderUsage(history, [quota], start + 120_000);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 95 }], start + 180_000);
+
+  const [decorated] = decorateProviderUsage([{ ...quota, remaining: 95 }], history, start + 180_000);
+  assert.equal(decorated.usageTrends.percentage.points.at(-1), 105);
+});
+
+test("unchanged quota observations keep the earliest timestamp for that value", () => {
+  let history = {};
+  const quota = row({
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    remaining: 100,
+    limit: 100,
+    unit: "%",
+  });
+  history = recordProviderUsage(history, [quota], start);
+  history = recordProviderUsage(history, [quota], start + 30 * 60_000);
+  const sample = history[providerUsageKey(quota)].samples.at(-1);
+  assert.equal(sample.latestAt, start);
+  assert.deepEqual(sample.changes, [{ at: start, value: 100, observed: true }]);
+
+  history = recordProviderUsage(history, [{ ...quota, remaining: 95 }], start + 31 * 60_000);
+  const [decorated] = decorateProviderUsage([{ ...quota, remaining: 95 }], history, start + 31 * 60_000);
+  assert.equal(decorated.usageTrends.percentage.points.at(-1), 5);
+  assert.equal(history[providerUsageKey(quota)].samples.at(-1).latestAt, start + 31 * 60_000);
+  assert.deepEqual(history[providerUsageKey(quota)].samples.at(-1).changes, [
+    { at: start, value: 100, observed: true },
+    { at: start + 31 * 60_000, value: 95, observed: true },
+  ]);
 });
 
 test("cash consumption continues from a new balance after a same-day top-up", () => {
@@ -111,7 +256,7 @@ test("Kimi balance history falls back to daily money consumption when tokens are
 });
 
 test("official token buckets are not replaced by quota percentage history", () => {
-  const official = { kind: "bars", days: 7, points: [null, null, 367_358_950, 121_295_867, null, null, null], unit: "tokens" };
+  const official = { kind: "bars", days: 7, points: [null, null, 367_358_950, 121_295_867, null, null, null], unit: "tokens", source: "OpenAI API" };
   const openai = row({
     form: "subscription",
     provider: "openai",
@@ -127,6 +272,7 @@ test("official token buckets are not replaced by quota percentage history", () =
   assert.strictEqual(decorated.usageTrends.token, official);
   assert.equal(decorated.usageTrends.percentage.unit, "%");
   assert.equal(decorated.usageTrends.percentage.points.at(-1), 25);
+  assert.equal(decorated.usageTrends.percentage.source, "OpenAI API");
 });
 
 test("credit subscriptions expose current usage as a percentage", () => {
@@ -187,4 +333,54 @@ test("loading provider history migrates renamed source labels without losing con
   assert.equal(Object.keys(history).length, 1);
   assert.equal(entry.samples[0].consumed, 20.94);
   assert.equal(entry.samples[0].latest, 239.06);
+});
+
+test("loading history excludes fabricated zeros without deleting observations", () => {
+  const directory = mkdtempSync(join(tmpdir(), "sessionbar-provider-history-reset-"));
+  const path = join(directory, "provider-usage-history.json");
+  const quota = row({
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    remaining: 94,
+    limit: 100,
+    unit: "%",
+  });
+  writeFileSync(path, JSON.stringify({
+    [providerUsageKey(quota)]: {
+      metric: "remaining",
+      samples: [{
+        day: "2026-08-01",
+        first: 94,
+        latest: 94,
+        consumed: 100,
+        changes: [
+          { at: start, value: 94 },
+          { at: start + 60_000, value: 74 },
+          { at: start + 120_000 - 1, value: 0 },
+          { at: start + 120_000, value: 100 },
+          { at: start + 180_000, value: 94 },
+        ],
+      }],
+    },
+  }));
+
+  const history = loadProviderUsageHistory(path);
+  const sample = history[providerUsageKey(quota)].samples[0];
+  assert.equal(sample.consumed, 26);
+  assert.equal(sample.changes[2].excludedFromUsage, true);
+  assert.deepEqual(sample.changes.map(change => change.value), [94, 74, 0, 100, 94]);
+});
+
+test("ten increases retain all observed consumption, including real zero readings", () => {
+  const quota = row({form: "subscription", provider: "openai", label: "OpenAI Subscription", unit: "%", limit: 100});
+  let history = recordProviderUsage({}, [quota], start);
+  for (let n = 0; n < 10; n++) {
+    history = recordProviderUsage(history, [{...quota, remaining: 0}], start + (2*n+1)*60_000);
+    history = recordProviderUsage(history, [quota], start + (2*n+2)*60_000);
+  }
+  history = recordProviderUsage(history, [{...quota, remaining: 94}], start + 21*60_000);
+  assert.equal(history[providerUsageKey(quota)].samples[0].consumed, 1006);
+  const unchanged = recordProviderUsage(history, [{...quota, remaining: 94}], start + 22*60_000);
+  assert.deepEqual(unchanged, history);
 });

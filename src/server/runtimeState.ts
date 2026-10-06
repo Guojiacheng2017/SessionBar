@@ -1,5 +1,6 @@
-import { existsSync, openSync, closeSync, readFileSync, readdirSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, openSync, closeSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { ensurePrivateDirectory, writePrivateState } from "../shared/privateState.js";
 
 export interface SessionBarRuntimeState {
   pid: number;
@@ -41,11 +42,16 @@ function pruneAppClients(home: string, alive: PidAlive): number[] {
   return live;
 }
 
+export function appClientCount(home: string, alive: PidAlive = processAlive): number {
+  return pruneAppClients(home, alive).length;
+}
+
 export function acquireAppClient(home: string, pid = process.pid, alive: PidAlive = processAlive): number {
   const dir = runtimePaths(home).clients;
-  mkdirSync(dir, { recursive: true });
+  ensurePrivateDirectory(home);
+  ensurePrivateDirectory(dir);
   const live = pruneAppClients(home, alive);
-  writeFileSync(join(dir, String(pid)), `${Date.now()}\n`);
+  writePrivateState(join(dir, String(pid)), `${Date.now()}\n`);
   return new Set([...live, pid]).size;
 }
 
@@ -71,8 +77,8 @@ export function readRuntimeState(home: string): SessionBarRuntimeState | undefin
 
 export function writeRuntimeState(home: string, state: SessionBarRuntimeState): void {
   const paths = runtimePaths(home);
-  writeFileSync(paths.pid, `${state.pid}|node|${state.started_at}`);
-  writeFileSync(paths.port, `${state.port}\n`);
+  writePrivateState(paths.pid, `${state.pid}|node|${state.started_at}`);
+  writePrivateState(paths.port, `${state.port}\n`);
 }
 
 function livePid(path: string): boolean {
@@ -87,10 +93,11 @@ function livePid(path: string): boolean {
 }
 
 export function acquireInstanceLock(home: string, pid = process.pid): number | undefined {
+  ensurePrivateDirectory(home);
   const path = runtimePaths(home).lock;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const fd = openSync(path, "wx");
+      const fd = openSync(path, "wx", 0o600);
       writeFileSync(fd, `${pid}\n`);
       return fd;
     } catch (error) {

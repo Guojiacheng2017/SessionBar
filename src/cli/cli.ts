@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { execSync, spawn } from "child_process";
-import { readFileSync, unlinkSync, existsSync, mkdirSync, openSync, closeSync } from "fs";
+import { readFileSync, unlinkSync, existsSync, openSync, closeSync, fchmodSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
+import { ensurePrivateDirectory } from "../shared/privateState.js";
+import { promptSetupFocus } from "./setupFocusPrompt.js";
 import { createSSETransport, type SSETransport } from "../tui/sseTransport.js";
 import { pruneSessionMarkerFiles } from "../sessions/sessionMarkers.js";
 import {
@@ -62,8 +64,8 @@ const tuiRenderMs = Number.isFinite(refreshEnv) ? Math.max(100, refreshEnv) : 50
 const tuiPollMs = Number.isFinite(pollEnv) ? Math.max(100, pollEnv) : 1000;
 
 function ensureDir() {
-  if (!existsSync(HOME)) mkdirSync(HOME, { recursive: true });
-  if (!existsSync(SESSION_ID_DIR)) mkdirSync(SESSION_ID_DIR, { recursive: true });
+  ensurePrivateDirectory(HOME);
+  ensurePrivateDirectory(SESSION_ID_DIR);
 }
 
 function pidAlive(): boolean {
@@ -105,7 +107,8 @@ function startServer(quiet = false): boolean {
   }
   let fd: number;
   try {
-    fd = openSync(LOG_FILE, "a");
+    fd = openSync(LOG_FILE, "a", 0o600);
+    if (process.platform !== "win32") fchmodSync(fd, 0o600);
   } catch (e: any) {
     if (!quiet) console.error(`Cannot open server log: ${e?.message || e}`);
     return false;
@@ -1273,9 +1276,9 @@ async function setup() {
     return;
   }
   console.log("SessionBar service starts automatically when the app opens.\nSetup configures supported local agent hooks: Claude Code, Codex, Gemini CLI, and Copilot.\n");
-  const ans = await ask("[l] Local focus (this project agent config files)  |  [g] Global focus (home agent config files)\n> ");
-  const global = ans.toLowerCase().startsWith("g");
-  await setupHooks(global);
+  const focus = await promptSetupFocus();
+  if (focus === "cancel") return;
+  await setupHooks(focus === "global");
 }
 
 function renderHarnessAvailability(rows: HarnessRegistryEntry[]) {
@@ -1347,9 +1350,10 @@ function buildLandingDeps(): LandingMenuDeps {
     launchMonitor: watch,
     launchSetup: async () => {
       console.log("\nSessionBar service starts automatically when the app opens.");
-      console.log("Setup only chooses which Claude Code sessions report into it.\n");
-      const a = await ask("[l] Local focus  |  [g] Global focus\n> ");
-      await setupHooks(a.toLowerCase().startsWith("g"));
+      console.log("Setup chooses local or global reporting for supported harnesses.\n");
+      const focus = await promptSetupFocus();
+      if (focus === "cancel") return;
+      await setupHooks(focus === "global");
       await ask("\nPress enter...");
     },
     launchStatus: async (sessions) => {
@@ -1383,7 +1387,7 @@ function buildLandingDeps(): LandingMenuDeps {
       }
     },
     teardownHooks: releaseAppHooks,
-    port: PORT,
+    getPort: refreshRuntimePort,
   };
 }
 async function status() {

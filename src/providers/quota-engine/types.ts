@@ -27,6 +27,8 @@ export interface QuotaState {
   resetAt: number;
   /** historical measured rate samples */
   rateSamples: RateSample[];
+  /** unit used in pacing copy; defaults to tokens */
+  rateUnit?: string;
   /** default "sma" */
   rateMethod?: RateMethod;
   /** SMA/EMA window, default 5 */
@@ -38,6 +40,8 @@ export interface QuotaState {
 export type Level = "green" | "yellow" | "red";
 
 export interface Advice {
+  /** observed or provider-derived average consumption per hour */
+  measuredRate: number;
   /** remaining / hours-until-reset */
   sustainableRate: number;
   /** measured/sustainable ratio; >1 = burning too fast; null when unsustainable (sustainable=0, burning) */

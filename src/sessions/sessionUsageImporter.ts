@@ -1,4 +1,5 @@
-import { existsSync, openSync, readFileSync, readSync, closeSync, readdirSync, statSync, writeFileSync, renameSync } from "fs";
+import { existsSync, openSync, readFileSync, readSync, closeSync, readdirSync, statSync } from "fs";
+import { writePrivateState } from "../shared/privateState.js";
 import { join } from "path";
 import type { PlanRow } from "../providers/planTypes.js";
 import { withProviderUsageTrend } from "../providers/providerUsageMetrics.js";
@@ -7,7 +8,11 @@ interface FileCursor {
   offset: number;
   provider?: string;
   seen?: string[];
+  quotaOffset?: number;
+  quota?: QuotaObservation[];
 }
+
+interface QuotaObservation { at: number; used: number; endsAt: number }
 
 export interface SessionUsageState {
   files: Record<string, FileCursor>;
@@ -39,7 +44,7 @@ export function syncSessionUsage(options: SessionUsageImporterOptions): SessionU
 
 export function decorateProviderUsageFromSessions(rows: readonly PlanRow[], state: SessionUsageState, now = Date.now()): PlanRow[] {
   const days = recentDayKeys(now, 7);
-  return rows.map(row => {
+  const decorated = rows.map(row => {
     const provider = canonicalProvider(row.provider || row.label);
     const isCopilot = /github|copilot/i.test(`${row.provider} ${row.label}`);
     const existingTokenTrend = row.usageTrends?.token
@@ -52,6 +57,50 @@ export function decorateProviderUsageFromSessions(rows: readonly PlanRow[], stat
     if (!points.some(point => point !== null)) return row;
     return withProviderUsageTrend(row, "token", { kind: "bars", days: 7, points, labels: days, unit: "tokens" });
   });
+  const quota = codexDailyQuota(state, now);
+  return decorated.map(row => row.provider === "openai" && row.form === "subscription" && row.unit === "%"
+    && quota.some(value => value !== null)
+    ? withProviderUsageTrend(row, "percentage", {
+      kind: "bars", days: 7, points: quota, labels: days, unit: "%", source: "Codex quota logs",
+    }, false) : row);
+}
+
+export function codexDailyQuota(state: SessionUsageState, now = Date.now()): Array<number | null> {
+  const events = Object.values(state.files).flatMap(file => file.quota ?? [])
+    .filter(event => Number.isFinite(event.at) && Number.isFinite(event.used)
+      && event.used >= 0 && event.used <= 100 && Number.isFinite(event.endsAt) && event.endsAt > 0)
+    .sort((a, b) => a.at - b.at);
+  const totals = new Map<string, number>();
+  const windows: Array<{ endsAt: number; used: number }> = [];
+  for (const event of events) {
+    const day = localDayKey(event.at);
+    totals.set(day, totals.get(day) ?? 0);
+    // Account-wide snapshots repeat across sessions; server expiry timestamps can drift by seconds.
+    let window = windows.find(item => Math.abs(item.endsAt - event.endsAt) <= 60_000);
+    if (!window) {
+      window = { endsAt: event.endsAt, used: windows.length ? 0 : event.used };
+      windows.push(window);
+    }
+    totals.set(day, totals.get(day)! + Math.max(0, event.used - window.used));
+    window.used = Math.max(window.used, event.used);
+  }
+  return recentDayKeys(now, 7).map(day => totals.get(day) ?? null);
+}
+
+function parseQuota(line: string): QuotaObservation | undefined {
+  if (!line.includes('"rate_limits"')) return;
+  let event;
+  try { event = JSON.parse(line); } catch { return; }
+  if (event.type !== "event_msg" || event.payload?.type !== "token_count") return;
+  const limits = event.payload.rate_limits;
+  const window = limits?.primary;
+  if (limits?.limit_id !== "codex" || window?.window_minutes !== 10080) return;
+  const at = Date.parse(event.timestamp);
+  const used = window.used_percent;
+  if (typeof window.resets_at !== "number" || !Number.isFinite(window.resets_at) || window.resets_at <= 0) return;
+  const endsAt = window.resets_at * 1000;
+  if (Number.isFinite(at) && typeof used === "number" && Number.isFinite(used)
+    && used >= 0 && used <= 100 && Number.isFinite(endsAt)) return { at, used, endsAt };
 }
 
 export function parseSessionUsageLine(
@@ -93,17 +142,35 @@ function ingestFile(path: string, kind: "codex" | "claude", state: SessionUsageS
   try { stat = statSync(path); } catch { return; }
   const cursor = state.files[path] ?? { offset: 0, seen: [] };
   if (cursor.offset > stat.size) cursor.offset = 0;
-  if (cursor.offset === stat.size) return;
+  if (kind === "codex" && (cursor.quotaOffset ?? 0) > stat.size) {
+    cursor.quotaOffset = 0;
+    cursor.quota = [];
+  }
+  const readOffset = kind === "codex" ? Math.min(cursor.offset, cursor.quotaOffset ?? 0) : cursor.offset;
+  if (readOffset === stat.size) return;
   let fd: number | undefined;
   try {
-    const buffer = Buffer.alloc(stat.size - cursor.offset);
+    const buffer = Buffer.alloc(stat.size - readOffset);
     fd = openSync(path, "r");
-    const bytes = readSync(fd, buffer, 0, buffer.length, cursor.offset);
+    const bytes = readSync(fd, buffer, 0, buffer.length, readOffset);
     const chunk = buffer.subarray(0, bytes);
     const lastNewline = chunk.lastIndexOf(10);
     if (lastNewline < 0) return;
     const text = chunk.subarray(0, lastNewline).toString("utf8");
+    let lineOffset = readOffset;
     for (const line of text.split("\n")) {
+      const tokenUnread = lineOffset >= cursor.offset;
+      if (kind === "codex" && lineOffset >= (cursor.quotaOffset ?? 0)) {
+        const quota = parseQuota(line);
+        if (quota) {
+          cursor.quota ??= [];
+          const previous = cursor.quota.at(-1);
+          if (!previous || previous.used !== quota.used || Math.abs(previous.endsAt - quota.endsAt) > 60_000)
+            cursor.quota.push(quota);
+        }
+      }
+      lineOffset += Buffer.byteLength(line) + 1;
+      if (!tokenUnread) continue;
       const event = parseSessionUsageLine(line, kind, cursor);
       if (!event) continue;
       state.daily[event.provider] ??= {};
@@ -114,7 +181,8 @@ function ingestFile(path: string, kind: "codex" | "claude", state: SessionUsageS
         cursor.seen = cursor.seen.slice(-MAX_SEEN_IDS);
       }
     }
-    cursor.offset += lastNewline + 1;
+    cursor.offset = readOffset + lastNewline + 1;
+    if (kind === "codex") cursor.quotaOffset = cursor.offset;
     state.files[path] = cursor;
   } catch { /* unreadable logs must not affect provider monitoring */ }
   finally { if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ } }
@@ -140,9 +208,7 @@ function recentJsonlFiles(root: string, now: number): string[] {
 
 function saveSessionUsageState(path: string, state: SessionUsageState): void {
   try {
-    const temporary = `${path}.tmp`;
-    writeFileSync(temporary, JSON.stringify(state));
-    renameSync(temporary, path);
+    writePrivateState(path, JSON.stringify(state));
   } catch { /* optional cache */ }
 }
 
@@ -196,5 +262,12 @@ function pruneDaily(state: SessionUsageState, now: number): void {
   const keep = new Set(recentDayKeys(now, 7));
   for (const totals of Object.values(state.daily)) {
     for (const day of Object.keys(totals)) if (!keep.has(day)) delete totals[day];
+  }
+  for (const cursor of Object.values(state.files)) {
+    if (!cursor.quota) continue;
+    const cutoff = now - 8 * DAY_MS;
+    const baseline = cursor.quota.filter(point => point.at < cutoff).at(-1);
+    cursor.quota = cursor.quota.filter(point => point.at >= cutoff);
+    if (baseline) cursor.quota.unshift(baseline);
   }
 }

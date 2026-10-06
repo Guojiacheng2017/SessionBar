@@ -117,6 +117,7 @@ interface SessionRow {
 
 interface MonitorRefs {
   root: BoxRenderable;
+  body: BoxRenderable;
   title: TextRenderable;
   online: TextRenderable;
   activity: TextRenderable;
@@ -139,6 +140,16 @@ export interface MonitorBodyLayout {
   detailPanelWidth: number;
   sidebarLineWidth: number;
   detailContentWidth: number;
+}
+
+export interface MonitorWorkspaceLayout {
+  direction: "row" | "column";
+  projectWidth: number | "100%";
+  projectHeight: number | "100%";
+  sessionsWidth: number | "100%";
+  sessionsHeight: number | "100%";
+  detailsWidth: number | "100%";
+  detailsHeight: number | "100%" | "auto";
 }
 
 export interface MonitorVisibleModel {
@@ -465,6 +476,32 @@ export function monitorBodyLayout(rendererWidth: number): MonitorBodyLayout {
   };
 }
 
+export function monitorWorkspaceLayout(rendererWidth: number): MonitorWorkspaceLayout {
+  const workspaceWidth = Math.max(20, Math.floor(rendererWidth) - 2);
+  if (rendererWidth < 120) {
+    return {
+      direction: "column",
+      projectWidth: "100%",
+      projectHeight: 8,
+      sessionsWidth: "100%",
+      sessionsHeight: 9,
+      detailsWidth: "100%",
+      detailsHeight: "auto",
+    };
+  }
+  const projectWidth = clampNumber(Math.round(workspaceWidth * 0.2), 26, 34);
+  const sessionsWidth = clampNumber(Math.round(workspaceWidth * 0.28), 34, 44);
+  return {
+    direction: "row",
+    projectWidth,
+    projectHeight: "100%",
+    sessionsWidth,
+    sessionsHeight: "100%",
+    detailsWidth: Math.max(36, workspaceWidth - projectWidth - sessionsWidth - 2),
+    detailsHeight: "100%",
+  };
+}
+
 function sessionIdLabel(s: Session): string {
   return String(s.session_id || "?").split("__")[0]!;
 }
@@ -519,8 +556,11 @@ function visibleWindow<T>(rows: readonly T[], selectedIndex: number, slots: numb
 }
 
 function projectTableContent(rows: readonly ProjectRow[], state: Readonly<MonitorState>, renderer: CliRenderer): TextTableContent {
+  const sidebar = monitorWorkspaceLayout(renderer.width).direction === "row";
   const compact = renderer.width < 100;
-  const content: TextTableContent = compact
+  const content: TextTableContent = sidebar
+    ? [[header(""), header("Project"), header("#"), header("Age")]]
+    : compact
     ? [[header(""), header("Project"), header("Sessions"), header("Agents"), header("Status")]]
     : [[header(""), header("Project"), header("Sessions"), header("Agents"), header("Status"), header("Path"), header("Age")]];
   if (rows.length === 0) return [[cell("No projects reporting yet", PALETTE.muted)]];
@@ -538,7 +578,7 @@ function projectTableContent(rows: readonly ProjectRow[], state: Readonly<Monito
       cell(row.agents, PALETTE.cyan, strong),
       cell(row.status, PALETTE.fg, strong),
     ];
-    content.push(compact ? base : [
+    content.push(sidebar ? [base[0]!, base[1]!, base[2]!, cell(row.age, PALETTE.muted, strong)] : compact ? base : [
       ...base,
       cell(row.path, PALETTE.muted, strong),
       cell(row.age, PALETTE.muted, strong),
@@ -557,7 +597,8 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
   const selectedIndex = state.projectFocusKey ? Math.max(0, state.selectedIdx) : 0;
   const slots = Math.max(4, renderer.height - 17);
   const visible = visibleWindow(rows, selectedIndex, slots);
-  const lineWidth = monitorBodyLayout(renderer.width).sidebarLineWidth;
+  const workspace = monitorWorkspaceLayout(renderer.width);
+  const lineWidth = Math.max(1, (typeof workspace.sessionsWidth === "number" ? workspace.sessionsWidth : renderer.width - 2) - 4);
   for (const row of visible) {
     const selected = state.projectFocusKey && row.key === state.selectedId;
     const attrs = selected || row.unread ? TextAttributes.BOLD : TextAttributes.NONE;
@@ -578,6 +619,7 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
 export function providerSummaryLine(row: PlanRow): string {
   const form = providerFormLabel(row);
   const label = providerDisplayLabel(row);
+  if (row.stale) return `${label} ${form} | STALE`;
   if (row.form === "api") {
     const unit = row.unit ? ` ${row.unit}` : "";
     const parts = [
@@ -592,6 +634,9 @@ export function providerSummaryLine(row: PlanRow): string {
     row.used !== undefined && row.limit !== undefined ? `used ${compactNumber(row.used)}/${compactNumber(row.limit)}${unit}` : "",
     row.remaining !== undefined && row.limit !== undefined && row.used === undefined ? `${Math.round(row.remaining)}% left` : "",
     row.level ? `level ${row.level}` : "",
+    row.measuredRateLabel
+      ? `rate ${row.measuredRateLabel}`
+      : row.measuredRate !== undefined && row.measuredRate > 0 ? `rate ${compactNumber(row.measuredRate)}${row.unit || "units"}/h avg` : "",
     row.pacing ? `pacing ${row.pacing}` : "",
     row.cardTiming ? `card ${row.cardTiming}` : "",
     row.autoResetIn ? `reset ${row.autoResetIn}` : "",
@@ -1185,6 +1230,7 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
   });
   detailsBox.add(detailsText);
 
+  body.add(projectsBox);
   body.add(sessionsBox);
   body.add(detailsBox);
 
@@ -1199,12 +1245,12 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
 
   root.add(headerBox);
   root.add(activity);
-  root.add(projectsBox);
   root.add(body);
   root.add(footer);
 
   return {
     root,
+    body,
     title,
     online,
     activity,
@@ -1269,7 +1315,10 @@ export function monitorVisibleModel(
   const scopeSessions = selectedProjectSessions(state);
   const sessionData = sessionRows(state.projectFocusKey ? scopeSessions : shown, state);
   const selected = selectedSession(state);
-  const detailWidth = layout.detailContentWidth;
+  const workspace = monitorWorkspaceLayout(renderer.width);
+  const panelWidth = (width: number | `${number}%`) => typeof width === "number" ? width : layout.bodyWidth;
+  const detailPanelWidth = panelWidth(workspace.detailsWidth);
+  const detailWidth = Math.max(1, detailPanelWidth - 4);
   const details = selected
     ? detailTextForSession(selected, state.detailTab, detailWidth, now)
     : state.projectFocusKey
@@ -1311,14 +1360,14 @@ export function monitorVisibleModel(
     projectsVisible: true,
     projectsTitle: `Projects (${groups.size})`,
     projectsContent: projectTableContent(projectData, state, renderer),
-    sessionsWidth: layout.sidebarPanelWidth,
+    sessionsWidth: panelWidth(workspace.sessionsWidth),
     sessionsTitle: sessionTitle,
     sessionsVisible: true,
     sessionsContent: sessionTableContent(sessionData, state, renderer, now),
     providersVisible: false,
     providersContent: [],
     detailsVisible: true,
-    detailsWidth: layout.detailPanelWidth,
+    detailsWidth: detailPanelWidth,
     detailsTitle: selected
       ? `Details / Session / ${detailTabTitle(state.detailTab)}`
       : state.projectFocusKey ? "Details / Project" : "Details / System",
@@ -1335,14 +1384,28 @@ function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
   refs.projectsBox.visible = model.projectsVisible;
   refs.projectsBox.title = model.projectsTitle;
   refs.projectsTable.content = model.projectsContent;
-  refs.sessionsBox.width = model.sessionsWidth;
+  if (model.view === "sessions") {
+    const workspace = monitorWorkspaceLayout(model.width);
+    refs.body.flexDirection = workspace.direction;
+    refs.projectsBox.width = workspace.projectWidth;
+    refs.projectsBox.height = workspace.projectHeight;
+    refs.sessionsBox.width = workspace.sessionsWidth;
+    refs.sessionsBox.height = workspace.sessionsHeight;
+    refs.detailsBox.width = workspace.detailsWidth;
+    refs.detailsBox.height = workspace.detailsHeight;
+  } else {
+    refs.body.flexDirection = "row";
+    refs.sessionsBox.width = "100%";
+    refs.sessionsBox.height = "100%";
+    refs.detailsBox.width = model.detailsWidth;
+    refs.detailsBox.height = "100%";
+  }
   refs.sessionsBox.title = model.sessionsTitle;
   refs.sessionsTable.visible = model.sessionsVisible;
   refs.sessionsTable.content = model.sessionsContent;
   refs.providersTable.visible = model.providersVisible;
   refs.providersTable.content = model.providersContent;
   refs.detailsBox.visible = model.detailsVisible;
-  refs.detailsBox.width = model.detailsWidth;
   refs.detailsBox.title = model.detailsTitle;
   refs.detailsText.content = model.detailsContent;
   refs.footer.content = model.footer;

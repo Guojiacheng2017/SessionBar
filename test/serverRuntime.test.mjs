@@ -17,6 +17,49 @@ import { codexActivityFromJsonl, codexMetadataRefreshDue, consumeSystemSample, d
 
 const serverSource = readFileSync(new URL("../src/server/server.ts", import.meta.url), "utf8");
 
+test("disabled Provider polling serves retained data on the actual dynamic health port", async t => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-cached-provider-"));
+  const port = await availablePort();
+  const now = Date.now();
+  writeFileSync(join(root, "provider-last-good.json"), JSON.stringify({
+    seenAt: { "openai:subscription:OpenAI": now },
+    rows: [{ provider: "openai", form: "subscription", label: "OpenAI", level: "green", remaining: 73 }],
+  }));
+  const child = spawn(process.execPath, ["dist/server/server.js"], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, HOME: root, CODEX_HOME: join(root, "codex"), WORKBUDDY_HOME: join(root, "workbuddy"),
+      SESSIONBAR_HOME: root, SESSIONBAR_HOST: "127.0.0.1", SESSIONBAR_PORT: String(port),
+      SESSIONBAR_PROVIDER_POLL: "0", SESSIONBAR_CCSWITCH: "0" },
+    stdio: "ignore",
+  });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise(resolve => {
+        const timeout = setTimeout(() => child.kill("SIGKILL"), 1_000);
+        child.once("close", () => { clearTimeout(timeout); resolve(); });
+        child.kill("SIGTERM");
+      });
+    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+  });
+  const base = `http://127.0.0.1:${port}`;
+  const health = await waitFor(async () => {
+    const response = await fetch(`${base}/health`);
+    return response.ok ? response.json() : undefined;
+  }, "relay did not start");
+  assert.equal(health.port, port);
+  assert.equal(Number(readFileSync(join(root, "port"), "utf8")), health.port);
+  const live = await fetch(`${base}/providers/live`).then(response => response.json());
+  assert.equal(live.initializing, undefined);
+  assert.equal(live.providers[0].remaining, 73);
+  assert.equal(live.providers[0].stale, true);
+  assert.equal(live.providers[0].lastSeenAt, now);
+  await fetch(`${base}/providers/refresh`, { method: "POST" });
+  const retained = await fetch(`${base}/providers/live`).then(response => response.json());
+  assert.equal(retained.providers[0].lastSeenAt, now);
+  assert.equal((await fetch(`${base}/providers/refresh`, { method: "POST", headers: { Origin: "https://attacker.invalid" } })).status, 403);
+});
+
 test("relay lifetime has no automatic idle-shutdown path", () => {
   assert.doesNotMatch(serverSource, /IDLE_SHUTDOWN|scheduleIdleCheck|no clients.*shutting down/i);
 });
@@ -345,7 +388,7 @@ syncBuiltinESMExports();
   const codexReadsAfterSessionSort = lineCount(codexReads);
   const nextStreamChunk = streamReader.read();
 
-  await new Promise(resolve => setTimeout(resolve, systemSampleMs * 2 + 20));
+  await waitFor(() => lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
   const later = await fetch(`${baseUrl}/system/live`).then(response => response.json());
   await fetch(`${baseUrl}/system/live`).then(response => response.json());
   assert.equal(typeof later.system.sampled_at, "number");

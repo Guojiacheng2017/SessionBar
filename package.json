@@ -10,6 +10,8 @@
     "dist/",
     "public/",
     "docs/images/",
+    "docs/licenses/",
+    "docs/THIRD_PARTY_NOTICES.md",
     "README.md",
     "README.zh-CN.md",
     "LICENSE",

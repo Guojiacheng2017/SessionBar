@@ -43,6 +43,7 @@ export interface ProviderTableState {
   usageMode?: ProviderUsageMode;
 }
 
+
 // LobeHub icon CDN — light variant for dark backgrounds, dark variant for light.
 // https://lobehub.com/icons/<name>
 const ICON_CDN = "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest";
@@ -108,9 +109,11 @@ export function statusDotMarkup(status: string): string {
 export function iconMarkup(type: string, cache = new Map<string, string>()): string {
   const cached = cache.get(type);
   if (cached) return cached;
-  const name = ICONS[type];
-  const domain = FAVICONS[type];
-  const local = LOCAL_ICONS[type];
+  const canonicalType = [...new Set([...Object.keys(ICONS), ...Object.keys(FAVICONS), ...Object.keys(LOCAL_ICONS)])]
+    .find(candidate => candidate.toLowerCase() === type.trim().toLowerCase()) ?? type;
+  const name = ICONS[canonicalType];
+  const domain = FAVICONS[canonicalType];
+  const local = LOCAL_ICONS[canonicalType];
   let html: string;
   if (local) {
     html = `<img class="w-[18px] h-[18px] rounded-[3px] shrink-0" src="${local}" alt="${escapeHtml(type)}">`;
@@ -122,7 +125,7 @@ export function iconMarkup(type: string, cache = new Map<string, string>()): str
   } else {
     html = `<span class="w-[18px] h-[18px] rounded-[3px] shrink-0 bg-icon text-[9px] inline-flex items-center justify-center text-muted" aria-label="${escapeHtml(type)}">${escapeHtml(type.slice(0, 1))}</span>`;
   }
-  if (type === "Claude Desktop") {
+  if (canonicalType === "Claude Desktop") {
     html = `<span class="agent-icon agent-icon--badged">${html}<span class="agent-icon-badge agent-icon-badge--desktop" aria-hidden="true"></span></span>`;
   }
   cache.set(type, html);
@@ -168,6 +171,17 @@ export function statusSummaryMarkup(counts: SessionCounts): string {
   if (counts.error > 0) { items.push(summaryItem(counts.error, counts.error === 1 ? "error" : "errors", "error")); labels.push(`${counts.error} ${counts.error === 1 ? "error" : "errors"}`); }
   if (counts.idle > 0) { items.push(summaryItem(counts.idle, "idle", "idle")); labels.push(`${counts.idle} idle`); }
   return `<div class="${UI.statusSummary}" aria-label="${escapeHtml(labels.join(", "))}">${items.join('<span class="text-muted/40" aria-hidden="true">·</span>')}</div>`;
+}
+
+export function sceneSummaryMarkup(counts: SessionCounts, current: string): string {
+  const sessionLabel = counts.total === 1 ? "session" : "sessions";
+  const states = [
+    counts.working > 0 ? `${statusDotMarkup("working")}<span>${counts.working} working</span>` : "",
+    counts.idle > 0 ? `${statusDotMarkup("idle")}<span>${counts.idle} idle</span>` : "",
+    counts.blocked > 0 ? `${statusDotMarkup("blocked")}<span>${counts.blocked} blocked</span>` : "",
+    counts.error > 0 ? `${statusDotMarkup("error")}<span>${counts.error} error${counts.error === 1 ? "" : "s"}</span>` : "",
+  ].filter(Boolean).join('<span class="session-compact-separator" aria-hidden="true">·</span>');
+  return `<span class="session-compact-title">Sessions</span><span class="session-compact-current">${escapeHtml(current)}</span><span class="session-compact-meta"><strong>${counts.total}</strong><span>${sessionLabel}</span>${states}</span>`;
 }
 
 export function detailListMarkup(rows: Array<{ label: string; value: string }>, extraClass = ""): string {
@@ -413,10 +427,11 @@ function providerFormLabel(row: PlanRow): string {
 function providerLeftText(row: PlanRow): string {
   if (row.form === "api") {
     const unit = row.unit ? ` ${row.unit}` : "";
-    if (row.remaining !== undefined) return `${formatProviderNumber(row.remaining)}${unit} left`;
-    if (row.used !== undefined && row.limit !== undefined) return `${formatProviderNumber(row.used)}/${formatProviderNumber(row.limit)}${unit}`;
-    if (row.used !== undefined) return `${formatProviderNumber(row.used)}${unit} used`;
-    if (row.limit !== undefined) return `${formatProviderNumber(row.limit)}${unit} limit`;
+    const digits = row.unit === "CNY" || row.unit === "USD" ? 2 : 5;
+    if (row.remaining !== undefined) return `${formatProviderNumber(row.remaining, digits)}${unit} left`;
+    if (row.used !== undefined && row.limit !== undefined) return `${formatProviderNumber(row.used, digits)}/${formatProviderNumber(row.limit, digits)}${unit}`;
+    if (row.used !== undefined) return `${formatProviderNumber(row.used, digits)}${unit} used`;
+    if (row.limit !== undefined) return `${formatProviderNumber(row.limit, digits)}${unit} limit`;
     return "—";
   }
   const unit = row.unit ? ` ${row.unit}` : "";
@@ -426,12 +441,25 @@ function providerLeftText(row: PlanRow): string {
   return row.remaining !== undefined ? `${Math.round(row.remaining)}%` : "—";
 }
 
-function formatProviderNumber(value: number): string {
-  return value.toLocaleString("en-US", { maximumFractionDigits: 5, useGrouping: false });
+function formatProviderNumber(value: number, maximumFractionDigits = 5): string {
+  return value.toLocaleString("en-US", { maximumFractionDigits, useGrouping: false });
 }
 
 function providerLevelLabel(row: PlanRow): string {
-  return row.form === "api" ? "—" : row.level === "green" ? "Healthy" : row.level === "yellow" ? "Watch" : "Critical";
+  if (row.stale) return "Stale";
+  if (row.form === "api") return "—";
+  const level = row.level === "green" ? "Healthy" : row.level === "yellow" ? "Watch" : "Critical";
+  if (row.measuredRateLabel) return `${level} · ${row.measuredRateLabel}`;
+  if (!Number.isFinite(row.measuredRate) || Number(row.measuredRate) <= 0) return level;
+  const unit = row.unit || "units";
+  return `${level} · ${formatProviderNumber(Number(row.measuredRate), 2)}${unit}/h avg`;
+}
+
+function providerLevelMarkup(row: PlanRow): string {
+  const fullLabel = providerLevelLabel(row);
+  const separator = fullLabel.indexOf(" · ");
+  if (separator < 0) return `<span class="provider-level-label">${escapeHtml(fullLabel)}</span>`;
+  return `<span class="provider-level-label">${escapeHtml(fullLabel.slice(0, separator))}</span><small class="provider-level-rate">${escapeHtml(fullLabel.slice(separator + 1))}</small>`;
 }
 
 function providerResetText(value: string): string {
@@ -473,7 +501,7 @@ function providerUsageMarkup(row: PlanRow, mode: ProviderUsageMode): string {
     ]).join(" ");
     return `<span class="provider-usage provider-usage-line" role="cell" aria-label="${trend.days}-day usage trend"><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="${points}" /></svg></span>`;
   }
-  const max = trend.unit === "%" ? 100 : Math.max(1, ...values);
+  const max = Math.max(1, ...values);
   const bars = trend.points.map((point, index) => {
     const height = point === null ? 0 : Math.max(point > 0 ? 12 : 4, Math.round(point / max * 100));
     const label = trend.labels?.[index] || `Day ${index + 1}`;
@@ -568,26 +596,59 @@ export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTab
     return `<div class="provider-state"><strong>No quota data</strong><span>Provider credentials or subscription data are not available yet.</span></div>`;
   }
 
-  return `<div class="provider-table" role="table" aria-label="Provider quota">
+  const galleryTabs = rows.map((row, index) => {
+    const label = providerDisplayLabel(row);
+    return `<li class="splide__slide provider-gallery-tab" aria-label="Show ${escapeHtml(label)}" data-provider-gallery-index="${index}">${iconMarkup(providerIconType(row), state.iconCache)}<span>${escapeHtml(label)}</span></li>`;
+  }).join("");
+  const galleryCards = rows.map(row => {
+    const tone = row.stale ? "api" : row.form === "api" ? "api" : row.level;
+    const label = providerDisplayLabel(row);
+    const form = providerFormLabel(row);
+    const hasFormInLabel = label.toLocaleLowerCase().includes(form.toLocaleLowerCase());
+    const usageSource = providerUsageTrendForMode(row, state.usageMode ?? "token")?.source;
+    const providerMeta = [hasFormInLabel ? "" : form, usageSource].filter(Boolean).join(" / ");
+    const resetPresent = Boolean(row.autoResetIn && row.autoResetIn !== "—");
+    const cardPresent = Boolean(row.cardTiming && row.cardTiming !== "—");
+    return `<li class="splide__slide"><article class="provider-gallery-card">
+      <header class="provider-gallery-card-header">
+        <span class="provider-name"><span class="provider-icon">${iconMarkup(providerIconType(row), state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${providerMeta ? `<small>${escapeHtml(providerMeta)}</small>` : ""}</span></span>
+        <span class="provider-left provider-left-${tone}">${escapeHtml(providerLeftText(row))}</span>
+      </header>
+      <div class="provider-gallery-usage"><span>Last 7 days</span>${providerUsageMarkup(row, state.usageMode ?? "token")}</div>
+      <dl class="provider-gallery-facts">
+        <div><dt>Level</dt><dd><span class="provider-level provider-level-${tone}" aria-label="${escapeHtml(providerLevelLabel(row))}">${providerLevelMarkup(row)}</span></dd></div>
+        ${resetPresent ? `<div><dt>Reset</dt><dd>${escapeHtml(providerResetText(row.autoResetIn!))}</dd></div>` : ""}
+        ${cardPresent ? `<div><dt>Card</dt><dd>${escapeHtml(providerCardText(row.cardTiming!))}</dd></div>` : ""}
+      </dl>
+    </article></li>`;
+  }).join("");
+
+  return `<div class="provider-table provider-table-desktop" role="table" aria-label="Provider quota">
     <div class="provider-row provider-row-head" role="row">
       <span role="columnheader">Provider</span><span role="columnheader">Left</span><span role="columnheader">Level</span><span role="columnheader">Usage</span><span role="columnheader">Reset</span><span role="columnheader">Card</span>
     </div>
     ${rows.map(row => {
-      const tone = row.form === "api" ? "api" : row.level;
+      const tone = row.stale ? "api" : row.form === "api" ? "api" : row.level;
       const label = providerDisplayLabel(row);
       const form = providerFormLabel(row);
       const hasFormInLabel = label.toLocaleLowerCase().includes(form.toLocaleLowerCase());
       const usageSource = providerUsageTrendForMode(row, state.usageMode ?? "token")?.source;
       const providerMeta = [hasFormInLabel ? "" : form, usageSource].filter(Boolean).join(" / ");
       const iconType = providerIconType(row);
+      const resetPresent = Boolean(row.autoResetIn && row.autoResetIn !== "—");
+      const cardPresent = Boolean(row.cardTiming && row.cardTiming !== "—");
       return `<div class="provider-row" role="row">
         <span class="provider-name" role="cell"><span class="provider-icon">${iconMarkup(iconType, state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${providerMeta ? `<small>${escapeHtml(providerMeta)}</small>` : ""}</span></span>
         <span class="provider-left provider-left-${tone}" role="cell">${escapeHtml(providerLeftText(row))}</span>
-        <span class="provider-level provider-level-${tone}" role="cell">${escapeHtml(providerLevelLabel(row))}</span>
+        <span class="provider-level provider-level-${tone}" role="cell" aria-label="${escapeHtml(providerLevelLabel(row))}">${providerLevelMarkup(row)}</span>
         ${providerUsageMarkup(row, state.usageMode ?? "token")}
-        <span class="provider-reset" role="cell">${escapeHtml(providerResetText(row.autoResetIn || "—"))}</span>
-        <span class="provider-card" role="cell">${escapeHtml(providerCardText(row.cardTiming || "—"))}</span>
+        <span class="provider-reset provider-meta-${resetPresent ? "present" : "empty"}" role="cell">${escapeHtml(providerResetText(row.autoResetIn || "—"))}</span>
+        <span class="provider-card provider-meta-${cardPresent ? "present" : "empty"}" role="cell">${escapeHtml(providerCardText(row.cardTiming || "—"))}</span>
       </div>`;
     }).join("")}
+  </div>
+  <div class="provider-gallery" aria-label="Provider quota gallery">
+    <div class="provider-gallery-tabs splide" aria-label="Choose provider"><div class="splide__track"><ul class="splide__list">${galleryTabs}</ul></div></div>
+    <div class="provider-gallery-main splide" aria-label="Provider details"><div class="splide__track"><ul class="splide__list">${galleryCards}</ul></div></div>
   </div>`;
 }

@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writePrivateState } from "../shared/privateState.js";
 
 export interface SessionBarSettings {
   /** Spend the nearest OpenAI/Codex reset card when it has <= 5 minutes left. */
@@ -32,10 +33,7 @@ export function updateSettings(
     ...patch,
   };
   const path = settingsPath(home);
-  mkdirSync(home, { recursive: true });
-  const tempPath = `${path}.tmp-${process.pid}`;
-  writeFileSync(tempPath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  renameSync(tempPath, path);
+  writePrivateState(path, `${JSON.stringify(next, null, 2)}\n`);
   return next;
 }
 

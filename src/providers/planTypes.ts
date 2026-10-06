@@ -24,6 +24,9 @@ export interface PlanRow {
   // subscription form (has limit -> computeAdvice fully computes)
   level: "green" | "yellow" | "red";
   pacing: string;
+  measuredRate?: number;
+  /** Human-readable observed rate. The numeric rate remains hourly for projections. */
+  measuredRateLabel?: string;
   cardTiming: string;
   autoResetIn: string;
   sustainableRate: number;
@@ -36,4 +39,7 @@ export interface PlanRow {
   unit?: string;
   usageTrend?: ProviderUsageTrend;
   usageTrends?: ProviderUsageTrends;
+  /** Last successful upstream observation. Retained rows are explicitly stale. */
+  lastSeenAt?: number;
+  stale?: boolean;
 }

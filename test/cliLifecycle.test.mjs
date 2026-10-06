@@ -6,6 +6,12 @@ import { landingActions, parseLandingKeys } from "../dist/cli/landingMenu.js";
 
 const cliSource = readFileSync(new URL("../src/cli/cli.ts", import.meta.url), "utf8");
 
+test("landing resolves its display port after readiness instead of capturing startup state", () => {
+  const source = readFileSync(new URL("../src/cli/landingMenu.ts", import.meta.url), "utf8");
+  assert.match(source, /const renderLanding = async \(\) => \{\s*setMenuScreen\(true\);\s*const port = getPort\(\)/);
+  assert.match(cliSource, /teardownHooks: releaseAppHooks,\s*getPort: refreshRuntimePort/);
+});
+
 function functionBody(name) {
   const declaration = new RegExp(`async function ${name}\\s*\\([^)]*\\)`);
   const match = declaration.exec(cliSource);

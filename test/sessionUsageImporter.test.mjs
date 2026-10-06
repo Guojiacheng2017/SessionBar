@@ -4,10 +4,145 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  codexDailyQuota,
   decorateProviderUsageFromSessions,
   parseSessionUsageLine,
   syncSessionUsage,
+  loadSessionUsageState,
 } from "../dist/sessions/sessionUsageImporter.js";
+
+// Quota-only excerpts from the Sep 11 logs; no conversation or credentials.
+const recordedQuota = [
+  ["2026-09-11T02:13:53.358Z", 92, 1789437788],
+  ["2026-09-11T02:28:15.420Z", 93, 1789437788],
+  ["2026-09-11T07:39:10.152Z", 99, 1789437788],
+  ["2026-09-11T07:42:34.214Z", 100, 1789437788],
+  ["2026-09-11T08:07:15.742Z", 0, 1789718831],
+  ["2026-09-11T08:10:01.382Z", 1, 1789718831],
+  ["2026-09-11T09:35:16.677Z", 5, 1789718831],
+  ["2026-09-11T09:35:18.825Z", 4, 1789718830],
+  ["2026-09-11T09:35:24.215Z", 5, 1789718831],
+  ["2026-09-11T15:47:03.027Z", 6, 1789718830],
+];
+function quotaLine([timestamp, used, expiry]) {
+  return JSON.stringify({timestamp, type: "event_msg", payload: {
+    type: "token_count", rate_limits: {limit_id: "codex",
+      primary: {used_percent: used, window_minutes: 10080, resets_at: expiry}},
+  }}) + "\n";
+}
+function importerFixture(now) {
+  const root = mkdtempSync(join(tmpdir(), "quota-regression-"));
+  const codexDir = join(root, "codex");
+  const claudeDir = join(root, "claude");
+  mkdirSync(codexDir); mkdirSync(claudeDir);
+  return {statePath: join(root, "state.json"), codexDir, claudeDir, now};
+}
+
+test("real quota logs progress from 13 to 14 through incremental reads and disk reload", () => {
+  const options = importerFixture(Date.parse("2026-09-11T15:59:00Z"));
+  const file = join(options.codexDir, "a.jsonl");
+  writeFileSync(file, recordedQuota.slice(0, -1).map(quotaLine).join(""));
+  let state = syncSessionUsage(options);
+  assert.equal(codexDailyQuota(state, options.now).at(-1), 13);
+  const finalLine = quotaLine(recordedQuota.at(-1));
+  appendFileSync(file, finalLine.slice(0, -1));
+  state = syncSessionUsage(options);
+  assert.equal(codexDailyQuota(state, options.now).at(-1), 13, "incomplete JSONL must wait");
+  appendFileSync(file, "\n");
+  state = syncSessionUsage(options);
+  assert.equal(codexDailyQuota(state, options.now).at(-1), 14);
+  assert.deepEqual(loadSessionUsageState(options.statePath), state);
+  assert.deepEqual(syncSessionUsage(options), state, "restart must not recount");
+  writeFileSync(join(options.codexDir, "duplicate.jsonl"), recordedQuota.map(quotaLine).join(""));
+  assert.equal(codexDailyQuota(syncSessionUsage(options), options.now).at(-1), 14);
+});
+
+test("a partial first window and a later partial window never imply an unseen zero", () => {
+  const at = new Date(2026, 8, 12, 12).getTime();
+  const quota = [6, 26, 0, 6].map((used, index) => ({
+    at: at + index * 60000, used, endsAt: at + (index < 2 ? 3 : 7) * 86400000,
+  }));
+  assert.equal(codexDailyQuota({files: {a: {offset: 0, quota}}, daily: {}}, at).at(-1), 26);
+});
+
+test("cross-day usage uses the previous observation without moving earlier consumption", () => {
+  const at = new Date(2026, 8, 12, 0).getTime();
+  const quota = [
+    {at: at - 120000, used: 10, endsAt: at + 3*86400000},
+    {at: at - 60000, used: 20, endsAt: at + 3*86400000},
+    {at: at + 60000, used: 25, endsAt: at + 3*86400000},
+    {at: at + 120000, used: 0, endsAt: at + 7*86400000},
+    {at: at + 180000, used: 3, endsAt: at + 7*86400000},
+  ];
+  assert.deepEqual(codexDailyQuota({files: {a: {offset: 0, quota}}, daily: {}}, at).slice(-2), [10, 8]);
+});
+
+test("invalid quota expiry cannot create a synthetic window", () => {
+  const now = Date.parse("2026-09-11T12:00:00Z");
+  for (const expiry of [null, "", false, 0, -1, "1789718831"]) {
+    const options = importerFixture(now);
+    writeFileSync(join(options.codexDir, "a.jsonl"),
+      quotaLine(["2026-09-11T10:00:00Z", 90, expiry]));
+    assert.ok(codexDailyQuota(syncSessionUsage(options), now).every(value => value === null),
+      "invalid expiry: " + JSON.stringify(expiry));
+  }
+});
+
+test("account quota observations retain both portions of a day and ignore repeated stale reports", () => {
+  const at = new Date(2026, 8, 11, 10).getTime();
+  const observation = (minute, used, endsAt) => ({at: at + minute * 60000, used, endsAt});
+  const state = { daily: {}, files: {
+    a: {offset: 0, quota: [
+      observation(0, 92, at + 3*86400000), observation(1, 100, at + 3*86400000),
+      observation(2, 0, at + 7*86400000), observation(3, 5, at + 7*86400000),
+      observation(5, 6, at + 7*86400000),
+    ]},
+    b: {offset: 0, quota: [
+      observation(4, 4, at + 7*86400000 + 1000),
+      observation(4.5, 5, at + 7*86400000 + 1000),
+    ]},
+  }};
+  assert.equal(codexDailyQuota(state, at).at(-1), 14);
+  const [row] = decorateProviderUsageFromSessions([{
+    provider: "openai", form: "subscription", unit: "%",
+  }], state, at);
+  assert.equal(row.usageTrends.percentage.points.at(-1), 14);
+});
+
+test("ten quota windows accumulate without resetting the daily total", () => {
+  const at = new Date(2026, 8, 11, 10).getTime();
+  const quota = [];
+  for (let n = 0; n < 10; n++) {
+    quota.push({ at: at + n*120000, used: 0, endsAt: at + (n+1)*86400000 });
+    quota.push({ at: at + n*120000+60000, used: 100, endsAt: at + (n+1)*86400000 });
+  }
+  assert.equal(codexDailyQuota({files: {a: {offset: 0, quota}}, daily: {}}, at).at(-1), 1000);
+});
+
+test("existing token cursors can import quota history without recounting tokens", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-quota-import-"));
+  const codex = join(root, "codex");
+  const claude = join(root, "claude");
+  mkdirSync(codex); mkdirSync(claude);
+  const at = new Date(2026, 8, 11, 10).getTime();
+  const log = join(codex, "session.jsonl");
+  const lines = [92, 100, 0, 6].map((used, n) => JSON.stringify({
+    timestamp: new Date(at+n*60000).toISOString(), type: "event_msg",
+    payload: {type: "token_count", info: {last_token_usage: {total_tokens: 10}},
+      rate_limits: {limit_id: "codex", primary: {
+        used_percent: used, window_minutes: 10080,
+        resets_at: (at+(n<2?3:7)*86400000)/1000,
+      }}},
+  })).join("\n")+"\n";
+  writeFileSync(log, lines);
+  const statePath = join(root, "state.json");
+  writeFileSync(statePath, JSON.stringify({files: {[log]: {offset: Buffer.byteLength(lines)}}, daily: {openai: {"2026-09-11":40}}}));
+  const options = {statePath, codexDir: codex, claudeDir: claude, now: at};
+  const state = syncSessionUsage(options);
+  assert.equal(state.daily.openai["2026-09-11"], 40);
+  assert.equal(codexDailyQuota(state, at).at(-1), 14);
+  assert.deepEqual(syncSessionUsage(options), state);
+});
 
 test("parses Codex last-token usage without recounting cumulative totals", () => {
   const cursor = { offset: 0 };

@@ -144,6 +144,17 @@ test("red: remaining below 5% while still burning", () => {
   assert.equal(advice.level, "red");
 });
 
+test("red: remaining below 5% without rate samples", () => {
+  const advice = computeAdvice(state({
+    remaining: 10_000,
+    rateSamples: [],
+  }), NOW);
+
+  assert.equal(advice.level, "red");
+  assert.match(advice.pacing, /<5% left/);
+  assert.equal(advice.projectedCapHitAt, null);
+});
+
 test("sustainableRate computed from remaining / hours", () => {
   const advice = computeAdvice(state({ remaining: 168_000 }), NOW); // 168h until reset
   assert.ok(Math.abs(advice.sustainableRate - 1_000) < 0.1);

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { acquireAppClient, acquireInstanceLock, configuredPort, readRuntimeState, releaseAppClient, releaseRuntimeState, writeRuntimeState } from "../dist/server/runtimeState.js";
+import { acquireAppClient, acquireInstanceLock, appClientCount, configuredPort, readRuntimeState, releaseAppClient, releaseRuntimeState, writeRuntimeState } from "../dist/server/runtimeState.js";
 
 test("configured port prefers SessionBar names and permits dynamic zero", () => {
   assert.equal(configuredPort({ SESSIONBAR_PORT: "7001", SESSION_BAR_PORT: "7002", PORT: "7003" }), 7001);
@@ -18,6 +18,7 @@ test("hooks are released only after the final live app client exits", () => {
   try {
     acquireAppClient(home, 101, pid => alive.has(pid));
     acquireAppClient(home, 202, pid => alive.has(pid));
+    assert.equal(appClientCount(home, pid => alive.has(pid)), 2);
     alive.delete(101);
     assert.equal(releaseAppClient(home, 101, pid => alive.has(pid)), false);
     alive.delete(202);
@@ -35,7 +36,7 @@ test("runtime state shares the selected port and lock prevents a second instance
     assert.equal(acquireInstanceLock(home, process.pid), undefined);
     writeRuntimeState(home, { pid: process.pid, port: 54321, started_at: 123 });
     assert.deepEqual(readRuntimeState(home), { pid: process.pid, port: 54321, started_at: 123 });
-    assert.equal(releaseRuntimeState(home, lock), true);
+    assert.equal(releaseRuntimeState(home, lock, process.pid), true);
     assert.equal(readRuntimeState(home), undefined);
   } finally {
     rmSync(home, { recursive: true, force: true });
