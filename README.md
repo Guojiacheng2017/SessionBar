@@ -1,6 +1,21 @@
-# SessionBar
+<p align="center">
+  <img src="docs/images/sessionbar-wordmark.svg" width="720" alt="SessionBar">
+  <br>
+  <sub>AI CLI Session Monitor</sub>
+</p>
 
 **English** | [简体中文](README.zh-CN.md)
+
+## What's New
+
+- **2026-10-07 · Fixed:** Three-pane TUI sizing, single-key setup with cancellation,
+  Provider last-good cache expiry and the polling-disable switch.
+- **2026-10-07 · Hardened:** Local browser request boundaries, private state writes,
+  and compatible dependency updates.
+- **2026-10-07 · Updated:** English and Chinese documentation, privacy-safe
+  screenshots and the SVG wordmark.
+- **2026-09-01 · Fixed:** Workflow events stay display-only rather than overriding
+  explicit session data.
 
 > [!IMPORTANT]
 > SessionBar is still under active development. Some agents, status signals,
@@ -12,7 +27,7 @@ normalizes sessions from multiple agent harnesses, groups them by project
 directory, and presents the result in a terminal UI or local Web dashboard.
 
 One project can contain several concurrent Claude Code, Codex, Gemini,
-Copilot, or WorkBuddy sessions. SessionBar keeps those sessions separate instead
+Copilot or WorkBuddy sessions. SessionBar keeps those sessions separate instead
 of treating the project as a single agent process.
 
 ### Supported harnesses
@@ -22,12 +37,16 @@ of treating the project as a single agent process.
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/openai.svg" width="14" height="14" alt=""> Codex</kbd>
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/gemini-color.svg" width="14" height="14" alt=""> Gemini CLI</kbd>
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/copilot-color.svg" width="14" height="14" alt=""> GitHub Copilot CLI</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude-color.svg" width="14" height="14" alt=""> Claude Desktop</kbd>
   <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> WorkBuddy Desktop</kbd>
 </p>
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="docs/images/tui-landing.png" alt="SessionBar TUI landing screen"><br><sub><b>TUI · Landing</b></sub></td>
+    <td colspan="2" align="center"><img src="docs/images/tui-landing.png" width="560" alt="SessionBar TUI landing screen"><br><sub><b>TUI · Landing</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/images/tui-sessions.png" alt="SessionBar TUI project, sessions and activity details"><br><sub><b>TUI · Sessions</b></sub></td>
     <td width="50%" align="center"><img src="docs/images/tui-providers.png" alt="SessionBar TUI provider overview"><br><sub><b>TUI · Providers</b></sub></td>
   </tr>
   <tr>
@@ -36,47 +55,29 @@ of treating the project as a single agent process.
   </tr>
 </table>
 
-> Screenshots use isolated sample projects, sessions, harnesses, and provider
-> values. They do not contain local paths, account balances, credentials, or
-> other user-specific data.
+> Captured from this release's actual UI on 2026-10-07, using isolated synthetic
+> projects, sessions, system readings, and provider values. No real account data,
+> credentials, or personal paths are included. Missing fields stay unavailable;
+> actual data coverage depends on the harness and provider adapter.
 
 > SessionBar uses the terminal's background. Colors and contrast vary with the
 > active terminal theme.
 
 ## Features
 
-- Project-first navigation with per-project session lists and session details.
-- Separate agent, session ID, task, status, freshness, context, and usage data.
-- Overview, Activity, Usage, Flow, Raw, and System detail views.
-- Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, WorkBuddy Desktop, and extensible hook support.
-- Local provider quota and usage adapters without exposing credentials to the UI.
-- Cached CPU, memory, load, temperature, and network telemetry.
-- Stable alternate-screen rendering with slower polling while unfocused.
-- One local relay per machine, using a dynamically selected loopback port.
+- Project path → session → details navigation; independent sessions per agent.
+- Overview, Activity, Usage, Flow and Raw tabs; System telemetry when unselected.
+- Provider quota, balance and usage trends separate from session status.
+- Cached CPU, memory, load, temperature and network readings.
+- Alternate-screen TUI rendering and slower background polling.
+- One relay per state directory with a dynamic port selected at startup.
 
-## Requirements
+## Install and Update
 
-- macOS or Linux
-- Node.js 22 or newer
-- npm
-- Bun is recommended for the OpenTUI monitor runtime
-
-### Optional provider integration
-
-[CC Switch](https://github.com/farion1231/cc-switch) is optional. When its local
-database is available, SessionBar reads it without modification to provide
-seven-day token history for compatible API providers and to discover compatible
-DeepSeek or Kimi credentials. SessionBar does not install, start, or configure
-CC Switch.
-
-Without CC Switch, session monitoring and official provider adapters continue
-to work. DeepSeek and Kimi balances can instead use `SESSIONBAR_DEEPSEEK_API_KEY`
-and `SESSIONBAR_KIMI_API_KEY`; their local token history remains unavailable
-unless another supported usage source reports it.
-
-## Installation
-
-### Install from source
+Requirements: **Node.js 22+, npm and Bun**. Node runs the CLI, landing screen and
+relay; Bun is required for OpenTUI's native FFI monitor. macOS is the primary
+tested platform. Linux support is partial, with some discovery, credential and
+temperature adapters limited to macOS. Windows parity is not claimed.
 
 ```sh
 git clone https://github.com/Guojiacheng2017/SessionBar.git sessionbar
@@ -84,248 +85,155 @@ cd sessionbar
 npm install
 npm run build
 npm link
-```
-
-After `npm link`, the `sessionbar` command is available globally for the current
-Node.js installation.
-
-To run without linking:
-
-```sh
-npm install
-npm run build
-node dist/cli/cli.js
-```
-
-### Update a source installation
-
-```sh
-git pull
-npm install
-npm run build
-```
-
-## Quick Start
-
-Start the interactive landing screen:
-
-```sh
 sessionbar
 ```
 
-The application starts the local relay automatically. From the landing screen:
+Without linking, run `node dist/cli/cli.js`. Update a source installation with
+`git pull`, `npm install` and `npm run build`.
 
-- `1` or `Enter`: open the live monitor
-- `2`: choose local or global hook setup
-- `3`: print current session status
-- `4`: open SessionBar settings
-- `W`: start or open the Web dashboard
-- `Q`: quit
+## Usage
 
-Open a view directly:
+Landing starts the relay automatically. Select commands with Up/Down or j/k,
+then Enter. Shortcuts: `1` monitor, `2` setup, `3` status, `4` settings,
+`W` Web and `Q` quit.
 
 ```sh
 sessionbar monitor    # 实时终端面板 / Live terminal dashboard
-sessionbar status     # 单次状态输出 / One-shot terminal status
+sessionbar status     # 单次状态输出 / One-shot status
 sessionbar web        # 本地网页面板 / Local Web dashboard
 sessionbar setup      # 配置 Hook 范围 / Configure hook scope
-sessionbar harnesses  # 检查 Harness / Inspect supported harnesses
+sessionbar harnesses  # 检查 Harness / Inspect harness availability
 sessionbar prune      # 清理过期标记 / Remove stale markers
 sessionbar stop       # 显式停止服务 / Explicitly stop the relay
 ```
 
-The monitor uses project-first navigation:
+In Monitor, choose a project with Up/Down and Enter, then choose a session.
+Tab, brackets or `1`–`5` switch detail tabs; `a` or Backspace returns to all
+projects; `v` switches Providers; `r` refreshes, `/` filters, `w` opens Web
+and `q` exits. Without a focused project, all sessions are shown. In Web, click
+projects and sessions; scroll down for Providers.
 
-1. Use `Up`/`Down` or `j`/`k` to select a project.
-2. Press `Enter` to inspect that project's sessions.
-3. Use `Up`/`Down` to select a session.
-4. Use `[`/`]` or number keys to switch detail tabs.
-5. Press Backspace or `a` to return to all projects, and `q` to exit.
+Exiting TUI does not close browser tabs or stop the background relay. Use
+`sessionbar stop` explicitly. Ordinary refreshes do not reassign its port.
 
-## Hook Setup
-
-Choose whether SessionBar should observe only the current project or all
-projects on the machine:
+### Hooks and Discovery
 
 ```sh
-sessionbar setup --local   # 当前项目 / Current project's .claude/settings.json
-sessionbar setup --global  # 全局配置 / Global ~/.claude/settings.json
+sessionbar setup --local   # 当前项目 / Current project
+sessionbar setup --global  # 所有项目 / All projects
 ```
 
-Hooks are activated when an interactive SessionBar app is opened. SessionBar
-only removes hooks it manages. Hook requests use short timeouts, so an
-unavailable relay does not block the agent harness.
+Interactive apps activate SessionBar-managed hooks; one-shot status commands
+do not install them. Harnesses may need a restart to load changed configuration.
+Claude Code, Gemini CLI and Copilot use hook events. Codex also uses local logs
+and app-server metadata. Claude Desktop and WorkBuddy use local registry
+discovery, not injected Desktop hooks. OpenCode discovery and Pi extensions
+are not included in this update.
 
-The canonical reporting command is:
+Custom reporting:
 
 ```sh
 SESSIONBAR_AGENT=codex \
 SESSIONBAR_SESSION_TYPE=Codex \
 SESSIONBAR_PROJECT_DIR="$PWD" \
 SESSIONBAR_SESSION_ID="agent-session-id" \
-./report.sh working "Editing files" "$SESSIONBAR_PORT"
+./report.sh working "Editing files"
 ```
 
-`report.sh` accepts `report.sh <status> <task_name> <server_port>`.
+`report.sh <status> <task_name> [server_port]` reads the current port from state
+when omitted. Session IDs must identify sessions, not just projects. Optional
+fields include `SESSIONBAR_CONTEXT_PERCENT`, `SESSIONBAR_TOKENS` and
+`SESSIONBAR_HOOK_EVENT`; legacy `AGENTBAR_*` variables remain accepted.
 
-For an optional user-managed WorkBuddy balance adapter, set
-`SESSIONBAR_WORKBUDDY_BALANCE_COMMAND` to a read-only command that prints
-canonical JSON such as `{"remaining":2471,"used":2250.52,"unit":"credits"}`.
-SessionBar validates that snapshot; without it, WorkBuddy's local database is
-used only for consumption history and is never presented as account balance.
+## Runtime and Storage
 
-| Variable | Purpose |
-| --- | --- |
-| `SESSIONBAR_AGENT` | Stable lowercase agent key, such as `claude` or `codex` |
-| `SESSIONBAR_SESSION_TYPE` | Human-readable agent label |
-| `SESSIONBAR_PROJECT_DIR` | Absolute project directory |
-| `SESSIONBAR_SESSION_ID` | Stable ID for one agent session |
-| `SESSIONBAR_CONTEXT_PERCENT` | Optional context-window percentage |
-| `SESSIONBAR_TOKENS` | Optional current token count |
-| `SESSIONBAR_HOOK_EVENT` | Optional native lifecycle or tool event |
-
-Legacy `AGENTBAR_*` variables remain accepted for existing installations.
-
-## Runtime and Ports
-
-SessionBar permits only one relay instance per state directory. By default the
-relay binds to `127.0.0.1` on an available dynamic port, then writes the selected
-port to `~/.sessionbar/port`.
-
-The TUI, Web dashboard, hooks, and CLI read the same runtime state. To request a
-specific port:
+Default binding is **127.0.0.1** on an available port recorded in
+`~/.sessionbar/port`. The same directory contains `server.pid`, `server.log`,
+`sessions/`, `settings.json`, `provider-usage-history.json`,
+`provider-last-good.json` and `session-usage-history.json`.
 
 ```sh
-SESSIONBAR_PORT=8989 sessionbar
+SESSIONBAR_PORT=8989 sessionbar             # 可选固定端口 / Optional fixed port
+SESSIONBAR_HOME="$HOME/.sessionbar-dev" sessionbar  # 独立状态 / Isolated state
 ```
 
-`SESSION_BAR_PORT` and `PORT` are accepted as compatibility aliases. A fixed
-port is optional and can fail if another process already owns it.
+`SESSION_BAR_PORT` and `PORT` are compatibility aliases. An explicitly selected
+port can fail if occupied. State and intermediate files do not belong in the
+repository. Sessions without updates remain in memory for up to 30 minutes;
+the list is not a permanent conversation archive.
 
-## State Directory
-
-Intermediate data is stored under `~/.sessionbar/`, never in the repository
-root or a temporary system directory:
-
-| Path | Content |
-| --- | --- |
-| `~/.sessionbar/port` | Current dynamic relay port |
-| `~/.sessionbar/server.pid` | Relay process ID |
-| `~/.sessionbar/server.log` | Relay diagnostics |
-| `~/.sessionbar/sessions/` | Active hook marker files |
-| `~/.sessionbar/settings.json` | User settings |
-| `~/.sessionbar/provider-usage-history.json` | Provider usage samples |
-
-Set `SESSIONBAR_HOME` to use an isolated state directory for development or
-tests.
+SessionBar-owned state directories use `0700` and updated state files use
+`0600` on POSIX. This is not encryption or protection against same-user processes.
 
 ## Provider Data
 
-Provider polling is independent from session status. Supported credentials are
-read from environment variables or compatible local clients and are never sent
-to the TUI, Web UI, session payloads, or logs.
+Adapters include OpenAI/Codex, Anthropic, GitHub Copilot, DeepSeek, MiniMax,
+Kimi, xAI and compatible CC Switch configurations. Coverage depends on
+credentials and upstream APIs. Missing quota is not inferred from session tokens.
 
-Supported sources currently include OpenAI/Codex, Anthropic, GitHub Copilot,
-DeepSeek, MiniMax, Kimi, xAI, and compatible CC Switch configurations. Provider
-polling runs every five minutes by default:
-
-- OpenAI/Codex subscription quota and completed daily token buckets come from
-  the official account APIs. When available, CC Switch supplies today's live
-  token total until the official daily bucket is published.
-- DeepSeek and Kimi balances come from their provider APIs. Their token trends
-  can come from CC Switch's local request history when present.
+[CC Switch](https://github.com/farion1231/cc-switch) is optional and read-only,
+providing compatible credentials and seven-day API token history. Without it,
+monitoring and official adapters still work. DeepSeek and Kimi can use
+`SESSIONBAR_DEEPSEEK_API_KEY` and `SESSIONBAR_KIMI_API_KEY`. WorkBuddy can use a
+read-only `SESSIONBAR_WORKBUDDY_BALANCE_COMMAND` returning validated balance JSON.
 
 ```sh
 SESSIONBAR_PROVIDER_POLL=0 sessionbar
 SESSIONBAR_PROVIDER_POLL_MS=300000 sessionbar
 ```
 
-The minimum interval is 30 seconds. Missing data remains unknown; SessionBar
-does not estimate quota or account balance from session tokens.
+Polling defaults to five minutes, with a 30-second minimum. Successful Provider
+rows are retained for up to 30 days. Failed refreshes show the last value,
+original collection time and stale marker without renewing expiry. Disabled
+polling leaves cache readable without calling subscription or API adapters.
 
-## Performance Tuning
+## Privacy and Security
 
-Session and system data poll every second while the TUI is focused. Rendering
-occurs only when the visible model changes. Background terminal and browser
-views automatically back off.
+This update supports loopback HTTP only. Do not expose the relay through public
+proxies or port forwarding. Browser requests require trusted Host and same
+Origin. Device pairing, LAN gateways and remote telemetry are not released here.
 
-```sh
-SESSIONBAR_TUI_POLL_MS=1000 sessionbar monitor
-SESSIONBAR_TUI_REFRESH_MS=500 sessionbar monitor
-SESSIONBAR_SYSTEM_SAMPLE_MS=2000 sessionbar monitor
-```
+Project paths, titles and activity may contain private information visible to
+local clients. Provider credentials are not returned in UI payloads. Upstream
+Provider APIs and external icons create network requests. Optional `--icloud`
+exports session snapshots to the user's iCloud directory.
+
+Production dependencies pass `npm audit --omit=dev` for this update. This is not
+a complete security audit or protection against malicious local processes.
+Never commit credentials, personal configuration or real snapshots.
 
 ## Development
 
-```text
-src/
-  cli/        command entry and landing screen
-  hooks/      harness setup and event normalization
-  providers/  quota, subscription, and usage adapters
-  server/     relay, runtime state, and settings
-  sessions/   session identity, merge, retention, and details
-  shared/     shared contracts and project utilities
-  system/     host telemetry collectors
-  tui/        OpenTUI monitor and transport
-  web/        browser dashboard
-public/       Web entry document and styles
-test/         Node.js test suite
-```
-
-Build and test:
+Source is organized under `src/cli`, `hooks`, `providers`, `server`, `sessions`,
+`shared`, `system`, `tui` and `web`. Assets are in `public/`, tests in `test/`.
+Screenshot and wordmark tools: [scripts/docs/README.md](scripts/docs/README.md).
 
 ```sh
 npm run build
 npm test
 ```
 
-Before opening a pull request:
-
-1. Keep state under `~/.sessionbar` or an isolated `SESSIONBAR_HOME`.
-2. Add focused tests for behavior changes.
-3. Run `npm test` and confirm all tests pass.
-4. Preserve unknown provider fields as unavailable instead of guessing.
-5. Keep project identity and session identity separate.
-
-## What's New
-
-- **2026-08-24 · Fixed:** Protected the active Server's dynamically selected
-  port and runtime state from stale process cleanup.
-- **2026-08-17 · Added:** Discovered Claude Desktop and WorkBuddy Desktop
-  sessions alongside CLI harness sessions.
-- **2026-08-17 · Added:** Introduced Provider usage modes for comparing token,
-  cost, and percentage-based usage.
+Add regression tests, keep state outside the repo, preserve unknown values and
+separate project and session identity. Experimental cost, native companion
+and optical pairing work are excluded from this update.
 
 ## Contributions
 
-Code contributions, bug reports, reproducible performance traces, and harness
+Code contributions, bug reports, reproducible performance traces and harness
 adapter improvements are welcome. By contributing, you agree that your changes
 may be distributed under the project's MIT License.
 
 ## Related Work and Direction
 
-Several independent projects address adjacent parts of the coding-agent
-workspace. They are listed here to describe the field and SessionBar's
-position in it, not to claim that their implementations were used as references:
-
-| Project | Primary focus |
-| --- | --- |
-| [Orca](https://github.com/stablyai/orca) | Running and steering a fleet of coding agents across desktop, mobile, and remote environments. |
-| [abtop](https://github.com/graykode/abtop) | Real-time terminal observability for agent sessions, context, tokens, limits, and processes. |
-| [Mole](https://github.com/tw93/mole) | A polished command-line interface for local system maintenance and monitoring. |
-| [Rezi](https://github.com/RtlZeroMemory/Rezi) and [OpenTUI](https://github.com/anomalyco/opentui) | TypeScript frameworks for building stateful terminal applications. |
-
-SessionBar's long-term direction is a local, low-overhead control surface for
-every coding-agent session on a machine: independent of the harness that owns
-the session, organized by project, private by default, and available through
-both terminal and Web interfaces. It should make sessions easy to discover,
-observe, compare, focus, and resume without taking ownership of how each agent
-executes its work.
-
-The projects above are independent. Their inclusion does not imply dependency,
-affiliation, endorsement, or code derivation.
+[Orca](https://github.com/stablyai/orca), [abtop](https://github.com/graykode/abtop),
+[Mole](https://github.com/tw93/mole), [Rezi](https://github.com/RtlZeroMemory/Rezi)
+and [OpenTUI](https://github.com/anomalyco/opentui) explore adjacent agent,
+terminal and system-monitoring workflows. This describes the field, not code
+derivation, affiliation or endorsement. SessionBar aims to provide a private,
+low-overhead, project-organized view of coding-agent sessions on a machine.
 
 ## License
 
-SessionBar is released under the [MIT License](LICENSE). Third-party packages
-remain subject to their own licenses and copyright notices.
+[MIT License](LICENSE). Third-party assets retain their own licenses.
+See [third-party notices](docs/THIRD_PARTY_NOTICES.md) for bundled Splide assets
+and the README wordmark's font attribution.

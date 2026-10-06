@@ -1,6 +1,17 @@
-# SessionBar
+<p align="center">
+  <img src="docs/images/sessionbar-wordmark.svg" width="720" alt="SessionBar">
+  <br>
+  <sub>AI CLI Session Monitor</sub>
+</p>
 
 [English](README.md) | **简体中文**
+
+## 最新动态
+
+- **2026-10-07 · 修复：** 三栏 TUI 排版、Setup 单键选择与取消、Provider 缓存过期及禁用轮询。
+- **2026-10-07 · 加固：** 本地浏览器请求边界、私有状态写入及兼容版本依赖更新。
+- **2026-10-07 · 更新：** 双语文档、脱敏截图和 SVG 字标。
+- **2026-09-01 · 修复：** Workflow 事件仅展示，不覆盖明确的 Session 数据。
 
 > [!IMPORTANT]
 > SessionBar 目前仍在持续完善中，部分 Agent、状态识别和平台行为可能尚未完全覆盖。
@@ -21,12 +32,16 @@ Agent 进程。
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/openai.svg" width="14" height="14" alt=""> Codex</kbd>
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/gemini-color.svg" width="14" height="14" alt=""> Gemini CLI</kbd>
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/copilot-color.svg" width="14" height="14" alt=""> GitHub Copilot CLI</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude-color.svg" width="14" height="14" alt=""> Claude Desktop</kbd>
   <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> WorkBuddy Desktop</kbd>
 </p>
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="docs/images/tui-landing.png" alt="SessionBar TUI 首页"><br><sub><b>TUI · 首页</b></sub></td>
+    <td colspan="2" align="center"><img src="docs/images/tui-landing.png" width="560" alt="SessionBar TUI 首页"><br><sub><b>TUI · 首页</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/images/tui-sessions.png" alt="SessionBar TUI 项目、会话与活动详情"><br><sub><b>TUI · 会话</b></sub></td>
     <td width="50%" align="center"><img src="docs/images/tui-providers.png" alt="SessionBar TUI Provider 总览"><br><sub><b>TUI · Providers</b></sub></td>
   </tr>
   <tr>
@@ -35,44 +50,26 @@ Agent 进程。
   </tr>
 </table>
 
-> 截图使用隔离的示例项目、会话、Harness 和 Provider 数值，不包含本机路径、
-> 账户余额、凭据或其他用户专属数据。
+> 截图于 2026-10-07 根据本次发布的实际 UI 生成，使用隔离的模拟项目、会话、系统指标和
+> Provider 数值，不包含真实账户数据、凭据或个人路径。缺失字段仍显示为不可用；
+> 实际数据覆盖范围取决于 Harness 和 Provider Adapter。
 
 > SessionBar 使用终端自身的背景色；实际颜色和对比度会随终端主题变化。
 
 ## 功能
 
-- 以项目为第一层级，在项目内选择会话并查看详细信息。
-- 分别显示 Agent、会话 ID、任务、状态、更新时间、Context 和 Usage。
-- 提供 Overview、Activity、Usage、Flow、Raw 和 System 详情页。
-- 支持 Claude Code、Codex、Gemini CLI、GitHub Copilot CLI、WorkBuddy Desktop 及可扩展 Hook。
-- 在不向 UI 暴露凭据的前提下展示 Provider 配额和用量。
-- 缓存 CPU、内存、负载、温度和网络状态。
-- 使用 alternate screen 稳定渲染；失去焦点时自动降低轮询频率。
-- 每台机器只运行一个本地 Relay，并动态选择 loopback 端口。
+- 项目路径 → Session → Details；每个 Agent 会话保持独立。
+- Overview、Activity、Usage、Flow、Raw 详情；未选择项目时展示系统状态。
+- Provider 配额、余额、趋势与 Session 状态分离。
+- 缓存 CPU、内存、负载、温度和网络读数。
+- Alternate-screen TUI 渲染和后台降频。
+- 每个状态目录一个 Relay，启动时动态分配端口。
 
-## 环境要求
+## 安装与更新
 
-- macOS 或 Linux
-- Node.js 22 或更高版本
-- npm
-- 建议安装 Bun，以运行 OpenTUI Monitor
-
-### 可选 Provider 集成
-
-[CC Switch](https://github.com/farion1231/cc-switch) 是可选集成。检测到其本地
-数据库后，SessionBar 会以只读方式获取兼容 API Provider 的七日 Token 历史，
-并发现兼容的 DeepSeek 或 Kimi 凭据。SessionBar 不会安装、启动或修改
-CC Switch。
-
-未安装 CC Switch 时，会话监控和官方 Provider Adapter 仍可正常工作。DeepSeek
-和 Kimi 余额也可分别通过 `SESSIONBAR_DEEPSEEK_API_KEY` 与
-`SESSIONBAR_KIMI_API_KEY` 接入；除非有其他受支持的数据源上报，否则不会显示
-这两者的本地 Token 历史。
-
-## 安装
-
-### 从源码安装
+需要 **Node.js 22+、npm 和 Bun**。Node 运行 CLI、Landing 和 Relay；OpenTUI
+Monitor 需要 Bun 原生 FFI。macOS 是主要测试平台；Linux 部分支持，部分桌面发现、
+凭据和温度 Adapter 仅支持 macOS。当前不承诺 Windows 功能对等。
 
 ```sh
 git clone https://github.com/Guojiacheng2017/SessionBar.git sessionbar
@@ -80,229 +77,140 @@ cd sessionbar
 npm install
 npm run build
 npm link
-```
-
-执行 `npm link` 后，当前 Node.js 环境中会注册全局 `sessionbar` 命令。
-
-不注册全局命令也可以直接运行：
-
-```sh
-npm install
-npm run build
-node dist/cli/cli.js
-```
-
-### 更新源码安装
-
-```sh
-git pull
-npm install
-npm run build
-```
-
-## 快速开始
-
-打开交互式首页：
-
-```sh
 sessionbar
 ```
 
-应用会自动启动本地 Relay。首页快捷键：
+无需全局链接时运行 `node dist/cli/cli.js`。源码安装更新：依次执行
+`git pull`、`npm install`、`npm run build`。
 
-- `1` 或 `Enter`：打开实时 Monitor
-- `2`：选择局部或全局 Hook 范围
-- `3`：输出当前会话状态
-- `4`：打开 SessionBar 设置
-- `W`：启动或打开 Web 面板
-- `Q`：退出
+## 使用
 
-也可以直接进入指定功能：
+Landing 自动启动 Relay。用上下方向键或 j/k 选择，Enter 执行。
+快捷键：`1` Monitor、`2` Setup、`3` Status、`4` Settings、`W` Web、`Q` 退出。
 
 ```sh
 sessionbar monitor    # 实时终端面板 / Live terminal dashboard
-sessionbar status     # 单次状态输出 / One-shot terminal status
+sessionbar status     # 单次状态输出 / One-shot status
 sessionbar web        # 本地网页面板 / Local Web dashboard
 sessionbar setup      # 配置 Hook 范围 / Configure hook scope
-sessionbar harnesses  # 检查 Harness / Inspect supported harnesses
+sessionbar harnesses  # 检查 Harness / Inspect harness availability
 sessionbar prune      # 清理过期标记 / Remove stale markers
 sessionbar stop       # 显式停止服务 / Explicitly stop the relay
 ```
 
-Monitor 按项目优先导航：
+Monitor 中先上下选择项目并 Enter，再上下选择其中的 Session。
+Tab、方括号或 `1`–`5` 切换详情，`a` 或 Backspace 返回全部项目，
+`v` 切换 Providers、`r` 刷新、`/` 过滤、`w` 打开网页、`q` 退出。
+未聚焦项目时显示全部 Session。Web 中点击项目和会话，向下滚动进入 Providers。
 
-1. 使用 `Up`/`Down` 或 `j`/`k` 选择项目。
-2. 按 `Enter` 查看该项目中的会话。
-3. 使用 `Up`/`Down` 选择具体会话。
-4. 使用 `[`/`]` 或数字键切换详情 Tab。
-5. 按 Backspace 或 `a` 返回所有项目，按 `q` 退出。
+退出 TUI 不会关闭浏览器标签或停止后台 Relay；执行 `sessionbar stop` 显式停止。
+正常刷新不会重新分配运行中 Relay 的端口。
 
-## Hook 配置
-
-选择仅监控当前项目，或监控机器上的所有项目：
+### Hook 与发现
 
 ```sh
-sessionbar setup --local   # 当前项目 / Current project's .claude/settings.json
-sessionbar setup --global  # 全局配置 / Global ~/.claude/settings.json
+sessionbar setup --local   # 当前项目 / Current project
+sessionbar setup --global  # 所有项目 / All projects
 ```
 
-打开交互式 SessionBar 应用后，已配置的 Hook 才会激活。SessionBar 只移除
-自己管理的 Hook。Hook 请求使用较短的连接超时，因此 Relay 不可用时不会阻塞
-Agent Harness。
+交互应用激活 SessionBar 管理的 Hook；单次 Status 不安装 Hook。Harness 可能需重启
+加载配置。Claude Code、Gemini CLI、Copilot 使用 Hook；Codex 另有本地日志和 App
+Server 元数据。Claude Desktop、WorkBuddy 使用本地 Registry 发现，不注入 Desktop
+Hook。本次不包含 OpenCode 发现和 Pi Extension。
 
-规范化上报命令：
+自定义上报：
 
 ```sh
 SESSIONBAR_AGENT=codex \
 SESSIONBAR_SESSION_TYPE=Codex \
 SESSIONBAR_PROJECT_DIR="$PWD" \
 SESSIONBAR_SESSION_ID="agent-session-id" \
-./report.sh working "Editing files" "$SESSIONBAR_PORT"
+./report.sh working "Editing files"
 ```
 
-`report.sh` 参数为 `report.sh <status> <task_name> <server_port>`。
+`report.sh <status> <task_name> [server_port]` 在省略端口时读取状态目录。
+Session ID 必须标识独立会话，不能仅标识项目。可选字段包括
+`SESSIONBAR_CONTEXT_PERCENT`、`SESSIONBAR_TOKENS`、`SESSIONBAR_HOOK_EVENT`。
+保留对旧 `AGENTBAR_*` 变量的兼容。
 
-| 变量 | 用途 |
-| --- | --- |
-| `SESSIONBAR_AGENT` | 稳定的小写 Agent 标识，如 `claude`、`codex` |
-| `SESSIONBAR_SESSION_TYPE` | 面向用户的 Agent 名称 |
-| `SESSIONBAR_PROJECT_DIR` | 项目绝对路径 |
-| `SESSIONBAR_SESSION_ID` | 单个 Agent 会话的稳定 ID |
-| `SESSIONBAR_CONTEXT_PERCENT` | 可选的 Context 使用百分比 |
-| `SESSIONBAR_TOKENS` | 可选的当前 Token 数量 |
-| `SESSIONBAR_HOOK_EVENT` | 可选的原生生命周期或工具事件 |
+## 运行状态与存储
 
-为了兼容已有安装，SessionBar 仍接受旧的 `AGENTBAR_*` 变量。
-
-## 运行时和端口
-
-每个状态目录只允许存在一个 Relay 实例。默认监听 `127.0.0.1`，自动选择可用
-端口，并将最终端口写入：
-
-```text
-~/.sessionbar/port
-```
-
-TUI、Web、Hook 和 CLI 使用同一份运行时状态。如需指定端口：
+默认绑定 **127.0.0.1** 的可用端口，记录于 `~/.sessionbar/port`。同目录包含
+`server.pid`、`server.log`、`sessions/`、`settings.json`、
+`provider-usage-history.json`、`provider-last-good.json`、`session-usage-history.json`。
 
 ```sh
-SESSIONBAR_PORT=8989 sessionbar
+SESSIONBAR_PORT=8989 sessionbar             # 可选固定端口 / Optional fixed port
+SESSIONBAR_HOME="$HOME/.sessionbar-dev" sessionbar  # 独立状态 / Isolated state
 ```
 
-兼容变量 `SESSION_BAR_PORT` 和 `PORT` 也可使用。固定端口不是默认方向；如果已被
-其他进程占用，启动会失败。
+`SESSION_BAR_PORT`、`PORT` 为兼容别名。显式端口被占用时可能启动失败。
+状态和中间数据不应写入仓库。Session 无更新时在内存保留最多 30 分钟，
+列表并非永久对话档案。
 
-## 状态目录
-
-所有中间数据存储在 `~/.sessionbar/`，不会写入项目根目录或系统临时目录。
-
-| 路径 | 内容 |
-| --- | --- |
-| `~/.sessionbar/port` | 当前动态端口 |
-| `~/.sessionbar/server.pid` | Relay 进程 ID |
-| `~/.sessionbar/server.log` | Relay 诊断日志 |
-| `~/.sessionbar/sessions/` | 活跃 Hook 标记 |
-| `~/.sessionbar/settings.json` | 用户设置 |
-| `~/.sessionbar/provider-usage-history.json` | Provider 用量采样 |
-
-开发或测试时可通过 `SESSIONBAR_HOME` 使用隔离的状态目录。
+POSIX 状态目录权限为 `0700`，更新后的状态文件为 `0600`。
+这不是加密，也无法阻止同一用户身份的其他进程读取。
 
 ## Provider 数据
 
-Provider 轮询与 Session 状态相互独立。凭据仅从环境变量或兼容的本地客户端中
-读取，不会发送到 TUI、Web UI、Session Payload 或日志。
+Adapter 包括 OpenAI/Codex、Anthropic、GitHub Copilot、DeepSeek、MiniMax、
+Kimi、xAI 及兼容 CC Switch 配置，覆盖取决于凭据和上游接口。
+不会从 Session Token 猜测缺失的账户配额。
 
-当前数据源包括 OpenAI/Codex、Anthropic、GitHub Copilot、DeepSeek、MiniMax、
-Kimi、xAI 和兼容的 CC Switch 配置。默认每五分钟刷新：
-
-- OpenAI/Codex 的订阅配额和已完成日期的 Token bucket 来自官方账户 API；
-  安装 CC Switch 后，在官方当日 bucket 发布前由其补充今天的实时 Token 总量。
-- DeepSeek 与 Kimi 的余额来自各自 Provider API；安装 CC Switch 后，可用其
-  本地请求历史展示 Token 趋势。
+[CC Switch](https://github.com/farion1231/cc-switch) 是可选只读集成，提供兼容凭据和
+七天 API Token 历史。没有它也能运行监控和官方 Adapter。DeepSeek、Kimi 可使用
+`SESSIONBAR_DEEPSEEK_API_KEY`、`SESSIONBAR_KIMI_API_KEY`。
+WorkBuddy 可配置只读 `SESSIONBAR_WORKBUDDY_BALANCE_COMMAND` 输出校验后的余额 JSON。
 
 ```sh
 SESSIONBAR_PROVIDER_POLL=0 sessionbar
 SESSIONBAR_PROVIDER_POLL_MS=300000 sessionbar
 ```
 
-最短轮询间隔为 30 秒。缺失的数据保持 Unknown；SessionBar 不会通过 Session
-Token 猜测 Provider 配额或余额。
+默认五分钟采集，最短 30 秒。成功 Provider 数据最多保留 30 天；刷新失败显示
+最后数值、原采集时间和 stale 标记，不续期。关闭轮询后仍可读取缓存，但不调用
+订阅或 API Adapter。
 
-## 性能配置
+## 隐私与安全
 
-TUI 获得焦点时，Session 和 System 数据默认每秒轮询；仅当可见模型变化时才
-重新渲染。终端或浏览器页面进入后台后会自动降低刷新频率。
+本次仅支持 Loopback HTTP，不要通过公共代理或端口转发暴露 Relay。浏览器请求
+校验可信 Host 和同源 Origin。设备配对、LAN 网关和远程遥测不在本次发布中。
 
-```sh
-SESSIONBAR_TUI_POLL_MS=1000 sessionbar monitor
-SESSIONBAR_TUI_REFRESH_MS=500 sessionbar monitor
-SESSIONBAR_SYSTEM_SAMPLE_MS=2000 sessionbar monitor
-```
+项目路径、标题和 Activity 可能包含私人信息，本地客户端可以看到。
+Provider 凭据不返回 UI Payload。上游接口、外部 Icon 会产生网络请求。
+可选 `--icloud` 将 Session 快照导出到用户 iCloud 目录。
+
+本次生产依赖通过 `npm audit --omit=dev`，但不代表全面安全审计或能防御恶意
+本地进程。不要提交凭据、个人配置或真实快照。
 
 ## 开发
 
-```text
-src/
-  cli/        命令入口和 Landing Page
-  hooks/      Harness 配置和事件规范化
-  providers/  配额、订阅和用量 Adapter
-  server/     Relay、运行时状态和设置
-  sessions/   Session 身份、合并、保留和详情
-  shared/     共享类型和项目工具
-  system/     主机状态采集
-  tui/        OpenTUI Monitor 和 Transport
-  web/        浏览器面板
-public/       Web 入口和样式
-test/         Node.js 测试
-```
-
-构建和测试：
+源码按职责位于 `src/cli`、`hooks`、`providers`、`server`、`sessions`、
+`shared`、`system`、`tui`、`web`；资源在 `public/`，测试在 `test/`。
+截图与字标工具说明见 [scripts/docs/README.md](scripts/docs/README.md)。
 
 ```sh
 npm run build
 npm test
 ```
 
-提交 Pull Request 前：
+添加回归测试，状态放在仓库外，保留未知值，并区分项目与 Session 身份。
+实验中的费用、原生伴随应用及光学配对不在本次更新内。
 
-1. 将状态保存在 `~/.sessionbar` 或隔离的 `SESSIONBAR_HOME` 中。
-2. 为行为变化添加有针对性的测试。
-3. 执行 `npm test` 并确保全部通过。
-4. 不猜测 Provider 数据，未知字段应保持不可用状态。
-5. 始终区分 Project Identity 和 Session Identity。
+## 贡献
 
-## 最新动态
+欢迎提交代码、Bug Report、可复现的性能数据以及 Harness Adapter 改进。
+提交贡献即表示同意相关修改可按本项目的 MIT License 发布。
 
-- **2026-08-24 · 修复：** 保护当前 Server 动态选择的端口和运行状态，避免被旧进程清理。
-- **2026-08-17 · 新增：** 将 Claude Desktop 与 WorkBuddy Desktop Session
-  和 CLI Harness Session 一起发现并展示。
-- **2026-08-17 · 新增：** Provider 用量模式，可比较 Token、费用和百分比用量。
+## 前任工作与方向
 
-## 贡献者
-
-欢迎提交代码、Bug Report、可复现的性能数据以及 Harness Adapter 改进。提交
-贡献即表示同意相关修改可按本项目的 MIT License 发布。
-
-## 相关工作与长期方向
-
-目前已有多个独立项目探索编程 Agent 工作空间的不同部分。这里列出它们，是为了
-说明这一领域和 SessionBar 的位置，并不表示 SessionBar 的实现参考了这些项目：
-
-| 项目 | 主要方向 |
-| --- | --- |
-| [Orca](https://github.com/stablyai/orca) | 在桌面、移动端和远程环境中运行与控制 Agent Fleet。 |
-| [abtop](https://github.com/graykode/abtop) | 实时展示 Agent Session、Context、Token、Limit 和进程状态的终端可观测工具。 |
-| [Mole](https://github.com/tw93/mole) | 面向本地系统维护与监控的完整命令行交互体验。 |
-| [Rezi](https://github.com/RtlZeroMemory/Rezi) 与 [OpenTUI](https://github.com/anomalyco/opentui) | 用于构建有状态终端应用的 TypeScript Framework。 |
-
-SessionBar 的长期方向，是成为一台电脑上所有编程 Agent Session 的本地、低开销
-控制界面：不依赖具体 Harness，按 Project 组织，默认保护隐私，并同时提供 TUI
-和 Web UI。它应帮助用户发现、观察、比较、定位和恢复 Session，但不接管各个
-Agent 实际执行工作的方式。
-
-以上项目彼此独立。列出它们不代表依赖、隶属、背书或代码派生关系。
+[Orca](https://github.com/stablyai/orca)、[abtop](https://github.com/graykode/abtop)、
+[Mole](https://github.com/tw93/mole)、[Rezi](https://github.com/RtlZeroMemory/Rezi)、
+[OpenTUI](https://github.com/anomalyco/opentui) 探索了相邻的 Agent、终端与系统监控问题。
+此列表说明领域背景，不代表代码借用、关联或背书。SessionBar 的方向是低开销、
+隐私优先、按项目组织的全机编程 Agent 会话视图。
 
 ## 许可证
 
-SessionBar 使用 [MIT License](LICENSE)。第三方依赖仍遵循各自的许可证和
-版权声明。
+[MIT License](LICENSE)。第三方资源保留各自许可证。
+Bundled Splide 和 README 字标字体归属见 [第三方声明](docs/THIRD_PARTY_NOTICES.md)。
