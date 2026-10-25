@@ -25,6 +25,10 @@ Use the loopback URL printed by the preview server / 打开预览服务输出的
 - `/__preview/terminal?view=monitor`: real Monitor; select a project with Enter,
   select Activity with `2`, switch Providers with `v` / 真实 Monitor；Enter 打开项目，
   `2` 选择 Activity，`v` 切换 Providers。
+- Add `&cols=80&rows=24` to a terminal preview URL to check a compact viewport.
+  Each view/size gets its own PTY, so narrow and wide previews can be checked
+  independently. Supported dimensions: 40–240 columns, 16–80 rows.
+  终端预览 URL 可加 `&cols=80&rows=24`；不同视图和尺寸使用独立 PTY。
 
 Click the terminal before using its keyboard controls. Capture the terminal
 element or the Web viewport using Playwright. Store the five PNGs in
@@ -40,10 +44,11 @@ The preview's dynamically assigned port is not the production relay port.
 
 The README wordmark uses outlined Lobster Two Bold Italic with the landing
 screen's rainbow palette. It is transparent and contains no embedded font,
-scripts, or external resources. The application's ASCII logo is unchanged.
+scripts, or external resources. The terminal uses a compact wordmark with the
+same ten color stops.
 
 README 字标使用 Lobster Two Bold Italic 的文字轮廓，沿用首页的彩虹配色。
-背景透明，不内嵌字体、脚本或外部资源；应用内 ASCII 标题保持不变。
+背景透明，不内嵌字体、脚本或外部资源；终端使用相同十个色阶的紧凑字标。
 
 Font source / 字体来源：[Google Fonts](https://github.com/google/fonts/tree/main/ofl/lobstertwo),
 Pablo Impallari and Igino Marini; SIL Open Font License 1.1.

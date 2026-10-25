@@ -8,9 +8,10 @@
 
 ## 最新动态
 
-- **2026-10-07 · 修复：** 三栏 TUI 排版、Setup 单键选择与取消、Provider 缓存过期及禁用轮询。
-- **2026-10-07 · 加固：** 本地浏览器请求边界、私有状态写入及兼容版本依赖更新。
-- **2026-10-07 · 更新：** 双语文档、脱敏截图和 SVG 字标。
+- **2026-10-26 · v1.0.0：** Web 与终端沿用彩虹字标和冷灰蓝主题，更新全部五张脱敏截图。
+- **2026-10-26 · 修复：** Web 断线提示、长标题、窄终端导航与详情滚动；明确标注已用配额。
+- **2026-10-26 · 加固：** 清理身份不明确的旧 Claude Hook，更新兼容依赖以修复 body-parser 压缩请求 DoS 漏洞。
+- **2026-10-07 · 修复：** 三栏排版、可取消 Setup、Provider 缓存过期与本地浏览器请求边界。
 - **2026-09-01 · 修复：** Workflow 事件仅展示，不覆盖明确的 Session 数据。
 
 > [!IMPORTANT]
@@ -50,7 +51,7 @@ Agent 进程。
   </tr>
 </table>
 
-> 截图于 2026-10-07 根据本次发布的实际 UI 生成，使用隔离的模拟项目、会话、系统指标和
+> 截图于 2026-10-26 根据本次发布的实际 UI 生成，使用隔离的模拟项目、会话、系统指标和
 > Provider 数值，不包含真实账户数据、凭据或个人路径。缺失字段仍显示为不可用；
 > 实际数据覆盖范围取决于 Harness 和 Provider Adapter。
 
@@ -70,6 +71,21 @@ Agent 进程。
 需要 **Node.js 22+、npm 和 Bun**。Node 运行 CLI、Landing 和 Relay；OpenTUI
 Monitor 需要 Bun 原生 FFI。macOS 是主要测试平台；Linux 部分支持，部分桌面发现、
 凭据和温度 Adapter 仅支持 macOS。当前不承诺 Windows 功能对等。
+
+### 安装发布包
+
+从 [GitHub Releases](https://github.com/Guojiacheng2017/SessionBar/releases/latest)
+下载 `sessionbar-1.0.0.tgz` 和 `SHA256SUMS`，在下载目录运行：
+
+```sh
+shasum -a 256 -c SHA256SUMS
+npm install --global ./sessionbar-1.0.0.tgz
+sessionbar
+```
+
+这是 GitHub 发布包，不代表已发布到 npm Registry。
+
+### 从源码安装
 
 ```sh
 git clone https://github.com/Guojiacheng2017/SessionBar.git sessionbar
@@ -102,6 +118,7 @@ Monitor 中先上下选择项目并 Enter，再上下选择其中的 Session。
 Tab、方括号或 `1`–`5` 切换详情，`a` 或 Backspace 返回全部项目，
 `v` 切换 Providers、`r` 刷新、`/` 过滤、`w` 打开网页、`q` 退出。
 未聚焦项目时显示全部 Session。Web 中点击项目和会话，向下滚动进入 Providers。
+详情支持 `PageUp`、`PageDown`、`Home`、`End`，窄终端也可访问底部内容。
 
 退出 TUI 不会关闭浏览器标签或停止后台 Relay；执行 `sessionbar stop` 显式停止。
 正常刷新不会重新分配运行中 Relay 的端口。

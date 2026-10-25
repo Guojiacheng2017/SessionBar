@@ -5,7 +5,7 @@ assets retain their own licenses. / 项目代码采用 MIT；第三方软件与�
 
 - **Splide 4.1.4:** Copyright 2022 Naotoshi Fujita, MIT License. Bundled JavaScript
   and CSS are under `public/vendor/splide/`; see its [LICENSE](../public/vendor/splide/LICENSE).
-- **README wordmark:** Outlined text generated with Lobster Two Bold Italic,
+- **Brand wordmark (README, Web and terminal mask) / 品牌字标：** Outlined text generated with Lobster Two Bold Italic,
   designed by Pablo Impallari and Igino Marini. The font uses SIL Open Font
   License 1.1; see [font license](licenses/LobsterTwo-OFL.txt). The SVG is a
   document created with the font, not a redistributed font file.

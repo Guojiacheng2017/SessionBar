@@ -8,12 +8,14 @@
 
 ## What's New
 
-- **2026-10-07 · Fixed:** Three-pane TUI sizing, single-key setup with cancellation,
-  Provider last-good cache expiry and the polling-disable switch.
-- **2026-10-07 · Hardened:** Local browser request boundaries, private state writes,
-  and compatible dependency updates.
-- **2026-10-07 · Updated:** English and Chinese documentation, privacy-safe
-  screenshots and the SVG wordmark.
+- **2026-10-26 · v1.0.0:** Unified the Web and terminal UI around the rainbow
+  wordmark and cool gray-blue theme; refreshed all five privacy-safe screenshots.
+- **2026-10-26 · Fixed:** Persistent Web disconnect feedback, long titles,
+  narrow-terminal navigation and scrollable details; clarified used quota values.
+- **2026-10-26 · Hardened:** Removed ambiguous legacy Claude hooks and updated
+  compatible dependencies to fix the body-parser compressed-request DoS advisory.
+- **2026-10-07 · Fixed:** Three-pane sizing, cancellable setup, Provider cache
+  expiry and local browser request boundaries.
 - **2026-09-01 · Fixed:** Workflow events stay display-only rather than overriding
   explicit session data.
 
@@ -55,7 +57,7 @@ of treating the project as a single agent process.
   </tr>
 </table>
 
-> Captured from this release's actual UI on 2026-10-07, using isolated synthetic
+> Captured from this release's actual UI on 2026-10-26, using isolated synthetic
 > projects, sessions, system readings, and provider values. No real account data,
 > credentials, or personal paths are included. Missing fields stay unavailable;
 > actual data coverage depends on the harness and provider adapter.
@@ -78,6 +80,22 @@ Requirements: **Node.js 22+, npm and Bun**. Node runs the CLI, landing screen an
 relay; Bun is required for OpenTUI's native FFI monitor. macOS is the primary
 tested platform. Linux support is partial, with some discovery, credential and
 temperature adapters limited to macOS. Windows parity is not claimed.
+
+### Release Package
+
+Download `sessionbar-1.0.0.tgz` and `SHA256SUMS` from
+[GitHub Releases](https://github.com/Guojiacheng2017/SessionBar/releases/latest).
+From the download directory:
+
+```sh
+shasum -a 256 -c SHA256SUMS
+npm install --global ./sessionbar-1.0.0.tgz
+sessionbar
+```
+
+This is a GitHub release archive, not an npm registry publication.
+
+### From Source
 
 ```sh
 git clone https://github.com/Guojiacheng2017/SessionBar.git sessionbar
@@ -112,6 +130,7 @@ Tab, brackets or `1`–`5` switch detail tabs; `a` or Backspace returns to all
 projects; `v` switches Providers; `r` refreshes, `/` filters, `w` opens Web
 and `q` exits. Without a focused project, all sessions are shown. In Web, click
 projects and sessions; scroll down for Providers.
+Use `PageUp`, `PageDown`, `Home` and `End` to reach all detail content in small terminals.
 
 Exiting TUI does not close browser tabs or stop the background relay. Use
 `sessionbar stop` explicitly. Ordinary refreshes do not reassign its port.
