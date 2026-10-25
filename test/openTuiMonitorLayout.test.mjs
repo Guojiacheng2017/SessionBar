@@ -4,6 +4,7 @@ import {
   createIndependentMonitorRefresh,
   createSingleFlightRefresh,
   createVisibleModelUpdater,
+  fitPanelTitle,
   monitorBodyLayout,
   monitorWorkspaceLayout,
   monitorPollDelay,
@@ -125,6 +126,38 @@ test("narrow monitor workspace stacks all three panels without dropping one", ()
   assert.equal(layout.projectHeight, 8);
   assert.equal(layout.sessionsHeight, 9);
   assert.equal(layout.detailsHeight, "auto");
+});
+
+test("short terminal drills into a visible Sessions and Details workspace", () => {
+  const overview = monitorWorkspaceLayout(80, 24, false);
+  assert.equal(overview.direction, "column");
+  assert.equal(overview.projectHeight, 7);
+  assert.equal(overview.sessionsHeight, "auto");
+
+  const drilldown = monitorWorkspaceLayout(80, 24, true);
+  assert.equal(drilldown.direction, "row");
+  assert.equal(drilldown.sessionsHeight, "100%");
+  assert.equal(drilldown.detailsHeight, "100%");
+  assert.equal(drilldown.sessionsWidth + drilldown.detailsWidth + 1, 78);
+});
+
+test("short visible model never exposes a pane that has no room", () => {
+  const renderer = { width: 80, height: 24 };
+  const overview = monitorVisibleModel(monitorState(), renderer, 11_000);
+  assert.equal(overview.projectsVisible, true);
+  assert.equal(overview.detailsVisible, false);
+
+  const drilldown = monitorVisibleModel(monitorState({
+    filterText: "",
+    projectCursorKey: "name:Shown",
+    projectFocusKey: "name:Shown",
+    selectedIdx: 0,
+    selectedId: "a",
+  }), renderer, 11_000);
+  assert.equal(drilldown.projectsVisible, false);
+  assert.equal(drilldown.sessionsVisible, true);
+  assert.equal(drilldown.detailsVisible, true);
+  assert.ok(drilldown.detailsWidth >= 32);
 });
 
 test("system overview renders a deterministic compact efficiency panel", () => {
@@ -266,6 +299,76 @@ test("monitor resolves the displayed port from current runtime state", () => {
     monitorVisibleModel(monitorState({ view: "providers" }), renderer, 10_100, opts).online,
     "online :60388",
   );
+});
+
+test("monitor makes keyboard focus explicit in panel titles", () => {
+  const renderer = { width: 154, height: 44 };
+  const projects = monitorVisibleModel(monitorState({ projectFocusKey: null }), renderer, 11_000);
+  assert.equal(projects.focusRegion, "projects");
+  assert.match(projects.projectsTitle, /^› /);
+
+  const sessions = monitorVisibleModel(monitorState({
+    filterText: "",
+    projectCursorKey: "name:Shown",
+    projectFocusKey: "name:Shown",
+    selectedIdx: 0,
+    selectedId: "a",
+  }), renderer, 11_000);
+  assert.equal(sessions.focusRegion, "sessions");
+  assert.match(sessions.sessionsTitle, /^› /);
+});
+
+test("narrow monitor uses a compact shortcut footer", () => {
+  for (const width of [40, 58, 80, 119, 154]) {
+    const projects = monitorVisibleModel(monitorState(), { width, height: 28 }, 11_000);
+    assert.ok(projects.footer.length <= width - 2, `projects footer overflow at ${width}`);
+    const sessions = monitorVisibleModel(monitorState({
+      filterText: "",
+      projectCursorKey: "name:Shown",
+      projectFocusKey: "name:Shown",
+      selectedIdx: 0,
+      selectedId: "a",
+    }), { width, height: 28 }, 11_000);
+    assert.ok(sessions.footer.length <= width - 2, `sessions footer overflow at ${width}`);
+  }
+});
+
+test("narrow drilldown preserves details paging and back shortcuts", () => {
+  const sessions = monitorVisibleModel(monitorState({
+    filterText: "",
+    projectCursorKey: "name:Shown",
+    projectFocusKey: "name:Shown",
+    selectedIdx: 0,
+    selectedId: "a",
+  }), { width: 40, height: 28 }, 11_000);
+  assert.match(sessions.footer, /PgUp\/PgDn/);
+  assert.match(sessions.footer, /Esc/);
+  assert.ok(sessions.footer.length <= 38);
+});
+
+test("panel titles fit their rendered border width", () => {
+  assert.equal(fitPanelTitle("Sessions / a-very-long-project-name", 20), "Sessions / a-...");
+
+  const longProject = "project-with-a-name-that-is-far-too-long-for-the-sidebar";
+  const state = monitorState({
+    sessions: [{
+      session_id: "long",
+      session_type: "Codex",
+      status: "working",
+      task_name: "visible",
+      project: longProject,
+      timestamp: 1_000,
+    }],
+    filterText: "",
+    projectCursorKey: `name:${longProject}`,
+    projectFocusKey: `name:${longProject}`,
+    selectedIdx: 0,
+    selectedId: "long",
+  });
+  const model = monitorVisibleModel(state, { width: 80, height: 24 }, 11_000);
+  assert.match(model.sessionsTitle, /^› Sessions \/ /);
+  assert.ok(model.sessionsTitle.length <= model.sessionsWidth - 4);
+  assert.match(model.sessionsTitle, /\.\.\.$/);
 });
 
 test("monitor visible model fingerprints formatted freshness, not wall-clock seconds", () => {
@@ -555,6 +658,13 @@ function apiRow(overrides = {}) {
   };
 }
 
+test("provider table labels used values explicitly rather than calling them remaining", () => {
+  const row = subscriptionRow({ used: 22, remaining: 78, limit: 100, unit: "%" });
+  const content = providerTableContent([row], { width: 120, height: 40 });
+  assert.equal(content[0][1][0].text, "Quota / Usage");
+  assert.equal(content[1][1][0].text, "22/100 % used");
+});
+
 test("provider summary line renders subscription rows with level/pacing/card/reset", () => {
   const line = providerSummaryLine(subscriptionRow({ measuredRate: 0.66, unit: "%" }));
   assert.match(line, /Subscription/);
@@ -586,7 +696,7 @@ test("provider summary and table show usage for a subscription with a live limit
   const line = providerSummaryLine(row);
   assert.match(line, /used 2.3K\/7K AI credits/);
   const content = providerTableContent([row], { width: 120, height: 40 });
-  assert.equal(content[1][1][0].text, "2.3K\/7K AI credits");
+  assert.equal(content[1][1][0].text, "2.3K\/7K AI credits used");
 });
 
 test("provider table shows No quota data when there are no rows", () => {
@@ -609,7 +719,7 @@ test("provider table renders a header plus one row per PlanRow with columns", ()
   const content = providerTableContent(rows, renderer);
   assert.equal(content.length, 3); // header + 2 rows
   assert.equal(content[0][0][0].text, "Provider");
-  assert.equal(content[0][1][0].text, "Left");
+  assert.equal(content[0][1][0].text, "Quota / Usage");
   assert.equal(content[0][2][0].text, "Level");
   assert.equal(content[0][3][0].text, "Reset");
   assert.equal(content[0][4][0].text, "Card");
@@ -633,7 +743,7 @@ test("provider table uses compact 3-column layout on narrow terminals", () => {
   assert.equal(content.length, 2); // header + 1 row
   assert.equal(content[0].length, 3);
   assert.equal(content[0][0][0].text, "Provider");
-  assert.equal(content[0][1][0].text, "Left");
+  assert.equal(content[0][1][0].text, "Quota / Usage");
   assert.equal(content[0][2][0].text, "Reset");
   assert.equal(content[1].length, 3);
 });

@@ -8,32 +8,17 @@
 // creating circular imports.
 
 import { stripAnsi, truncateAnsi } from "../tui/displayUtils.js";
+import { terminalAnsiTheme } from "../tui/terminalTheme.js";
+import { playWordmarkIntro, terminalWordmark } from "../tui/wordmark.js";
 
 // ---- ANSI helpers (self-contained — no external color constants) ----------
 
-const ANSI_BOLD = "\x1b[1m";
-const ANSI_RESET = "\x1b[0m";
-const ANSI_GRAY = "\x1b[38;5;245m";
-const ANSI_BLUE = "\x1b[34m";
-const ANSI_GREEN = "\x1b[32m";
-const ANSI_YELLOW = "\x1b[33m";
-const ANSI_RED = "\x1b[1;31m";
+const ANSI = terminalAnsiTheme(true);
 
 // ---- Rainbow palette -----------------------------------------------------
 
 export function createRainbow(colorEnabled: boolean): string[] {
-  return colorEnabled ? [
-    "\x1b[1;31m",  // red
-    "\x1b[1;91m",  // orange
-    "\x1b[1;33m",  // yellow
-    "\x1b[1;93m",  // gold
-    "\x1b[1;32m",  // green
-    "\x1b[1;92m",  // lime
-    "\x1b[1;36m",  // cyan
-    "\x1b[1;94m",  // blue
-    "\x1b[1;35m",  // magenta
-    "\x1b[1;95m",  // pink
-  ] : ["", "", "", "", "", "", "", "", "", ""];
+  return [...terminalAnsiTheme(colorEnabled).rainbow];
 }
 
 // ---- ANSI Shadow figlet font ---------------------------------------------
@@ -51,32 +36,18 @@ export const BLOCK: Record<string, string[]> = {
 
 // ---- ASCII logo ----------------------------------------------------------
 
-export function logoLines(w: number, rainbow: string[], reset: string): string[] {
+export function logoLines(w: number, rainbow: string[], reset: string, progress = 1): string[] {
+  const muted = reset ? ANSI.muted : "";
+  const bold = reset ? ANSI.bold : "";
   if (w < 65) {
     const text = "SessionBar";
     let line = "  ";
-    for (let i = 0; i < text.length; i++) line += `${rainbow[i % rainbow.length]}${text[i]}${reset}`;
-    return ["", line, ""];
+    for (let i = 0; i < text.length; i++) line += `${rainbow[i % rainbow.length]}${bold}${text[i]}${reset}`;
+    const descriptor = w >= 46 ? `  ${muted}multi-agent control room${reset}` : "";
+    return ["", `${line}${descriptor}`, ""];
   }
-  const topRow = "SESSION";
-  const botRow = "BAR";
-  const gap = "  ";
-  const lines: string[] = ["", ""];
-  for (let r = 0; r < 6; r++) {
-    let line = "  ";
-    for (let i = 0; i < topRow.length; i++) line += `${rainbow[i]}${BLOCK[topRow[i]][r]}${reset}${gap}`;
-    lines.push(line);
-  }
-  lines.push("");
-  for (let r = 0; r < 6; r++) {
-    let line = "  ";
-    for (let i = 0; i < botRow.length; i++) line += `${rainbow[i + 7]}${BLOCK[botRow[i]][r]}${reset}${gap}`;
-    lines.push(line);
-  }
-  lines.push("");
-  lines.push(`  ${ANSI_GRAY}AI CLI Session Monitor${reset}`);
-  lines.push("");
-  return lines;
+
+  return ["", ...terminalWordmark(w, rainbow, reset, progress), "", `  ${muted}AI CLI Session Monitor${reset}`, ""];
 }
 
 // ---- Panel drawing primitives --------------------------------------------
@@ -151,6 +122,7 @@ export interface LandingMenuDeps {
   // ANSI rendering config
   tty: boolean;
   colorEnabled: boolean;
+  animateLogo?: boolean;
 
   // Display formatting
   formatAge: (timestamp: number, now?: number) => string;
@@ -175,7 +147,7 @@ export interface LandingMenuDeps {
   launchWeb: () => Promise<void>;
 
   // Cleanup
-  teardownHooks: (global: boolean, quiet?: boolean) => void;
+  teardownHooks: (global: boolean, quiet?: boolean) => void | Promise<void>;
 
   // Config
   getPort: () => number;
@@ -195,13 +167,14 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
   } = deps;
 
   // ---- Colour palette ----------------------------------------------------
-  const B = colorEnabled ? ANSI_BOLD : "";
-  const D = colorEnabled ? ANSI_RESET : "";
-  const K = colorEnabled ? ANSI_GRAY : "";
-  const BL = colorEnabled ? ANSI_BLUE : "";
-  const GN = colorEnabled ? ANSI_GREEN : "";
-  const YL = colorEnabled ? ANSI_YELLOW : "";
-  const RD = colorEnabled ? ANSI_RED : "";
+  const theme = terminalAnsiTheme(colorEnabled);
+  const B = theme.bold;
+  const D = theme.reset;
+  const K = theme.muted;
+  const BL = theme.accent;
+  const GN = theme.working;
+  const YL = theme.blocked;
+  const RD = theme.error;
 
   const RAINBOW = createRainbow(colorEnabled);
 
@@ -216,6 +189,7 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
   let menuRaw = false;
   let menuScreen = false;
   let menuFrameLines = 0;
+  let logoIntroPlayed = false;
   const menuKeyQueue: string[] = [];
 
   // ---- Terminal control --------------------------------------------------
@@ -255,11 +229,11 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     setMenuScreen(false);
   };
 
-  const menuCleanup = () => {
+  const menuCleanup = async () => {
     menuRunning = false;
     setMenuRaw(false);
     setMenuScreen(false);
-    teardownHooks(true, true);
+    await teardownHooks(true, true);
     if (!menuScreen) process.stdout.write("\x1b[?25h"); // ensure cursor visible
     process.exit(0);
   };
@@ -294,23 +268,22 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     const idle = menuSessions.filter((s: any) => s.status === "idle").length;
     const status = menuServerRunning ? `${GN}online${D}` : `${K}offline${D}`;
     const activity = [
-      working > 0 ? `${BL}${working} working${D}` : "",
+      working > 0 ? `${GN}${working} working${D}` : "",
       blocked > 0 ? `${YL}${blocked} blocked${D}` : "",
       errored > 0 ? `${RD}${errored} error${D}` : "",
-      idle > 0 ? `${K}${idle} idle${D}` : "",
+      idle > 0 ? `${theme.idle}${idle} idle${D}` : "",
     ].filter(Boolean).join(` ${K}|${D} `);
 
     const w = Math.min((process.stdout.columns || 80) - 4, 76);
-    const canShowLogo = (process.stdout.rows || 24) >= 28 && w >= 65;
-    if (canShowLogo) {
-      for (const line of logoLines(w, RAINBOW, D)) out(line);
-    } else {
-      const title = "SessionBar";
-      let line = "";
-      for (let i = 0; i < title.length; i++) line += `${RAINBOW[i % RAINBOW.length]}${B}${title[i]}${D}`;
-      out(`  ${line} ${K}local multi-agent session monitor${D}`);
-      out(`  ${K}${"─".repeat(Math.max(20, w))}${D}`);
-    }
+    const sessionPanelRows = menuSessions.length > 0
+      ? Math.min(menuSessions.length, 4) + 3 + Number(menuSessions.length > 4) : 0;
+    const logoFits = (process.stdout.rows || 24) >= 14 + sessionPanelRows + Number(Boolean(menuError)) + logoLines(w, RAINBOW, D).length;
+    const logoWidth = logoFits ? w : Math.min(w, 64);
+    const animateIntro = !logoIntroPlayed && logoWidth >= 65 && tty && process.stdin.isTTY
+      && colorEnabled && deps.animateLogo !== false;
+    logoIntroPlayed = true;
+    const logoStartLine = printed;
+    for (const line of logoLines(logoWidth, RAINBOW, D, animateIntro ? 0 : 1)) out(line);
 
     const dot = menuServerRunning ? `${GN}●${D}` : `${K}○${D}`;
     out(`${panelTop("Status", w, K, D)}`);
@@ -357,6 +330,19 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     out("");
     if (tty) process.stdout.write("\x1b[J");
     menuFrameLines = printed;
+    if (animateIntro) {
+      setMenuRaw(true);
+      const onIntroKey = (buf: Buffer) => menuKeyQueue.push(...parseLandingKeys(buf.toString()));
+      process.stdin.on("data", onIntroKey);
+      try {
+        await playWordmarkIntro(progress => {
+          const lines = logoLines(logoWidth, RAINBOW, D, progress);
+          process.stdout.write(`\x1b[s\x1b[${printed - logoStartLine}F${lines.map(line => `\x1b[2K${line}`).join("\n")}\x1b[u`);
+        }, () => menuKeyQueue.length > 0 || !menuRunning);
+      } finally {
+        process.stdin.off("data", onIntroKey);
+      }
+    }
   };
 
   // ---- Key input ---------------------------------------------------------
@@ -452,7 +438,7 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
   }
   setMenuRaw(false);
   setMenuScreen(false);
-  teardownHooks(true, true);
+  await teardownHooks(true, true);
 }
 
 // ---- readline helper (kept here to avoid importing readline in cli.ts) ---

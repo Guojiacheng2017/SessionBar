@@ -24,7 +24,7 @@ export const UI = {
   projectIconSlot: "project-icon-slot w-[86px] shrink-0 relative flex items-center justify-end",
   projectIconStack: "project-icon-stack",
   projectIconItem: "project-icon-item",
-  rowSelected: "bg-accent/[0.09]",
+  rowSelected: "is-selected bg-accent/[0.09]",
   rowBlocked: "row-blocked",
   empty: "text-center text-muted text-[13px] py-10 px-4",
   detailBody: "flex-1 overflow-y-auto thin-scroll px-4 py-4",
@@ -97,7 +97,7 @@ export function statusLabel(status: string): string {
 
 function statusTone(status: string): string {
   return status === "working" ? "bg-green dot-working"
-    : status === "idle" ? "bg-accent"
+    : status === "idle" ? "bg-muted"
       : status === "blocked" ? "bg-amber dot-blocked"
         : "bg-red";
 }
@@ -109,8 +109,10 @@ export function statusDotMarkup(status: string): string {
 export function iconMarkup(type: string, cache = new Map<string, string>()): string {
   const cached = cache.get(type);
   if (cached) return cached;
-  const canonicalType = [...new Set([...Object.keys(ICONS), ...Object.keys(FAVICONS), ...Object.keys(LOCAL_ICONS)])]
-    .find(candidate => candidate.toLowerCase() === type.trim().toLowerCase()) ?? type;
+  const normalizedType = type.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ");
+  const canonicalType = /^(?:pi|pi agent(?: cli)?)$/.test(normalizedType) ? "Pi Agent"
+    : [...new Set([...Object.keys(ICONS), ...Object.keys(FAVICONS), ...Object.keys(LOCAL_ICONS)])]
+      .find(candidate => candidate.toLowerCase() === normalizedType) ?? type;
   const name = ICONS[canonicalType];
   const domain = FAVICONS[canonicalType];
   const local = LOCAL_ICONS[canonicalType];
@@ -429,16 +431,16 @@ function providerLeftText(row: PlanRow): string {
     const unit = row.unit ? ` ${row.unit}` : "";
     const digits = row.unit === "CNY" || row.unit === "USD" ? 2 : 5;
     if (row.remaining !== undefined) return `${formatProviderNumber(row.remaining, digits)}${unit} left`;
-    if (row.used !== undefined && row.limit !== undefined) return `${formatProviderNumber(row.used, digits)}/${formatProviderNumber(row.limit, digits)}${unit}`;
+    if (row.used !== undefined && row.limit !== undefined) return `${formatProviderNumber(row.used, digits)}/${formatProviderNumber(row.limit, digits)}${unit} used`;
     if (row.used !== undefined) return `${formatProviderNumber(row.used, digits)}${unit} used`;
     if (row.limit !== undefined) return `${formatProviderNumber(row.limit, digits)}${unit} limit`;
     return "—";
   }
   const unit = row.unit ? ` ${row.unit}` : "";
   if (row.used !== undefined && row.limit !== undefined) {
-    return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit}`;
+    return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit} used`;
   }
-  return row.remaining !== undefined ? `${Math.round(row.remaining)}%` : "—";
+  return row.remaining !== undefined ? `${compactNumber(row.remaining)}${unit || "%"} left` : "—";
 }
 
 function formatProviderNumber(value: number, maximumFractionDigits = 5): string {
@@ -625,7 +627,7 @@ export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTab
 
   return `<div class="provider-table provider-table-desktop" role="table" aria-label="Provider quota">
     <div class="provider-row provider-row-head" role="row">
-      <span role="columnheader">Provider</span><span role="columnheader">Left</span><span role="columnheader">Level</span><span role="columnheader">Usage</span><span role="columnheader">Reset</span><span role="columnheader">Card</span>
+      <span role="columnheader">Provider</span><span role="columnheader">Quota / Usage</span><span role="columnheader">Level</span><span role="columnheader">Usage</span><span role="columnheader">Reset</span><span role="columnheader">Card</span>
     </div>
     ${rows.map(row => {
       const tone = row.stale ? "api" : row.form === "api" ? "api" : row.level;

@@ -61,7 +61,8 @@ const providersDailyUsage = document.getElementById("providers-daily-usage")!;
 const providersBody = document.getElementById("providers-body")!;
 const providerUsageModeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-provider-usage-mode]")];
 
-let disconnectedBanner: HTMLDivElement | null = null;
+const disconnectedBanner = document.getElementById("connection-banner") as HTMLDivElement;
+let sessionConnectionState: "connecting" | "online" | "offline" = "connecting";
 let selectedId: string | null = null;
 let focusedProject: string | null = null;
 let expandedProjectIcons: string | null = null;
@@ -553,19 +554,33 @@ function showMobileDetail(s: SessionPayload) {
 // ── Disconnected ──
 
 function showBanner(msg: string) {
-  if (!disconnectedBanner) {
-    disconnectedBanner = document.createElement("div");
-    disconnectedBanner.className = "bg-red/90 text-ink-inverse text-center text-[13px] font-semibold px-3.5 py-2.5 rounded-lg shrink-0 shadow-[0_8px_24px_rgba(217,74,62,0.18)]";
-    document.getElementById("app")!.prepend(disconnectedBanner);
-  }
-  disconnectedBanner.textContent = msg;
+  disconnectedBanner.innerHTML = `<strong>Disconnected</strong><span>${escapeHtml(msg)}</span>`;
+  disconnectedBanner.hidden = false;
 }
-function hideBanner() { if (disconnectedBanner) { disconnectedBanner.remove(); disconnectedBanner = null; } }
+function hideBanner() {
+  disconnectedBanner.hidden = true;
+  disconnectedBanner.replaceChildren();
+}
+
+function setSessionConnectionState(state: "connecting" | "online" | "offline") {
+  if (sessionConnectionState === state) return;
+  sessionConnectionState = state;
+  if (state === "offline") {
+    portEl.textContent = "offline";
+    portEl.className = UI.connectionOffline;
+    showBanner("Retrying automatically…");
+    return;
+  }
+  if (state === "online") {
+    portEl.textContent = ":" + location.port;
+    portEl.className = UI.connection;
+    hideBanner();
+  }
+}
 
 // ── Render ──
 
 function render(sessions: SessionPayload[]) {
-  hideBanner();
   const q = filterInput.value.trim().toLowerCase();
 
   let shown = sessions;
@@ -582,10 +597,6 @@ function render(sessions: SessionPayload[]) {
     focusedProject = null;
     selectedId = null;
   }
-
-  // Port
-  portEl.textContent = ":" + location.port;
-  portEl.className = UI.connection;
 
   // Status summary — intentionally text-only; no proportional progress bar.
   commitMarkup(countsEl, statusSummaryMarkup(countSessions(sessions)));
@@ -631,7 +642,7 @@ function render(sessions: SessionPayload[]) {
       +`<span class="project-row-meta" aria-label="${escapeHtml(`${projectMeta}, ${lastActiveLabel}`)}"><span class="project-row-status">${escapeHtml(projectMeta)}</span><span class="project-row-age">${escapeHtml(lastActive)}</span></span>`
       +"</button>";
   }
-  commitMarkup(projectsBody, pH || `<div class="${UI.empty}">No projects</div>`);
+  commitMarkup(projectsBody, pH || `<div class="panel-empty"><strong>No projects</strong><span>Projects appear when a session reports its workspace.</span></div>`);
 
   // Sessions
   const scope = focusedProject ? shown.filter(s=>extractProject(s)===focusedProject) : shown;
@@ -645,16 +656,18 @@ function render(sessions: SessionPayload[]) {
     const sel = s.session_id===selectedId ? UI.rowSelected : "";
     const blk = st==="blocked" ? UI.rowBlocked : "";
     const columns = sessionListColumns(s);
-    sH += `<button type="button" class="${cx(UI.row, "w-full text-left", sel, blk)}" data-sid="${escapeHtml(s.session_id)}">`
-      +`<span class="w-[22px] shrink-0">${icon(s.session_type||"?")}</span>`
+    sH += `<button type="button" class="${cx(UI.row, "session-row w-full text-left", sel, blk)}" aria-pressed="${s.session_id === selectedId}" data-sid="${escapeHtml(s.session_id)}">`
+      +`<span class="session-row-icon">${icon(s.session_type||"?")}</span>`
       +statusDotMarkup(st)
-      +`<span class="flex-1 font-medium truncate">${escapeHtml(columns.name)}</span>`
-      +`<span class="w-[96px] shrink-0 text-muted text-[12px] truncate" title="${escapeHtml(columns.project)}">${escapeHtml(columns.project)}</span>`
-      +`<span class="w-[62px] shrink-0 text-muted text-[12px]">${statusLabel(st)}</span>`
-      +`<span class="w-[34px] text-right shrink-0 text-muted text-[12px]">${age(s.timestamp||Date.now())}</span>`
+      +`<span class="session-row-name">${escapeHtml(columns.name)}</span>`
+      +`<span class="session-row-project" title="${escapeHtml(columns.project)}">${escapeHtml(columns.project)}</span>`
+      +`<span class="session-row-status">${statusLabel(st)}</span>`
+      +`<span class="session-row-age">${age(s.timestamp||Date.now())}</span>`
       +"</button>";
   }
-  commitMarkup(sessionsBody, sH || `<div class="${UI.empty}">No sessions</div>`);
+  const emptySessionsTitle = q ? "No matching sessions" : "No sessions";
+  const emptySessionsHint = q ? "Try another project, task, or type." : "Sessions appear when an agent reports activity.";
+  commitMarkup(sessionsBody, sH || `<div class="panel-empty"><strong>${emptySessionsTitle}</strong><span>${emptySessionsHint}</span></div>`);
 
   // Detail — desktop
   const sel = selectedId ? sSorted.find(s=>s.session_id===selectedId) : null;
@@ -690,11 +703,16 @@ function render(sessions: SessionPayload[]) {
 
 function connect() {
   const es = new EventSource("/sessions/stream");
-  es.onmessage = e => { try { lastSessions = JSON.parse(e.data); render(lastSessions); } catch { /* */ } };
+  es.onmessage = e => {
+    try {
+      const sessions = JSON.parse(e.data) as SessionPayload[];
+      lastSessions = sessions;
+      setSessionConnectionState("online");
+      render(lastSessions);
+    } catch { /* */ }
+  };
   es.onerror = () => {
-    portEl.textContent = "offline";
-    portEl.className = UI.connectionOffline;
-    showBanner("Disconnected — retrying…");
+    setSessionConnectionState("offline");
   };
   window.addEventListener("beforeunload", () => es.close());
 }

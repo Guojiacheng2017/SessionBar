@@ -1,5 +1,6 @@
 import {
   BoxRenderable,
+  ScrollBoxRenderable,
   TextAttributes,
   TextRenderable,
   TextTableRenderable,
@@ -38,6 +39,7 @@ import {
   projectPathSummary,
   groupByProject as groupSessionsByProject,
 } from "../shared/projectUtils.js";
+import { TERMINAL_COLORS } from "./terminalTheme.js";
 
 type Session = SessionPayload;
 export interface SessionFetchResult {
@@ -127,7 +129,9 @@ interface MonitorRefs {
   sessionsTable: TextTableRenderable;
   providersTable: TextTableRenderable;
   detailsBox: BoxRenderable;
+  detailsScroll: ScrollBoxRenderable;
   detailsText: TextRenderable;
+  detailsScrollKey?: string;
   footer: TextRenderable;
 }
 
@@ -147,7 +151,7 @@ export interface MonitorWorkspaceLayout {
   projectWidth: number | "100%";
   projectHeight: number | "100%";
   sessionsWidth: number | "100%";
-  sessionsHeight: number | "100%";
+  sessionsHeight: number | "100%" | "auto";
   detailsWidth: number | "100%";
   detailsHeight: number | "100%" | "auto";
 }
@@ -172,25 +176,28 @@ export interface MonitorVisibleModel {
   detailsWidth: number;
   detailsTitle: string;
   detailsContent: string | StyledText;
+  detailsScrollKey: string;
   footer: string;
   footerError: boolean;
+  focusRegion: "projects" | "sessions" | "details" | "providers";
 }
 
 const PALETTE = {
   bg: "transparent",
   panel: "transparent",
   fg: RGBA.defaultForeground(),
-  muted: "#a2abb8",
-  dim: "#596170",
-  border: "#303846",
-  blue: "#6aa8ff",
-  green: "#64d38a",
-  yellow: "#e3bd5b",
-  red: "#ff6b63",
-  cyan: "#68cfd8",
+  muted: TERMINAL_COLORS.muted,
+  dim: TERMINAL_COLORS.dim,
+  border: TERMINAL_COLORS.border,
+  accent: TERMINAL_COLORS.accent,
+  green: TERMINAL_COLORS.working,
+  yellow: TERMINAL_COLORS.blocked,
+  red: TERMINAL_COLORS.error,
+  cyan: TERMINAL_COLORS.cyan,
 } as const;
 
 const COLOR_CACHE = new Map<string, ReturnType<typeof parseColor>>();
+const BRAND_COLORS = TERMINAL_COLORS.brand;
 
 function normalizedVisibleValue(value: unknown): unknown {
   if (value instanceof Map) {
@@ -252,6 +259,17 @@ function header(text: string): TextChunk[] {
   return cell(text, PALETTE.fg, TextAttributes.BOLD);
 }
 
+function brandHeaderContent(title: string): StyledText {
+  const suffix = title.replace(/^SessionBar\s*/i, "");
+  const chunks = [..."SessionBar"].map((letter, index) => chunk(
+    letter,
+    BRAND_COLORS[index % BRAND_COLORS.length],
+    TextAttributes.BOLD,
+  ));
+  if (suffix) chunks.push(chunk(`  ${suffix}`, PALETTE.muted, TextAttributes.BOLD));
+  return new StyledText(chunks);
+}
+
 function projectKey(s: Session): string {
   const path = rawProjectPath(s);
   return path ? `path:${compactPath(path)}` : `name:${projectName(s)}`;
@@ -265,10 +283,10 @@ function statusLabel(status: string): string {
 }
 
 function statusColor(status: string): string {
-  if (status === "working") return PALETTE.blue;
+  if (status === "working") return PALETTE.green;
   if (status === "blocked") return PALETTE.yellow;
   if (status === "error") return PALETTE.red;
-  return PALETTE.green;
+  return PALETTE.muted;
 }
 
 function defaultActivity(status: string): string {
@@ -476,9 +494,36 @@ export function monitorBodyLayout(rendererWidth: number): MonitorBodyLayout {
   };
 }
 
-export function monitorWorkspaceLayout(rendererWidth: number): MonitorWorkspaceLayout {
+function compactHeight(rendererHeight: number): boolean {
+  return Number.isFinite(rendererHeight) && rendererHeight <= 30;
+}
+
+export function monitorWorkspaceLayout(rendererWidth: number, rendererHeight = 40, drilldown = false): MonitorWorkspaceLayout {
   const workspaceWidth = Math.max(20, Math.floor(rendererWidth) - 2);
   if (rendererWidth < 120) {
+    if (compactHeight(rendererHeight) && drilldown && rendererWidth >= 70) {
+      const sessionsWidth = clampNumber(Math.round(workspaceWidth * 0.38), 28, 36);
+      return {
+        direction: "row",
+        projectWidth: "100%",
+        projectHeight: "100%",
+        sessionsWidth,
+        sessionsHeight: "100%",
+        detailsWidth: Math.max(32, workspaceWidth - sessionsWidth - 1),
+        detailsHeight: "100%",
+      };
+    }
+    if (compactHeight(rendererHeight)) {
+      return {
+        direction: "column",
+        projectWidth: "100%",
+        projectHeight: drilldown ? "100%" : 7,
+        sessionsWidth: "100%",
+        sessionsHeight: drilldown ? 7 : "auto",
+        detailsWidth: "100%",
+        detailsHeight: "auto",
+      };
+    }
     return {
       direction: "column",
       projectWidth: "100%",
@@ -521,7 +566,7 @@ function agentsText(sessions: readonly Session[]): string {
 function projectRows(groups: Map<string, Session[]>, state: Readonly<MonitorState>, now = Date.now()): ProjectRow[] {
   return [...groups.entries()].map(([key, sessions]) => {
     const sample = sessions[0]!;
-    const marker = key === state.projectFocusKey ? "*" : key === state.projectCursorKey ? ">" : "";
+    const marker = key === state.projectFocusKey ? "◆" : key === state.projectCursorKey ? "›" : "";
     return {
       key,
       marker,
@@ -556,7 +601,7 @@ function visibleWindow<T>(rows: readonly T[], selectedIndex: number, slots: numb
 }
 
 function projectTableContent(rows: readonly ProjectRow[], state: Readonly<MonitorState>, renderer: CliRenderer): TextTableContent {
-  const sidebar = monitorWorkspaceLayout(renderer.width).direction === "row";
+  const sidebar = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey)).direction === "row";
   const compact = renderer.width < 100;
   const content: TextTableContent = sidebar
     ? [[header(""), header("Project"), header("#"), header("Age")]]
@@ -572,7 +617,7 @@ function projectTableContent(rows: readonly ProjectRow[], state: Readonly<Monito
     const selected = row.key === state.projectCursorKey;
     const strong = selected ? TextAttributes.BOLD : TextAttributes.NONE;
     const base = [
-      cell(row.marker, row.marker ? PALETTE.blue : PALETTE.muted, strong),
+      cell(row.marker, row.marker ? PALETTE.accent : PALETTE.muted, strong),
       cell(row.project, PALETTE.fg, strong),
       cell(row.sessions, PALETTE.fg, strong),
       cell(row.agents, PALETTE.cyan, strong),
@@ -597,7 +642,7 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
   const selectedIndex = state.projectFocusKey ? Math.max(0, state.selectedIdx) : 0;
   const slots = Math.max(4, renderer.height - 17);
   const visible = visibleWindow(rows, selectedIndex, slots);
-  const workspace = monitorWorkspaceLayout(renderer.width);
+  const workspace = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey));
   const lineWidth = Math.max(1, (typeof workspace.sessionsWidth === "number" ? workspace.sessionsWidth : renderer.width - 2) - 4);
   for (const row of visible) {
     const selected = state.projectFocusKey && row.key === state.selectedId;
@@ -652,16 +697,16 @@ function providerLeftText(row: PlanRow): string {
   if (row.form === "api") {
     const unit = row.unit ? ` ${row.unit}` : "";
     if (row.remaining !== undefined) return `${compactNumber(row.remaining)}${unit} left`;
-    if (row.used !== undefined && row.limit !== undefined) return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit}`;
+    if (row.used !== undefined && row.limit !== undefined) return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit} used`;
     if (row.used !== undefined) return `${compactNumber(row.used)} used`;
     if (row.limit !== undefined) return `${compactNumber(row.limit)} limit`;
     return "—";
   }
   const unit = row.unit ? ` ${row.unit}` : "";
   if (row.used !== undefined && row.limit !== undefined) {
-    return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit}`;
+    return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit} used`;
   }
-  return row.remaining !== undefined ? `${Math.round(row.remaining)}%` : "—";
+  return row.remaining !== undefined ? `${compactNumber(row.remaining)}${unit || "%"} left` : "—";
 }
 
 function levelColor(level: string): string {
@@ -675,8 +720,8 @@ export function providerTableContent(rows: readonly PlanRow[], renderer: CliRend
   if (rows.length === 0) return [[cell("No quota data", PALETTE.muted)]];
   const compact = renderer.width < 100;
   const content: TextTableContent = compact
-    ? [[header("Provider"), header("Left"), header("Reset")]]
-    : [[header("Provider"), header("Left"), header("Level"), header("Reset"), header("Card")]];
+    ? [[header("Provider"), header("Quota / Usage"), header("Reset")]]
+    : [[header("Provider"), header("Quota / Usage"), header("Level"), header("Reset"), header("Card")]];
   const visible = rows;
   for (const row of visible) {
     const rowFg = row.form === "api" ? PALETTE.cyan : levelColor(row.level);
@@ -707,7 +752,7 @@ function healthScore(sessions: readonly Session[], now = Date.now()): { score: n
   if (counts.errored) return { score, label: `${counts.errored} error`, color: PALETTE.red };
   if (counts.blocked) return { score, label: `${counts.blocked} blocked`, color: PALETTE.yellow };
   if (highContext) return { score, label: `${highContext} high context`, color: PALETTE.yellow };
-  if (counts.working) return { score, label: `${counts.working} working`, color: PALETTE.blue };
+  if (counts.working) return { score, label: `${counts.working} working`, color: PALETTE.green };
   return { score, label: "stable", color: PALETTE.green };
 }
 
@@ -1068,6 +1113,41 @@ function detailTabTitle(tab: DetailTab): string {
   return tab[0]!.toUpperCase() + tab.slice(1);
 }
 
+export function fitPanelTitle(title: string, panelWidth: number): string {
+  return truncatePlain(title, Math.max(4, Math.floor(panelWidth) - 4));
+}
+
+function shortcutFooter(width: number, scope: "projects" | "sessions" | "details" | "providers"): string {
+  const variants: Record<typeof scope, string[]> = {
+    providers: [
+      "v/P sessions · r refresh · / filter · w web · q quit",
+      "v sessions · r refresh · w web · q quit",
+      "v sessions · r refresh · q quit",
+    ],
+    projects: [
+      "↑↓ project · Enter open · r refresh · v providers · / filter · w web · q quit",
+      "↑↓ project · ↵ open · v providers · / filter · q quit",
+      "↑↓ move · ↵ open · v view · q quit",
+      "↑↓ · ↵ open · q",
+    ],
+    sessions: [
+      "↑↓ session · PgUp/PgDn details · Enter focus · a/Backspace projects · r refresh · v providers · / filter · w web · q quit",
+      "↑↓ session · PgUp/PgDn details · Esc projects · q quit",
+      "↑↓ · PgUp/PgDn details · Esc back",
+      "↑↓ · PgUp/Dn · Esc",
+    ],
+    details: [
+      "PgUp/PgDn scroll · Home/End · Tab/[ ] scope · 1-5 tab · Esc sessions · r refresh · v providers · w web · q quit",
+      "PgUp/PgDn scroll · Tab scope · Esc/a back · q quit",
+      "PgUp/PgDn · Esc back · q quit",
+      "PgUp/Dn · Esc",
+    ],
+  };
+  const budget = Math.max(12, width - 2);
+  return variants[scope].find(value => value.length <= budget)
+    ?? truncatePlain(variants[scope].at(-1)!, budget);
+}
+
 function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): MonitorRefs {
   renderer.setBackgroundColor(PALETTE.bg);
 
@@ -1123,7 +1203,7 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     title: "Projects",
     titleColor: PALETTE.fg,
     border: true,
-    borderStyle: "single",
+    borderStyle: "rounded",
     borderColor: PALETTE.border,
     width: "100%",
     height: 9,
@@ -1163,7 +1243,7 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     title: "All Sessions",
     titleColor: PALETTE.fg,
     border: true,
-    borderStyle: "single",
+    borderStyle: "rounded",
     borderColor: PALETTE.border,
     width: 46,
     flexGrow: 0,
@@ -1210,7 +1290,7 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     title: "Details / Project",
     titleColor: PALETTE.fg,
     border: true,
-    borderStyle: "single",
+    borderStyle: "rounded",
     borderColor: PALETTE.border,
     flexGrow: 1,
     flexShrink: 1,
@@ -1222,13 +1302,24 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     id: "sessionbar-details",
     content: "",
     width: "100%",
-    height: "100%",
+    height: "auto",
     fg: PALETTE.fg,
     bg: PALETTE.panel,
     wrapMode: "word",
     selectable: true,
   });
-  detailsBox.add(detailsText);
+  const detailsScroll = new ScrollBoxRenderable(renderer, {
+    id: "sessionbar-details-scroll",
+    width: "100%",
+    height: "100%",
+    scrollX: false,
+    scrollY: true,
+    stickyScroll: false,
+    viewportCulling: true,
+    backgroundColor: PALETTE.panel,
+  });
+  detailsScroll.add(detailsText);
+  detailsBox.add(detailsScroll);
 
   body.add(projectsBox);
   body.add(sessionsBox);
@@ -1260,6 +1351,7 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     sessionsTable,
     providersTable,
     detailsBox,
+    detailsScroll,
     detailsText,
     footer,
   };
@@ -1295,7 +1387,7 @@ export function monitorVisibleModel(
       projectsTitle: "",
       projectsContent: [],
       sessionsWidth: layout.bodyWidth,
-      sessionsTitle: `Providers (${providers.length})`,
+      sessionsTitle: fitPanelTitle(`Providers (${providers.length})`, layout.bodyWidth),
       sessionsVisible: false,
       sessionsContent: [],
       providersVisible: true,
@@ -1304,8 +1396,10 @@ export function monitorVisibleModel(
       detailsWidth: layout.detailPanelWidth,
       detailsTitle: "",
       detailsContent: "",
-      footer: state.errorMsg ? `! ${state.errorMsg}` : "v / P  switch to sessions  r refresh  / filter  w web  q quit",
+      detailsScrollKey: "providers",
+      footer: state.errorMsg ? `! ${state.errorMsg}` : shortcutFooter(renderer.width, "providers"),
       footerError: Boolean(state.errorMsg),
+      focusRegion: "providers",
     };
   }
   const shown = applyFilter(state.sessions, state.filterText);
@@ -1315,9 +1409,13 @@ export function monitorVisibleModel(
   const scopeSessions = selectedProjectSessions(state);
   const sessionData = sessionRows(state.projectFocusKey ? scopeSessions : shown, state);
   const selected = selectedSession(state);
-  const workspace = monitorWorkspaceLayout(renderer.width);
+  const workspace = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey));
+  const shortWindow = compactHeight(renderer.height) && renderer.width < 120;
+  const drilldown = shortWindow && Boolean(state.projectFocusKey);
   const panelWidth = (width: number | `${number}%`) => typeof width === "number" ? width : layout.bodyWidth;
   const detailPanelWidth = panelWidth(workspace.detailsWidth);
+  const projectPanelWidth = panelWidth(workspace.projectWidth);
+  const sessionPanelWidth = panelWidth(workspace.sessionsWidth);
   const detailWidth = Math.max(1, detailPanelWidth - 4);
   const details = selected
     ? detailTextForSession(selected, state.detailTab, detailWidth, now)
@@ -1342,13 +1440,12 @@ export function monitorVisibleModel(
     groups.size > 1 ? `${groups.size} projects` : "",
   ].filter(Boolean).join("  ");
 
+  const focusRegion = state.detailId ? "details" : state.projectFocusKey ? "sessions" : "projects";
   const footer = state.errorMsg
     ? `! ${state.errorMsg}`
     : state.filterActive
       ? `/${state.filterText}_  ${shown.length}/${state.sessions.length} sessions  Esc clear  Enter accept`
-      : state.projectFocusKey
-        ? "Up/Down session  Tab detail tab  1-5 scope  a/Backspace all projects  r refresh  v providers  / filter  w web  q quit"
-        : "Up/Down project  Enter open project  r refresh  v providers  / filter  w web  q quit";
+      : shortcutFooter(renderer.width, focusRegion);
 
   return {
     view: state.view,
@@ -1357,40 +1454,50 @@ export function monitorVisibleModel(
     title: "SessionBar [Sessions]",
     online: `online :${port || ""}`,
     activity,
-    projectsVisible: true,
-    projectsTitle: `Projects (${groups.size})`,
+    projectsVisible: !drilldown,
+    projectsTitle: fitPanelTitle(`${focusRegion === "projects" ? "› " : ""}Projects (${groups.size})`, projectPanelWidth),
     projectsContent: projectTableContent(projectData, state, renderer),
     sessionsWidth: panelWidth(workspace.sessionsWidth),
-    sessionsTitle: sessionTitle,
+    sessionsTitle: fitPanelTitle(`${focusRegion === "sessions" ? "› " : ""}${sessionTitle}`, sessionPanelWidth),
     sessionsVisible: true,
     sessionsContent: sessionTableContent(sessionData, state, renderer, now),
     providersVisible: false,
     providersContent: [],
-    detailsVisible: true,
+    detailsVisible: !shortWindow || drilldown,
     detailsWidth: detailPanelWidth,
-    detailsTitle: selected
-      ? `Details / Session / ${detailTabTitle(state.detailTab)}`
-      : state.projectFocusKey ? "Details / Project" : "Details / System",
+    detailsTitle: fitPanelTitle(selected
+      ? `${focusRegion === "details" ? "› " : ""}Details / Session / ${detailTabTitle(state.detailTab)}`
+      : state.projectFocusKey ? "Details / Project" : "Details / System", detailPanelWidth),
     detailsContent: details,
+    detailsScrollKey: selected
+      ? `session:${selected.session_id}:${state.detailTab}`
+      : state.projectFocusKey
+        ? `project:${state.projectFocusKey}`
+        : "system",
     footer,
     footerError: Boolean(state.errorMsg),
+    focusRegion,
   };
 }
 
 function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
-  refs.title.content = model.title;
+  refs.title.content = brandHeaderContent(model.title);
   refs.online.content = model.online;
   refs.activity.content = model.activity;
   refs.projectsBox.visible = model.projectsVisible;
   refs.projectsBox.title = model.projectsTitle;
+  refs.projectsBox.borderColor = model.focusRegion === "projects" ? color(PALETTE.accent) : color(PALETTE.border);
+  refs.projectsBox.titleColor = model.focusRegion === "projects" ? color(PALETTE.accent) : color(PALETTE.fg);
   refs.projectsTable.content = model.projectsContent;
   if (model.view === "sessions") {
-    const workspace = monitorWorkspaceLayout(model.width);
+    const drilldown = model.focusRegion === "sessions" || model.focusRegion === "details";
+    const workspace = monitorWorkspaceLayout(model.width, model.height, drilldown);
     refs.body.flexDirection = workspace.direction;
     refs.projectsBox.width = workspace.projectWidth;
     refs.projectsBox.height = workspace.projectHeight;
     refs.sessionsBox.width = workspace.sessionsWidth;
     refs.sessionsBox.height = workspace.sessionsHeight;
+    refs.sessionsBox.flexGrow = compactHeight(model.height) && model.width < 120 && !drilldown ? 1 : 0;
     refs.detailsBox.width = workspace.detailsWidth;
     refs.detailsBox.height = workspace.detailsHeight;
   } else {
@@ -1401,13 +1508,21 @@ function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
     refs.detailsBox.height = "100%";
   }
   refs.sessionsBox.title = model.sessionsTitle;
+  refs.sessionsBox.borderColor = model.focusRegion === "sessions" || model.focusRegion === "providers" ? color(PALETTE.accent) : color(PALETTE.border);
+  refs.sessionsBox.titleColor = model.focusRegion === "sessions" || model.focusRegion === "providers" ? color(PALETTE.accent) : color(PALETTE.fg);
   refs.sessionsTable.visible = model.sessionsVisible;
   refs.sessionsTable.content = model.sessionsContent;
   refs.providersTable.visible = model.providersVisible;
   refs.providersTable.content = model.providersContent;
   refs.detailsBox.visible = model.detailsVisible;
   refs.detailsBox.title = model.detailsTitle;
+  refs.detailsBox.borderColor = model.focusRegion === "details" ? color(PALETTE.accent) : color(PALETTE.border);
+  refs.detailsBox.titleColor = model.focusRegion === "details" ? color(PALETTE.accent) : color(PALETTE.fg);
   refs.detailsText.content = model.detailsContent;
+  if (refs.detailsScrollKey !== model.detailsScrollKey) {
+    refs.detailsScroll.scrollTo({ x: 0, y: 0 });
+    refs.detailsScrollKey = model.detailsScrollKey;
+  }
   refs.footer.content = model.footer;
   refs.footer.fg = model.footerError ? PALETTE.red : PALETTE.muted;
 }
@@ -1464,6 +1579,26 @@ export function nextViewFromMonitorKey(
   const char = printableChar(normalized);
   if (char === "v" || char === "P") return current === "providers" ? "sessions" : "providers";
   return null;
+}
+
+export type DetailsScrollAction = "page-up" | "page-down" | "top" | "bottom";
+
+export function detailsScrollActionFromMonitorKey(key: MonitorKeyLike): DetailsScrollAction | null {
+  if (key.ctrl || key.meta || key.option) return null;
+  if (key.name === "pageup" || key.name === "kppageup") return "page-up";
+  if (key.name === "pagedown" || key.name === "kppagedown") return "page-down";
+  if (key.name === "home") return "top";
+  if (key.name === "end") return "bottom";
+  return null;
+}
+
+function scrollDetails(refs: MonitorRefs, key: KeyEvent): boolean {
+  const action = detailsScrollActionFromMonitorKey(key);
+  if (!action) return false;
+  if (action === "top") refs.detailsScroll.scrollTo({ x: 0, y: 0 });
+  else if (action === "bottom") refs.detailsScroll.scrollTo({ x: 0, y: refs.detailsScroll.scrollHeight });
+  else refs.detailsScroll.scrollBy(action === "page-up" ? -0.8 : 0.8, "viewport");
+  return true;
 }
 
 function nextAgeChangeAt(timestamp: number, now: number): number {
@@ -1834,6 +1969,11 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
         return;
       }
 
+      if (state.projectFocusKey && scrollDetails(refs, key)) {
+        renderer.requestRender();
+        return;
+      }
+
       const nextTab = nextDetailTabFromMonitorKey(state.detailTab, key);
       if (state.projectFocusKey && nextTab) {
         update(current => clampState({ ...current, detailTab: nextTab }));
@@ -1849,7 +1989,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       if (key.name === "up" || key.name === "k") update(current => moveSession(current, -1));
       else if (key.name === "down" || key.name === "j") update(current => moveSession(current, 1));
       else if (isEnter(key)) update(toggleDetail);
-      else if (key.name === "a" || isBackspace(key)) update(clearProjectFocus);
+      else if (key.name === "a" || key.name === "escape" || isBackspace(key)) update(clearProjectFocus);
       else if (key.name === "g") {
         update(current => {
           const keys = projectKeys(current);

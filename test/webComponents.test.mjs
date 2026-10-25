@@ -9,6 +9,7 @@ import {
   iconMarkup,
   projectIconListMarkup,
   providerTableMarkup,
+  sceneSummaryMarkup,
   statusDotMarkup,
   statusSummaryMarkup,
   systemEfficiencyMarkup,
@@ -17,6 +18,17 @@ import {
 const providerDailyUsageMarkup = webComponents.providerDailyUsageMarkup ?? (() => "");
 
 const appSource = readFileSync(new URL("../src/web/app.ts", import.meta.url), "utf8");
+const dashboardHtml = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+const webCss = readFileSync(new URL("../public/web.css", import.meta.url), "utf8");
+
+test("provider quota columns distinguish used values from remaining values", () => {
+  const html = providerTableMarkup([{
+    form: "subscription", provider: "openai", label: "OpenAI", level: "green",
+    used: 22, remaining: 78, limit: 100, unit: "%",
+  }]);
+  assert.match(html, /columnheader">Quota \/ Usage/);
+  assert.match(html, /22\/100 % used/);
+});
 
 test("web polling backs off while the page is hidden", () => {
   assert.match(appSource, /document\.hidden \? 15_000 : 2_000/);
@@ -24,11 +36,70 @@ test("web polling backs off while the page is hidden", () => {
   assert.match(appSource, /visibilitychange/);
 });
 
+test("session regions commit only changed markup and use delegated events", () => {
+  assert.match(appSource, /function commitMarkup/);
+  assert.match(appSource, /if \(element\.innerHTML === markup\) return false/);
+  assert.match(appSource, /projectsBody\.addEventListener\("click"/);
+  assert.match(appSource, /sessionsBody\.addEventListener\("click"/);
+  assert.match(appSource, /detailHdr\.addEventListener\("click"/);
+  assert.doesNotMatch(appSource, /projectsBody\.querySelectorAll\("\[data-project\]"\)\.forEach/);
+});
+
+test("session age refresh is scheduled independently from SSE", () => {
+  assert.match(appSource, /function scheduleSessionAgeRefresh/);
+  assert.match(appSource, /document\.hidden \? 15_000 : 1_000/);
+});
+
+test("stale session redraws preserve offline state until a valid SSE message restores it", () => {
+  const renderSource = appSource.slice(
+    appSource.indexOf("function render(sessions:"),
+    appSource.indexOf("// ── SSE ──"),
+  );
+  const refreshSource = appSource.slice(
+    appSource.indexOf("function scheduleSessionAgeRefresh"),
+    appSource.indexOf("document.addEventListener(\"visibilitychange\""),
+  );
+  const connectSource = appSource.slice(
+    appSource.indexOf("function connect()"),
+    appSource.indexOf("filterInput.addEventListener"),
+  );
+
+  assert.match(refreshSource, /render\(lastSessions\)/);
+  assert.doesNotMatch(renderSource, /hideBanner|setSessionConnectionState|UI\.connection/);
+  assert.doesNotMatch(refreshSource, /setSessionConnectionState/);
+  assert.match(connectSource, /es\.onerror[\s\S]*setSessionConnectionState\("offline"\)/);
+  assert.match(connectSource, /const sessions = JSON\.parse\(e\.data\)[\s\S]*setSessionConnectionState\("online"\)[\s\S]*render\(lastSessions\)/);
+  assert.doesNotMatch(appSource, /prepend\(disconnectedBanner\)/);
+  assert.match(dashboardHtml, /<section class="dashboard-page sessions-page"[^>]*>\s*<div id="connection-banner"/s);
+});
+
 test("provider usage mode is persisted and controls both provider renderers", () => {
   assert.match(appSource, /sessionbar:provider-usage-mode/);
   assert.match(appSource, /providerDailyUsageMarkup\(providers, providerUsageMode\)/);
   assert.match(appSource, /usageMode: providerUsageMode/);
   assert.match(appSource, /localStorage\.setItem\(PROVIDER_USAGE_MODE_KEY, mode\)/);
+});
+
+test("mobile provider scene summary releases the desktop fixed height", () => {
+  assert.match(webCss, /@media \(max-width: 640px\)[\s\S]*?\.providers-session-bar\s*\{[^}]*height:\s*auto;[^}]*flex-basis:\s*auto;/);
+  assert.match(webCss, /@media \(max-width: 640px\)[\s\S]*?\.provider-usage-bar::after\s*\{[^}]*display:\s*none;/);
+  assert.match(webCss, /@media \(max-width: 640px\)[\s\S]*?\.provider-row\s*>\s*:nth-child\(5\)\s*\{[^}]*display:\s*block;[^}]*grid-area:\s*reset;/);
+  assert.match(webCss, /@media \(max-width: 640px\)[\s\S]*?\.provider-row\s*>\s*\.provider-meta-empty\s*\{[^}]*display:\s*none;/);
+});
+
+test("scene summary keeps current scope separate from status counts", () => {
+  const html = sceneSummaryMarkup({ total: 3, working: 2, blocked: 0, error: 0, idle: 1 }, "All sessions");
+  assert.match(html, /class="session-compact-title">Sessions<\/span><span class="session-compact-current">All sessions<\/span><span class="session-compact-meta">/);
+  assert.match(html, /3<\/strong><span>sessions<\/span>/);
+  assert.doesNotMatch(html, /session-compact-meta[^>]*>[\s\S]*session-compact-current/);
+});
+
+test("agent icons tolerate lowercase adapter session types", () => {
+  for (const type of ["pi", "Pi Agent", "pi-agent", "Pi Agent CLI", " pi_agent "]) {
+    const html = iconMarkup(type);
+    assert.match(html, /\/pi\.png/);
+    assert.doesNotMatch(html, /bg-icon/);
+  }
 });
 import { isSystemEfficiencySnapshot } from "../dist/shared/types.js";
 import { UI } from "../dist/web/webComponents.js";
@@ -107,9 +178,9 @@ test("renders one project icon per session without a numeric count", () => {
   assert.doesNotMatch(expanded, /project-icon-more/);
 });
 
-test("uses green for working and blue for idle status dots", () => {
+test("uses green for working and muted idle status dots", () => {
   assert.match(statusDotMarkup("working"), /bg-green/);
-  assert.match(statusDotMarkup("idle"), /bg-accent/);
+  assert.match(statusDotMarkup("idle"), /bg-muted/);
   assert.doesNotMatch(statusDotMarkup("working"), /bg-accent/);
   assert.doesNotMatch(statusDotMarkup("idle"), /bg-green/);
 });
@@ -153,6 +224,82 @@ test("renders provider subscription and API rows with semantic columns", () => {
   assert.match(html, /72%/);
   assert.match(html, /18 USD left/);
   assert.match(html, /Healthy/);
+  assert.match(html, /provider-reset provider-meta-present[^>]*>in 2h/);
+  assert.match(html, /provider-card provider-meta-present[^>]*>weekly/);
+  assert.match(html, /provider-reset provider-meta-empty[^>]*>—/);
+  assert.match(html, /provider-card provider-meta-empty[^>]*>—/);
+  assert.match(html, /provider-gallery-tabs splide/);
+  assert.match(html, /provider-gallery-main splide/);
+  assert.match(html, /provider-gallery-card/);
+  assert.match(html, /aria-label="Choose provider"/);
+});
+
+test("renders the measured calendar-day quota pace beside subscription health", () => {
+  const html = providerTableMarkup([{
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    level: "red",
+    pacing: "<5% left",
+    cardTiming: "No cards",
+    autoResetIn: "unblocked in 18h",
+    sustainableRate: 0.055,
+    measuredRate: 0.66,
+    measuredRateLabel: "15.84%/day avg",
+    actualVsSustainable: 12,
+    projectedCapHitAt: Date.now() + 60 * 60 * 1000,
+    remaining: 1,
+    limit: 100,
+    unit: "%",
+  }]);
+
+  assert.match(html, /Critical · 15\.84%\/day avg/);
+});
+
+test("separates provider health from its measured rate for responsive layout", () => {
+  const html = providerTableMarkup([{
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    level: "red",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    measuredRate: 1.7,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+    remaining: 96,
+    limit: 100,
+    unit: "%",
+  }]);
+
+  assert.match(html, /aria-label="Critical · 1\.7%\/h avg"/);
+  assert.match(html, /class="provider-level-label">Critical<\/span>/);
+  assert.match(html, /class="provider-level-rate">· 1\.7%\/h avg<\/small>/);
+});
+
+test("renders retained provider data as stale instead of healthy", () => {
+  const html = providerTableMarkup([{
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    level: "green",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+    remaining: 80,
+    limit: 100,
+    unit: "%",
+    stale: true,
+    lastSeenAt: 1_700_000_000_000,
+  }]);
+
+  assert.match(html, /aria-label="Stale"/);
+  assert.doesNotMatch(html, /aria-label="Healthy"/);
 });
 
 test("renders provider names with the shared session icon renderer", () => {
@@ -269,6 +416,7 @@ test("formats monetary usage tooltips without floating-point tails", () => {
   }]);
 
   assert.match(html, /data-tooltip="Aug 14 · 21\.68 CNY"/);
+  assert.match(html, />122\.09 CNY left</);
   assert.doesNotMatch(html, /21\.67542999999999/);
 });
 
@@ -404,6 +552,27 @@ test("percentage mode keeps cash metrics and shows token or credit providers as 
   assert.match(summary, /OpenAI 53%/);
   assert.match(summary, /¥4\.25 CNY/);
   assert.doesNotMatch(summary, /57\.25%/);
+});
+
+test("percentage usage bars scale to the visible trend instead of the global 100 percent range", () => {
+  const percentage = { kind: "bars", days: 7, points: [null, 1, 2, 3, 4, 5, 9], unit: "%" };
+  const html = providerTableMarkup([{
+    form: "subscription",
+    provider: "openai",
+    label: "OpenAI Subscription",
+    level: "green",
+    pacing: "",
+    cardTiming: "",
+    autoResetIn: "",
+    sustainableRate: 0,
+    actualVsSustainable: null,
+    projectedCapHitAt: null,
+    usageTrend: percentage,
+    usageTrends: { percentage },
+  }], { usageMode: "percentage" });
+
+  assert.match(html, /--usage-height:100%/);
+  assert.match(html, /data-tooltip="Day 7 · 9%"/);
 });
 
 test("renders a quiet daily usage fallback when today has no data", () => {

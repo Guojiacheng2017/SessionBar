@@ -143,7 +143,7 @@ export interface SessionPayload {
   unknown_events?: SessionUnknownEvent[];
   timestamp: number;
   project?: string;       // project dir basename, e.g. "vision-dash"
-  project_path?: string;  // full project dir, e.g. "/Users/…/Vision-Dash"
+  project_path?: string;  // Full project dir / 完整项目目录，例如 "/demo/projects/atlas".
   session_source?: string; // source reported by the agent's native session registry
   model_provider?: string;
   session_preview?: string;
