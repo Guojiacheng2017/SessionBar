@@ -186,6 +186,31 @@ export function dedupeSessionbarHooks(config: any, agent: string): number {
   return removed;
 }
 
+/** Remove only owned legacy hooks / 仅清理本工具脚本的旧 Hook，不按同名文件猜测归属。 */
+export function removeLegacyClaudeSessionbarHooks(hooks: any, reportPath = join(__dirname, "..", "..", "report.sh")): number {
+  if (!hooks || typeof hooks !== "object") return 0;
+  const invocations = [reportPath, shellEscape(reportPath)];
+  if (!/[\\$`]/.test(reportPath)) invocations.push(JSON.stringify(reportPath));
+  let removed = 0;
+  for (const event of Object.keys(hooks)) {
+    if (!Array.isArray(hooks[event])) continue;
+    for (const definition of hooks[event]) {
+      if (!Array.isArray(definition?.hooks)) continue;
+      definition.hooks = definition.hooks.filter((hook: any) => {
+        const command = typeof hook?.command === "string" ? hook.command : "";
+        const isLegacy = invocations.some(prefix => command.startsWith(prefix)
+          && (command.length === prefix.length || /^\s/.test(command.slice(prefix.length))))
+          && !/(?:^|\s)(?:SESSIONBAR_AGENT|AGENTBAR_AGENT)=/.test(command);
+        if (isLegacy) removed += 1;
+        return !isLegacy;
+      });
+    }
+    hooks[event] = hooks[event].filter((definition: any) => !Array.isArray(definition?.hooks) || definition.hooks.length > 0);
+    if (hooks[event].length === 0) delete hooks[event];
+  }
+  return removed;
+}
+
 function migrateStaticPortCommands(value: unknown): void {
   if (!value || typeof value !== "object") return;
   if (Array.isArray(value)) {
@@ -217,6 +242,7 @@ export function setupClaudeHooks(global: boolean, reportPath: string): SetupResu
   const settings = readJsonFile(settingsPath);
   migrateStaticPortCommands(settings);
   if (!settings.hooks) settings.hooks = {};
+  removeLegacyClaudeSessionbarHooks(settings.hooks, reportPath);
 
   type HookDef = { matcher: string; hooks: Array<{ type: string; command: string }> };
   const hookDefs: Record<string, HookDef[]> = {
