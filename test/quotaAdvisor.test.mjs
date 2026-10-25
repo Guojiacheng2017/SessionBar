@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { computeAdvisorRows } from "../dist/providers/quotaAdvisor.js";
 
 const baseSession = {
-  session_id: "codex-abc__Vision-Dash",
+  session_id: "codex-abc__atlas",
   session_type: "Codex",
   status: "working",
   task_name: "running",

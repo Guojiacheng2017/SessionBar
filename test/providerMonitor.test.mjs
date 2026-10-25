@@ -7,7 +7,7 @@ const base = {
   status: "working",
   task_name: "running: npm test",
   timestamp: 1_700_000_000_000,
-  project: "Vision-Dash",
+  project: "atlas",
 };
 
 test("provider signals attach only to matching agent sessions and preserve heartbeat state", () => {

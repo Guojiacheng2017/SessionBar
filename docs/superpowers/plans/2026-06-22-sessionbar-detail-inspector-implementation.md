@@ -53,7 +53,7 @@ import {
 } from "../dist/sessions/sessionInspector.js";
 
 const baseSession = {
-  session_id: "codex-019ed3a2-a7ab-7a90-a6da-c1535a35afd0__Vision-Dash",
+  session_id: "codex-019ed3a2-a7ab-7a90-a6da-c1535a35afd0__atlas",
   session_type: "Codex",
   status: "working",
   task_name: "running: npm run build",
@@ -62,13 +62,13 @@ const baseSession = {
   tokens: 1700000,
   turns: 34,
   timestamp: 1_700_000_000_000,
-  project: "Vision-Dash",
-  project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+  project: "atlas",
+  project_path: "/demo/projects/atlas",
 };
 
 test("session handles are compact and stable for sidebar use", () => {
   assert.equal(sessionHandle(baseSession, 18), "019ed3a2-a7...afd0");
-  assert.equal(sessionHandle({ ...baseSession, session_id: "claude-demo-abc123__Vision-Dash" }, 12), "demo-abc123");
+  assert.equal(sessionHandle({ ...baseSession, session_id: "claude-demo-abc123__atlas" }, 12), "demo-abc123");
 });
 
 test("unread state ignores initial load, marks changed unselected sessions, and clears focused session", () => {
@@ -359,7 +359,7 @@ Expected: both commands complete successfully.
 Run:
 
 ```bash
-node -e "import('./dist/sessions/sessionInspector.js').then(({buildSessionDetailContent})=>{const s={session_id:'codex-demo-1234567890__Vision-Dash',session_type:'Codex',status:'working',task_name:'running: npm run build',activity_tail:['tool: npm run build'],context_percent:72,tokens:1700000,turns:34,timestamp:Date.now()-37000,project:'Vision-Dash',project_path:'/Users/jcus/Documents/Jcus/Vision-Dash'}; console.log(buildSessionDetailContent(s,'overview',88)); console.log('--- narrow ---'); console.log(buildSessionDetailContent(s,'overview',44));})"
+node -e "import('./dist/sessions/sessionInspector.js').then(({buildSessionDetailContent})=>{const s={session_id:'codex-demo-1234567890__atlas',session_type:'Codex',status:'working',task_name:'running: npm run build',activity_tail:['tool: npm run build'],context_percent:72,tokens:1700000,turns:34,timestamp:Date.now()-37000,project:'atlas',project_path:'/demo/projects/atlas'}; console.log(buildSessionDetailContent(s,'overview',88)); console.log('--- narrow ---'); console.log(buildSessionDetailContent(s,'overview',44));})"
 ```
 
 Expected: wide output has Primary Stage plus Priority Rail; narrow output stacks sections without full raw session ID.

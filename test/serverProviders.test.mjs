@@ -32,39 +32,39 @@ function session(id, advisorRows = []) {
 test("migrateLegacyHookSessions removes only the old fallback for a stable session", () => {
   const sessions = {
     legacy: {
-      session_id: "codex-Vision-Dash-f75de08f__Vision-Dash",
+      session_id: "codex-atlas-f75de08f__atlas",
       session_type: "Codex",
       source: "hook",
       status: "working",
       task_name: "running",
       timestamp: 1_700_000_000_000,
-      project: "Vision-Dash",
-      project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+      project: "atlas",
+      project_path: "/demo/projects/atlas",
     },
     otherStable: {
-      session_id: "019ee93e-56d1-7f13-9624-c84bdaf7c97a__Vision-Dash",
+      session_id: "00000000-0000-4000-8000-000000000001__atlas",
       session_type: "Codex",
       source: "hook",
       status: "working",
       task_name: "running",
       timestamp: 1_700_000_001_000,
-      project: "Vision-Dash",
-      project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+      project: "atlas",
+      project_path: "/demo/projects/atlas",
     },
   };
 
   const removed = migrateLegacyHookSessions(sessions, {
-    session_id: "019fdb88-8209-7b32-8816-cf684186fde1__Vision-Dash",
+    session_id: "00000000-0000-4000-8000-000000000002__atlas",
     session_type: "Codex",
     source: "hook",
     status: "working",
     task_name: "running",
     timestamp: 1_700_000_002_000,
-    project: "Vision-Dash",
-    project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+    project: "atlas",
+    project_path: "/demo/projects/atlas",
   });
 
-  assert.deepEqual(removed, ["codex-Vision-Dash-f75de08f__Vision-Dash"]);
+  assert.deepEqual(removed, ["codex-atlas-f75de08f__atlas"]);
   assert.ok(sessions.otherStable);
   assert.equal(sessions.legacy, undefined);
 });

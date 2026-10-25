@@ -3,13 +3,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 test("report.sh maps canonical usage env fields into the status payload", () => {
   const root = mkdtempSync(join(tmpdir(), "sessionbar-report-"));
   const bin = join(root, "bin");
   const home = join(root, "home");
-  const project = join(root, "Vision-Dash");
+  const project = join(root, "atlas");
   const capture = join(root, "payload.json");
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
@@ -102,7 +103,7 @@ test("report.sh omits runtime when an active hook supplies no explicit metrics",
   const root = mkdtempSync(join(tmpdir(), "sessionbar-report-no-runtime-"));
   const bin = join(root, "bin");
   const home = join(root, "home");
-  const project = join(root, "Vision-Dash");
+  const project = join(root, "atlas");
   const capture = join(root, "payload.json");
   mkdirSync(bin, { recursive: true });
   mkdirSync(home, { recursive: true });
@@ -152,7 +153,7 @@ test("report.sh ignores process roots without sidecars or process lookup", () =>
   const root = mkdtempSync(join(tmpdir(), "sessionbar-report-process-root-"));
   const bin = join(root, "bin");
   const home = join(root, "home");
-  const project = join(root, "Vision-Dash");
+  const project = join(root, "atlas");
   const capture = join(root, "payload.json");
   const processLookup = join(root, "process-lookup.txt");
   mkdirSync(bin, { recursive: true });
@@ -205,7 +206,7 @@ exit 1
 test("report.sh reuses the hook session id when hook invocations have different parents", () => {
   const root = mkdtempSync(join(tmpdir(), "sessionbar-report-hook-id-"));
   const home = join(root, "home");
-  const project = join(root, "Vision-Dash");
+  const project = join(root, "atlas");
   mkdirSync(home, { recursive: true });
   mkdirSync(project, { recursive: true });
 
@@ -218,8 +219,8 @@ test("report.sh reuses the hook session id when hook invocations have different 
     SESSIONBAR_PROJECT_DIR: project,
     SESSIONBAR_SERVER_PORT: "1",
   };
-  const hookInput = `${JSON.stringify({ session_id: "019fdb88-8209-7b32-8816-cf684186fde1" })}\n`;
-  const args = ["-c", "sleep 0.2 & cat | bash /Users/jcus/Documents/Jcus/Vision-Dash/0agentbar/report.sh working probe 1"];
+  const hookInput = `${JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000002" })}\n`;
+  const args = ["-c", 'sleep 0.2 & cat | bash "$1" working probe 1', "report-hook", fileURLToPath(new URL("../report.sh", import.meta.url))];
 
   execFileSync("bash", args, { cwd: new URL("..", import.meta.url), env, input: hookInput });
   execFileSync("bash", args, { cwd: new URL("..", import.meta.url), env, input: hookInput });
@@ -227,5 +228,5 @@ test("report.sh reuses the hook session id when hook invocations have different 
   const markerDir = join(home, ".sessionbar", "sessions");
   const markers = readdirSync(markerDir).filter(file => file.startsWith("sessionbar-id-"));
   assert.equal(markers.length, 1);
-  assert.equal(readFileSync(join(markerDir, markers[0]), "utf8"), "019fdb88-8209-7b32-8816-cf684186fde1__Vision-Dash\n");
+  assert.equal(readFileSync(join(markerDir, markers[0]), "utf8"), "00000000-0000-4000-8000-000000000002__atlas\n");
 });

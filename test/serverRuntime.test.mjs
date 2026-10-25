@@ -388,11 +388,15 @@ syncBuiltinESMExports();
   const codexReadsAfterSessionSort = lineCount(codexReads);
   const nextStreamChunk = streamReader.read();
 
-  await waitFor(() => lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
-  const later = await fetch(`${baseUrl}/system/live`).then(response => response.json());
+  const later = await waitFor(async () => {
+    const body = await fetch(`${baseUrl}/system/live`).then(response => response.json());
+    const networkAdvanced = process.platform !== "darwin" || lineCount(netstatCalls) >= 2;
+    return body.system.sampled_at > initial.system.sampled_at && networkAdvanced ? body : undefined;
+  }, "system sampler did not advance across samples");
   await fetch(`${baseUrl}/system/live`).then(response => response.json());
   assert.equal(typeof later.system.sampled_at, "number");
-  assert.ok(lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
+  if (process.platform === "darwin") assert.ok(lineCount(netstatCalls) >= 2, "network collector did not advance across samples");
+  else assert.equal(lineCount(netstatCalls), 0, "macOS network collector must not run on other platforms");
   assert.equal(lineCount(codexReads), codexReadsAfterSessionSort, "system samples or endpoint reads must not sort/discover sessions");
   assert.equal(lineCount(psCalls), 0, "system samples must not read the process table");
   const extraStreamData = await Promise.race([

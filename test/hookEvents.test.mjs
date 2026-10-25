@@ -3,7 +3,7 @@ import test from "node:test";
 import { nativePayloadToHookEvents, sessionSnapshotToHookEvents } from "../dist/hooks/hookEvents.js";
 
 const snapshot = {
-  session_id: "codex-demo__Vision-Dash",
+  session_id: "codex-demo__atlas",
   session_type: "Codex",
   session_name: "Build dashboard",
   status: "working",
@@ -15,8 +15,8 @@ const snapshot = {
   cache_read_tokens: 1400000,
   turns: 34,
   context_percent: 72,
-  project: "Vision-Dash",
-  project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+  project: "atlas",
+  project_path: "/demo/projects/atlas",
 };
 
 test("snapshot payload normalizes into status, activity, and usage hook events", () => {
@@ -47,8 +47,8 @@ test("native unknown payloads are preserved as unknown hook events", () => {
   const raw = { provider: "demo", shape: { useful: true } };
   const events = nativePayloadToHookEvents(raw, {
     agent_type: "Pi Agent",
-    session_id: "pi-demo__Vision-Dash",
-    project: "Vision-Dash",
+    session_id: "pi-demo__atlas",
+    project: "atlas",
     timestamp: 1_700_000_000_000,
     source: "hook",
   });
@@ -63,8 +63,8 @@ test("native payloads with structured hook event names emit canonical workflow e
   const raw = { hook_event: "PreCompress", payload: { compact: true } };
   const events = nativePayloadToHookEvents(raw, {
     agent_type: "Gemini CLI",
-    session_id: "gemini-demo__Vision-Dash",
-    project: "Vision-Dash",
+    session_id: "gemini-demo__atlas",
+    project: "atlas",
     timestamp: 1_700_000_000_000,
     source: "hook",
   });
@@ -86,8 +86,8 @@ test("native payloads with structured hook event names emit canonical workflow e
 test("native payload mapping accepts SessionBar agent aliases", () => {
   const events = nativePayloadToHookEvents({ event: "PreToolUse" }, {
     agent_type: "Codex",
-    session_id: "codex-demo__Vision-Dash",
-    project: "Vision-Dash",
+    session_id: "codex-demo__atlas",
+    project: "atlas",
     timestamp: 1_700_000_000_000,
     source: "hook",
   });
@@ -115,8 +115,8 @@ test("native payload adapter emits status, activity, and usage hook events", () 
   };
   const events = nativePayloadToHookEvents(raw, {
     agent_type: "Codex",
-    session_id: "codex-demo__Vision-Dash",
-    project: "Vision-Dash",
+    session_id: "codex-demo__atlas",
+    project: "atlas",
     timestamp: 1_700_000_000_000,
     source: "hook",
   });
@@ -146,8 +146,8 @@ test("unmapped native hook names remain raw-only", () => {
   const raw = { hook_event_name: "DefinitelyNotARealHook" };
   const events = nativePayloadToHookEvents(raw, {
     agent_type: "Claude Code",
-    session_id: "claude-demo__Vision-Dash",
-    project: "Vision-Dash",
+    session_id: "claude-demo__atlas",
+    project: "atlas",
     timestamp: 1_700_000_000_000,
     source: "hook",
   });

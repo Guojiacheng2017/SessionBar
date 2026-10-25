@@ -35,7 +35,7 @@ const thread = (id, name) => ({
   updatedAt: 1_700_000_100,
   status: { type: "notLoaded" },
   path: `/tmp/${id}.jsonl`,
-  cwd: "/workspace/Vision-Dash",
+  cwd: "/workspace/atlas",
   cliVersion: "0.147.0",
   source: "vscode",
   threadSource: null,
@@ -47,7 +47,7 @@ const thread = (id, name) => ({
 });
 
 test("parses the thread/list response while ignoring unrelated protocol messages", () => {
-  const expected = thread("019fdb88-8209-7b32-8816-cf684186fde1", "Web UI polish");
+  const expected = thread("00000000-0000-4000-8000-000000000002", "Web UI polish");
   const output = [
     JSON.stringify({ id: 1, result: { userAgent: "Codex" } }),
     JSON.stringify({ method: "thread/status/changed", params: {} }),
@@ -59,12 +59,12 @@ test("parses the thread/list response while ignoring unrelated protocol messages
 
 test("maps app-server thread metadata without inventing a session name", () => {
   assert.deepEqual(
-    codexThreadMetadata(thread("019fdb88-8209-7b32-8816-cf684186fde1", "  Web UI polish  ")),
+    codexThreadMetadata(thread("00000000-0000-4000-8000-000000000002", "  Web UI polish  ")),
     {
-      threadId: "019fdb88-8209-7b32-8816-cf684186fde1",
+      threadId: "00000000-0000-4000-8000-000000000002",
       sessionName: "Web UI polish",
-      project: "Vision-Dash",
-      projectPath: "/workspace/Vision-Dash",
+      project: "atlas",
+      projectPath: "/workspace/atlas",
       updatedAt: 1_700_000_100_000,
       source: "vscode",
       modelProvider: "openai",
@@ -74,5 +74,5 @@ test("maps app-server thread metadata without inventing a session name", () => {
     },
   );
 
-  assert.equal(codexThreadMetadata(thread("019fdb88-8209-7b32-8816-cf684186fde1", null)).sessionName, undefined);
+  assert.equal(codexThreadMetadata(thread("00000000-0000-4000-8000-000000000002", null)).sessionName, undefined);
 });

@@ -13,7 +13,7 @@ import {
 } from "../dist/sessions/sessionInspector.js";
 
 const baseSession = {
-  session_id: "codex-019ed3a2-a7ab-7a90-a6da-c1535a35afd0__Vision-Dash",
+  session_id: "codex-019ed3a2-a7ab-7a90-a6da-c1535a35afd0__atlas",
   session_type: "Codex",
   status: "working",
   task_name: "running: npm run build",
@@ -22,13 +22,13 @@ const baseSession = {
   tokens: 1700000,
   turns: 34,
   timestamp: 1_700_000_000_000,
-  project: "Vision-Dash",
-  project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+  project: "atlas",
+  project_path: "/demo/projects/atlas",
 };
 
 test("session handles are compact and stable for sidebar use", () => {
   assert.equal(sessionHandle(baseSession, 18), "019ed3a2-a7...afd0");
-  assert.equal(sessionHandle({ ...baseSession, session_id: "claude-demo-abc123__Vision-Dash" }, 12), "demo-abc123");
+  assert.equal(sessionHandle({ ...baseSession, session_id: "claude-demo-abc123__atlas" }, 12), "demo-abc123");
 });
 
 test("unread state ignores initial load, marks changed unselected sessions, and clears focused session", () => {
@@ -69,7 +69,7 @@ test("session sidebar line is a compact monitor summary, not a repeated table ro
     width: 42,
     now: baseSession.timestamp + 37_000,
   });
-  assert.equal(line, "> WORK Vision-Dash 37s");
+  assert.equal(line, "> WORK atlas 37s");
   assert.doesNotMatch(line, /019ed3a2|Codex|running:|Project|Agent|Status/);
   assert.ok(line.length <= 42);
 });
@@ -123,7 +123,7 @@ test("overview does not invent synthetic lifecycle events", () => {
 
 test("wide overview keeps pressure table readable without truncation", () => {
   const content = buildSessionDetailContent(
-    { ...baseSession, session_id: "codex-demo__Vision-Dash" },
+    { ...baseSession, session_id: "codex-demo__atlas" },
     "overview",
     88,
     baseSession.timestamp + 37_000,

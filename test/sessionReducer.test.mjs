@@ -4,9 +4,9 @@ import { reduceSessionEvents } from "../dist/sessions/sessionReducer.js";
 
 const base = {
   agent_type: "Codex",
-  session_id: "codex-demo__Vision-Dash",
-  project: "Vision-Dash",
-  project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+  session_id: "codex-demo__atlas",
+  project: "atlas",
+  project_path: "/demo/projects/atlas",
   source: "hook",
 };
 

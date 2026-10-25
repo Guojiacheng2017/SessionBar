@@ -3,14 +3,14 @@ import test from "node:test";
 import { mergeSessionPayload, validateSessionPayload } from "../dist/sessions/sessionPayload.js";
 
 const basePayload = {
-  session_id: "codex-demo__Vision-Dash",
+  session_id: "codex-demo__atlas",
   session_type: "Codex",
   session_name: "Build dashboard",
   status: "working",
   task_name: "running: npm test",
   timestamp: 1_700_000_000_000,
-  project: "Vision-Dash",
-  project_path: "/Users/jcus/Documents/Jcus/Vision-Dash",
+  project: "atlas",
+  project_path: "/demo/projects/atlas",
 };
 
 test("validates canonical usage fields", () => {
