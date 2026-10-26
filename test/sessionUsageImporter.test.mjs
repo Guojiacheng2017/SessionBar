@@ -109,6 +109,33 @@ test("account quota observations retain both portions of a day and ignore repeat
   assert.equal(row.usageTrends.percentage.points.at(-1), 14);
 });
 
+test("expiry drift across session logs does not split one weekly quota window", () => {
+  const at = new Date(2026, 9, 13, 9).getTime();
+  const expiry = at + 5 * 86400000;
+  const state = { daily: {}, files: {
+    a: {offset: 0, quota: [
+      {at, used: 6, endsAt: expiry},
+      {at: at + 60_000, used: 65, endsAt: expiry + 55_000},
+    ]},
+    b: {offset: 0, quota: [
+      {at: at + 120_000, used: 49, endsAt: expiry + 83_000},
+    ]},
+  }};
+
+  assert.equal(codexDailyQuota(state, at).at(-1), 59);
+});
+
+test("expiry drift across an hour boundary keeps one weekly quota window", () => {
+  const at = new Date(2026, 9, 13, 9).getTime();
+  const expiry = new Date(2026, 9, 18, 11, 59, 40).getTime();
+  const quota = [
+    {at, used: 20, endsAt: expiry},
+    {at: at + 60_000, used: 30, endsAt: expiry + 40_000},
+  ];
+
+  assert.equal(codexDailyQuota({files: {a: {offset: 0, quota}}, daily: {}}, at).at(-1), 10);
+});
+
 test("ten quota windows accumulate without resetting the daily total", () => {
   const at = new Date(2026, 8, 11, 10).getTime();
   const quota = [];

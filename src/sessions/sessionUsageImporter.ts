@@ -28,6 +28,7 @@ export interface SessionUsageImporterOptions {
 
 const DAY_MS = 86_400_000;
 const MAX_SEEN_IDS = 4000;
+const HOUR_MS = 60 * 60_000;
 
 export function syncSessionUsage(options: SessionUsageImporterOptions): SessionUsageState {
   const now = options.now ?? Date.now();
@@ -71,15 +72,17 @@ export function codexDailyQuota(state: SessionUsageState, now = Date.now()): Arr
       && event.used >= 0 && event.used <= 100 && Number.isFinite(event.endsAt) && event.endsAt > 0)
     .sort((a, b) => a.at - b.at);
   const totals = new Map<string, number>();
-  const windows: Array<{ endsAt: number; used: number }> = [];
+  const windows = new Map<number, { used: number }>();
   for (const event of events) {
     const day = localDayKey(event.at);
     totals.set(day, totals.get(day) ?? 0);
-    // Account-wide snapshots repeat across sessions; server expiry timestamps can drift by seconds.
-    let window = windows.find(item => Math.abs(item.endsAt - event.endsAt) <= 60_000);
+    // Codex returns an approximate reset timestamp that drifts across concurrent sessions.
+    // A real weekly reset moves the expiry by days, so the nearest hour is its stable identity.
+    const windowKey = Math.round(event.endsAt / HOUR_MS);
+    let window = windows.get(windowKey);
     if (!window) {
-      window = { endsAt: event.endsAt, used: windows.length ? 0 : event.used };
-      windows.push(window);
+      window = { used: windows.size ? 0 : event.used };
+      windows.set(windowKey, window);
     }
     totals.set(day, totals.get(day)! + Math.max(0, event.used - window.used));
     window.used = Math.max(window.used, event.used);
