@@ -136,6 +136,16 @@ test("expiry drift across an hour boundary keeps one weekly quota window", () =>
   assert.equal(codexDailyQuota({files: {a: {offset: 0, quota}}, daily: {}}, at).at(-1), 10);
 });
 
+test("expiry drift across the half-hour rounding boundary keeps one window", () => {
+  const at = new Date(2026, 9, 13, 9).getTime();
+  const expiry = new Date(2026, 9, 18, 11, 29, 40).getTime();
+  const quota = [
+    { at, used: 20, endsAt: expiry },
+    { at: at + 60_000, used: 30, endsAt: expiry + 40_000 },
+  ];
+  assert.equal(codexDailyQuota({ files: { a: { offset: 0, quota } }, daily: {} }, at).at(-1), 10);
+});
+
 test("ten quota windows accumulate without resetting the daily total", () => {
   const at = new Date(2026, 8, 11, 10).getTime();
   const quota = [];

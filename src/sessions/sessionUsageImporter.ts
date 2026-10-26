@@ -72,17 +72,16 @@ export function codexDailyQuota(state: SessionUsageState, now = Date.now()): Arr
       && event.used >= 0 && event.used <= 100 && Number.isFinite(event.endsAt) && event.endsAt > 0)
     .sort((a, b) => a.at - b.at);
   const totals = new Map<string, number>();
-  const windows = new Map<number, { used: number }>();
+  const windows: Array<{ endsAt: number; used: number }> = [];
   for (const event of events) {
     const day = localDayKey(event.at);
     totals.set(day, totals.get(day) ?? 0);
-    // Codex returns an approximate reset timestamp that drifts across concurrent sessions.
-    // A real weekly reset moves the expiry by days, so the nearest hour is its stable identity.
-    const windowKey = Math.round(event.endsAt / HOUR_MS);
-    let window = windows.get(windowKey);
+    // Match nearby reset times without splitting at arbitrary bucket boundaries.
+    // 匹配相近的重置时间，避免跨越固定时间桶边界时重复计量。
+    let window = windows.find(item => Math.abs(item.endsAt - event.endsAt) <= HOUR_MS);
     if (!window) {
-      window = { used: windows.size ? 0 : event.used };
-      windows.set(windowKey, window);
+      window = { endsAt: event.endsAt, used: windows.length ? 0 : event.used };
+      windows.push(window);
     }
     totals.set(day, totals.get(day)! + Math.max(0, event.used - window.used));
     window.used = Math.max(window.used, event.used);
