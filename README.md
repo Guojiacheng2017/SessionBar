@@ -8,6 +8,9 @@
 
 ## What's New
 
+- **2026-10-26 · v1.0.0 package refresh:** Fixed Codex quota double-counting
+  when reset timestamps drift between sessions, including half-hour boundaries.
+  Ended sessions now share the 30-minute retention window with silent sessions.
 - **2026-10-26 · v1.0.0:** Unified the Web and terminal UI around the rainbow
   wordmark and cool gray-blue theme; refreshed all five privacy-safe screenshots.
 - **2026-10-26 · Fixed:** Persistent Web disconnect feedback, long titles,
@@ -94,11 +97,13 @@ sessionbar
 ```
 
 This is a GitHub release archive, not an npm registry publication.
+The package was refreshed without changing its version. Download both files
+together again; do not verify a new archive against an older checksum file.
 
 ### From Source
 
 ```sh
-git clone https://github.com/Guojiacheng2017/SessionBar.git sessionbar
+git clone --branch main https://github.com/Guojiacheng2017/SessionBar.git sessionbar
 cd sessionbar
 npm install
 npm run build
@@ -107,7 +112,8 @@ sessionbar
 ```
 
 Without linking, run `node dist/cli/cli.js`. Update a source installation with
-`git pull`, `npm install` and `npm run build`.
+`git pull --ff-only`, `npm install` and `npm run build` from a clean `main`
+checkout. Reconcile divergent history without discarding local changes.
 
 ## Usage
 
@@ -134,6 +140,8 @@ Use `PageUp`, `PageDown`, `Home` and `End` to reach all detail content in small 
 
 Exiting TUI does not close browser tabs or stop the background relay. Use
 `sessionbar stop` explicitly. Ordinary refreshes do not reassign its port.
+`sessionbar prune` stops a running relay before deleting stale marker files;
+it is maintenance, not a routine refresh command.
 
 ### Hooks and Discovery
 
@@ -180,6 +188,8 @@ SESSIONBAR_HOME="$HOME/.sessionbar-dev" sessionbar  # 独立状态 / Isolated st
 port can fail if occupied. State and intermediate files do not belong in the
 repository. Sessions without updates remain in memory for up to 30 minutes;
 the list is not a permanent conversation archive.
+Retained rows are not proof that an agent process is still running. Context
+and usage fields remain unavailable when a harness does not report them.
 
 SessionBar-owned state directories use `0700` and updated state files use
 `0600` on POSIX. This is not encryption or protection against same-user processes.
@@ -220,6 +230,10 @@ exports session snapshots to the user's iCloud directory.
 Production dependencies pass `npm audit --omit=dev` for this update. This is not
 a complete security audit or protection against malicious local processes.
 Never commit credentials, personal configuration or real snapshots.
+Ignore rules are local configuration and are not tracked in the repository.
+Before staging changes, exclude credentials, `.env` files, personal agent
+configuration, `node_modules/` and `dist/` in your local `.gitignore` or
+`.git/info/exclude`. Inspect `git status` and `git diff --cached` before committing.
 
 ## Development
 

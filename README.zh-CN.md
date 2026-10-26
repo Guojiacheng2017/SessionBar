@@ -8,6 +8,8 @@
 
 ## 最新动态
 
+- **2026-10-26 · v1.0.0 安装包更新：** 修复 Codex 跨会话重置时间漂移造成的
+  配额重复累计，覆盖半小时边界；已结束和静默 Session 统一保留 30 分钟。
 - **2026-10-26 · v1.0.0：** Web 与终端沿用彩虹字标和冷灰蓝主题，更新全部五张脱敏截图。
 - **2026-10-26 · 修复：** Web 断线提示、长标题、窄终端导航与详情滚动；明确标注已用配额。
 - **2026-10-26 · 加固：** 清理身份不明确的旧 Claude Hook，更新兼容依赖以修复 body-parser 压缩请求 DoS 漏洞。
@@ -84,11 +86,13 @@ sessionbar
 ```
 
 这是 GitHub 发布包，不代表已发布到 npm Registry。
+本次保持版本号不变并刷新安装包，请重新一起下载安装包和校验文件，
+不要使用旧校验文件验证新安装包。
 
 ### 从源码安装
 
 ```sh
-git clone https://github.com/Guojiacheng2017/SessionBar.git sessionbar
+git clone --branch main https://github.com/Guojiacheng2017/SessionBar.git sessionbar
 cd sessionbar
 npm install
 npm run build
@@ -97,7 +101,8 @@ sessionbar
 ```
 
 无需全局链接时运行 `node dist/cli/cli.js`。源码安装更新：依次执行
-`git pull`、`npm install`、`npm run build`。
+在干净的 `main` 目录依次执行 `git pull --ff-only`、`npm install`、`npm run build`。
+历史分叉时先整理本地工作，不要丢弃未发布的改动。
 
 ## 使用
 
@@ -122,6 +127,8 @@ Tab、方括号或 `1`–`5` 切换详情，`a` 或 Backspace 返回全部项目
 
 退出 TUI 不会关闭浏览器标签或停止后台 Relay；执行 `sessionbar stop` 显式停止。
 正常刷新不会重新分配运行中 Relay 的端口。
+`sessionbar prune` 会先停止运行中的 Relay，再删除过期标记；属于维护操作，
+不应作为日常刷新方式。
 
 ### Hook 与发现
 
@@ -164,6 +171,8 @@ SESSIONBAR_HOME="$HOME/.sessionbar-dev" sessionbar  # 独立状态 / Isolated st
 `SESSION_BAR_PORT`、`PORT` 为兼容别名。显式端口被占用时可能启动失败。
 状态和中间数据不应写入仓库。Session 无更新时在内存保留最多 30 分钟，
 列表并非永久对话档案。
+保留的行不代表 Agent 进程仍在运行；Harness 未上报的 Context 和 Usage 字段
+仍显示为不可用。
 
 POSIX 状态目录权限为 `0700`，更新后的状态文件为 `0600`。
 这不是加密，也无法阻止同一用户身份的其他进程读取。
@@ -199,6 +208,9 @@ Provider 凭据不返回 UI Payload。上游接口、外部 Icon 会产生网络
 
 本次生产依赖通过 `npm audit --omit=dev`，但不代表全面安全审计或能防御恶意
 本地进程。不要提交凭据、个人配置或真实快照。
+忽略规则属于本地配置，不在仓库中跟踪。暂存前，请在本地 `.gitignore` 或
+`.git/info/exclude` 中排除凭据、`.env`、个人 Agent 配置、`node_modules/`、`dist/`，
+并在提交前检查 `git status` 与 `git diff --cached`。
 
 ## 开发
 
