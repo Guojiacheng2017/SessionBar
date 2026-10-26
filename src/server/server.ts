@@ -932,26 +932,19 @@ if (isDirectRun) {
     }
   }, 15_000);
 
-  // Auto-purge: only remove sessions whose owning CLI session has ended.
-  // Sessions stay alive while the CLI process is open — even if idle for minutes.
+  // Keep ended and silent rows for the same bounded history window.
+  // 已结束和静默会话采用相同的限时保留窗口。
   purgeInterval = setInterval(() => {
     const now = Date.now();
     let changed = false;
     for (const id of Object.keys(sessions)) {
       const s = sessions[id];
-      // Case 1: Explicit SessionEnd — remove after 5s grace so TUI can show final state
-      if (s.status === "idle" && s.task_name === "Session ended" && now - s.timestamp > 5_000) {
+      const reason = sessionPurgeReason(s, now, SESSION_RETENTION_MS);
+      if (reason) {
         delete sessions[id];
         removeSessionMarkerFiles(SESSION_ID_DIR, id);
         changed = true;
-        console.log(`[purge] ${id} (ended)`);
-      }
-      // Case 2: no update for 30 minutes means the session is no longer current.
-      else if (now - s.timestamp > SESSION_RETENTION_MS) {
-        delete sessions[id];
-        removeSessionMarkerFiles(SESSION_ID_DIR, id);
-        changed = true;
-        console.log(`[purge] ${id} (timeout — assumed crashed)`);
+        console.log(`[purge] ${id} (${reason})`);
       }
     }
     if (changed) {
@@ -959,6 +952,17 @@ if (isDirectRun) {
       if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
     }
   }, 10_000);
+}
+
+export function sessionPurgeReason(
+  session: Pick<SessionPayload, "status" | "task_name" | "timestamp">,
+  now: number,
+  retentionMs: number,
+): "ended" | "timeout — assumed crashed" | undefined {
+  if (now - session.timestamp <= retentionMs) return undefined;
+  return session.status === "idle" && session.task_name === "Session ended"
+    ? "ended"
+    : "timeout — assumed crashed";
 }
 
 // POST: session reports its status

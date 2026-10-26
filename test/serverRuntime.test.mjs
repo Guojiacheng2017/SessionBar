@@ -66,7 +66,17 @@ test("relay lifetime has no automatic idle-shutdown path", () => {
 
 test("projects and sessions remain in memory for thirty minutes without updates", () => {
   assert.equal(SESSION_RETENTION_MS, 30 * 60 * 1000);
-  assert.match(serverSource, /now - s\.timestamp > SESSION_RETENTION_MS/);
+  assert.match(serverSource, /sessionPurgeReason\(s, now, SESSION_RETENTION_MS\)/);
+});
+
+test("ended and silent sessions share the thirty-minute retention window", async () => {
+  const { sessionPurgeReason } = await import("../dist/server/server.js");
+  const now = 1_700_000_000_000;
+  const ended = { status: "idle", task_name: "Session ended", timestamp: now - 60_000 };
+  assert.equal(sessionPurgeReason(ended, now, SESSION_RETENTION_MS), undefined);
+  assert.equal(sessionPurgeReason({ ...ended, timestamp: now - SESSION_RETENTION_MS }, now, SESSION_RETENTION_MS), undefined);
+  assert.equal(sessionPurgeReason({ ...ended, timestamp: now - SESSION_RETENTION_MS - 1 }, now, SESSION_RETENTION_MS), "ended");
+  assert.equal(sessionPurgeReason({ ...ended, task_name: "Ready", timestamp: now - SESSION_RETENTION_MS - 1 }, now, SESSION_RETENTION_MS), "timeout — assumed crashed");
 });
 
 test("Codex discovery is throttled between refresh windows", () => {
