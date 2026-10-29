@@ -8,19 +8,20 @@
 
 ## What's New
 
-- **2026-10-26 · v1.0.0 package refresh:** Fixed Codex quota double-counting
-  when reset timestamps drift between sessions, including half-hour boundaries.
-  Ended sessions now share the 30-minute retention window with silent sessions.
-- **2026-10-26 · v1.0.0:** Unified the Web and terminal UI around the rainbow
-  wordmark and cool gray-blue theme; refreshed all five privacy-safe screenshots.
-- **2026-10-26 · Fixed:** Persistent Web disconnect feedback, long titles,
-  narrow-terminal navigation and scrollable details; clarified used quota values.
-- **2026-10-26 · Hardened:** Removed ambiguous legacy Claude hooks and updated
-  compatible dependencies to fix the body-parser compressed-request DoS advisory.
-- **2026-10-07 · Fixed:** Three-pane sizing, cancellable setup, Provider cache
-  expiry and local browser request boundaries.
-- **2026-09-01 · Fixed:** Workflow events stay display-only rather than overriding
-  explicit session data.
+- **2026-10-30 · v1.1.0 Runtime:** Shared Provider networking, explicit safe
+  restart, owned-process cleanup and debounced targeted filesystem refreshes.
+- **2026-10-30 · Harnesses:** Native Kimi Code, ZCode and Cursor reporting;
+  WorkBuddy database/WAL discovery, DeepSeek Harness snapshots and Codex identity fixes.
+- **2026-10-30 · Agent details:** On-demand Codex, Claude and DeepSeek sub-agent
+  inspection, paged conversation records and native execution/Flow evidence.
+- **2026-10-30 · UI and Providers:** Terminal Agents/Providers inspectors, a safe
+  built-in command box, stable Web updates and clearer cached billing/usage data.
+- **2026-10-26 · v1.0.0 fixes retained:** Codex quota-window deduplication,
+  30-minute session retention, local browser boundaries and owned-hook cleanup.
+
+> [!NOTE]
+> This section keeps the five most recent significant updates. For the full
+> history and downloadable packages, see [Releases](https://github.com/Guojiacheng2017/SessionBar/releases).
 
 > [!IMPORTANT]
 > SessionBar is still under active development. Some agents, status signals,
@@ -44,6 +45,10 @@ of treating the project as a single agent process.
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/copilot-color.svg" width="14" height="14" alt=""> GitHub Copilot CLI</kbd>
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude-color.svg" width="14" height="14" alt=""> Claude Desktop</kbd>
   <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> WorkBuddy Desktop</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/moonshot.svg" width="14" height="14" alt=""> Kimi Code</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/cursor.svg" width="14" height="14" alt=""> Cursor</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/deepseek-color.svg" width="14" height="14" alt=""> DeepSeek Harness</kbd>
+  <kbd>ZCode</kbd>
 </p>
 
 <table>
@@ -60,7 +65,7 @@ of treating the project as a single agent process.
   </tr>
 </table>
 
-> Captured from this release's actual UI on 2026-10-26, using isolated synthetic
+> Captured from this release's actual UI on 2026-10-30, using isolated synthetic
 > projects, sessions, system readings, and provider values. No real account data,
 > credentials, or personal paths are included. Missing fields stay unavailable;
 > actual data coverage depends on the harness and provider adapter.
@@ -76,6 +81,9 @@ of treating the project as a single agent process.
 - Cached CPU, memory, load, temperature and network readings.
 - Alternate-screen TUI rendering and slower background polling.
 - One relay per state directory with a dynamic port selected at startup.
+- On-demand sub-agent inspection and source-backed execution/Flow views;
+  unavailable relationships remain unknown instead of being guessed.
+- Debounced targeted discovery, last-good snapshots and safe built-in commands.
 
 ## Install and Update
 
@@ -86,19 +94,18 @@ temperature adapters limited to macOS. Windows parity is not claimed.
 
 ### Release Package
 
-Download `sessionbar-1.0.0.tgz` and `SHA256SUMS` from
+Download `sessionbar-1.1.0.tgz` and `SHA256SUMS` from
 [GitHub Releases](https://github.com/Guojiacheng2017/SessionBar/releases/latest).
 From the download directory:
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-npm install --global ./sessionbar-1.0.0.tgz
+npm install --global ./sessionbar-1.1.0.tgz
 sessionbar
 ```
 
-This is a GitHub release archive, not an npm registry publication.
-The package was refreshed without changing its version. Download both files
-together again; do not verify a new archive against an older checksum file.
+This is a GitHub release archive, not an npm registry publication. Download
+the archive and its matching checksum file from the same release.
 
 ### From Source
 
@@ -120,26 +127,34 @@ checkout. Reconcile divergent history without discarding local changes.
 Landing starts the relay automatically. Select commands with Up/Down or j/k,
 then Enter. Shortcuts: `1` monitor, `2` setup, `3` status, `4` settings,
 `W` Web and `Q` quit.
+Press `:` or Tab to enter built-in commands with completion and history.
+This input does not execute arbitrary shell commands.
 
 ```sh
 sessionbar monitor    # 实时终端面板 / Live terminal dashboard
+sessionbar agents     # 按需查看子 Agent / Inspect observed sub-agents
+sessionbar providers  # Provider 检查器 / Provider inspector
 sessionbar status     # 单次状态输出 / One-shot status
 sessionbar web        # 本地网页面板 / Local Web dashboard
 sessionbar setup      # 配置 Hook 范围 / Configure hook scope
 sessionbar harnesses  # 检查 Harness / Inspect harness availability
 sessionbar prune      # 清理过期标记 / Remove stale markers
 sessionbar stop       # 显式停止服务 / Explicitly stop the relay
+sessionbar restart    # 安全重启并应用环境 / Safely restart with the current environment
 ```
 
 In Monitor, choose a project with Up/Down and Enter, then choose a session.
 Tab, brackets or `1`–`5` switch detail tabs; `a` or Backspace returns to all
-projects; `v` switches Providers; `r` refreshes, `/` filters, `w` opens Web
+projects; `v` switches Providers, `A` switches Agents; `r` refreshes, `/` filters, `w` opens Web
 and `q` exits. Without a focused project, all sessions are shown. In Web, click
 projects and sessions; scroll down for Providers.
 Use `PageUp`, `PageDown`, `Home` and `End` to reach all detail content in small terminals.
 
-Exiting TUI does not close browser tabs or stop the background relay. Use
-`sessionbar stop` explicitly. Ordinary refreshes do not reassign its port.
+Exiting TUI releases that client, not other open clients or browser tabs.
+After the last client disconnects, a five-minute reconnection grace applies;
+an explicitly started headless relay does not shut down merely for being idle.
+Use `sessionbar stop` for an explicit stop. Ordinary refreshes do not reassign
+the port. An explicit restart or a new server process can receive a new port.
 `sessionbar prune` stops a running relay before deleting stale marker files;
 it is maintenance, not a routine refresh command.
 
@@ -152,10 +167,14 @@ sessionbar setup --global  # 所有项目 / All projects
 
 Interactive apps activate SessionBar-managed hooks; one-shot status commands
 do not install them. Harnesses may need a restart to load changed configuration.
-Claude Code, Gemini CLI and Copilot use hook events. Codex also uses local logs
-and app-server metadata. Claude Desktop and WorkBuddy use local registry
-discovery, not injected Desktop hooks. OpenCode discovery and Pi extensions
-are not included in this update.
+Claude Code, Gemini CLI, Copilot and Cursor use hook events. Codex also uses
+local logs and app-server metadata. Kimi Code and ZCode use user-level native
+hooks; they do not claim project-scoped configuration. Claude Desktop and
+WorkBuddy use local artifacts, not injected Desktop hooks. WorkBuddy additionally
+reads bounded SQLite/WAL snapshots when `sqlite3` is available. DeepSeek Harness
+reads versioned checkpoints under `~/.dsh`, independently of the DeepSeek API.
+Pi lifecycle callbacks are supported; generic Pi execution graphs and OpenCode
+discovery are not claimed. See [input adapters](docs/harness-input-adapters.md).
 
 Custom reporting:
 
@@ -178,6 +197,7 @@ Default binding is **127.0.0.1** on an available port recorded in
 `~/.sessionbar/port`. The same directory contains `server.pid`, `server.log`,
 `sessions/`, `settings.json`, `provider-usage-history.json`,
 `provider-last-good.json` and `session-usage-history.json`.
+Private startup-configuration and Codex-origin caches also live here.
 
 ```sh
 SESSIONBAR_PORT=8989 sessionbar             # 可选固定端口 / Optional fixed port
@@ -205,6 +225,17 @@ providing compatible credentials and seven-day API token history. Without it,
 monitoring and official adapters still work. DeepSeek and Kimi can use
 `SESSIONBAR_DEEPSEEK_API_KEY` and `SESSIONBAR_KIMI_API_KEY`. WorkBuddy can use a
 read-only `SESSIONBAR_WORKBUDDY_BALANCE_COMMAND` returning validated balance JSON.
+Local WorkBuddy context/consumption is not treated as an account balance. Grok
+CLI billing uses its read-only ACP endpoint when installed and authenticated.
+xAI Management API queries require both `SESSIONBAR_XAI_MANAGEMENT_API_KEY` and
+`SESSIONBAR_XAI_TEAM_ID` in the startup environment; no Web credential editor
+is included. Collected values preserve their original source time.
+
+Provider HTTP uses the Relay's shared network policy: explicit proxy environment
+first, otherwise existing macOS system proxies, otherwise the normal system
+route. Loopback always connects directly; SessionBar never enables a proxy or
+changes system settings. Changed environment needs `sessionbar restart`.
+See [runtime boundaries and unsupported proxy modes](docs/relay-runtime.md).
 
 ```sh
 SESSIONBAR_PROVIDER_POLL=0 sessionbar
@@ -237,7 +268,7 @@ configuration, `node_modules/` and `dist/` in your local `.gitignore` or
 
 ## Development
 
-Source is organized under `src/cli`, `hooks`, `providers`, `server`, `sessions`,
+Source is organized under `src/agents`, `cli`, `harness`, `hooks`, `providers`, `runtime`, `server`, `sessions`,
 `shared`, `system`, `tui` and `web`. Assets are in `public/`, tests in `test/`.
 Screenshot and wordmark tools: [scripts/docs/README.md](scripts/docs/README.md).
 
@@ -245,6 +276,9 @@ Screenshot and wordmark tools: [scripts/docs/README.md](scripts/docs/README.md).
 npm run build
 npm test
 ```
+
+Tests isolate HOME, credentials and state, use simulated provider endpoints,
+and do not require a real account or send model requests.
 
 Add regression tests, keep state outside the repo, preserve unknown values and
 separate project and session identity. Experimental cost, native companion

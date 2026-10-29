@@ -8,13 +8,14 @@
 
 ## 最新动态
 
-- **2026-10-26 · v1.0.0 安装包更新：** 修复 Codex 跨会话重置时间漂移造成的
-  配额重复累计，覆盖半小时边界；已结束和静默 Session 统一保留 30 分钟。
-- **2026-10-26 · v1.0.0：** Web 与终端沿用彩虹字标和冷灰蓝主题，更新全部五张脱敏截图。
-- **2026-10-26 · 修复：** Web 断线提示、长标题、窄终端导航与详情滚动；明确标注已用配额。
-- **2026-10-26 · 加固：** 清理身份不明确的旧 Claude Hook，更新兼容依赖以修复 body-parser 压缩请求 DoS 漏洞。
-- **2026-10-07 · 修复：** 三栏排版、可取消 Setup、Provider 缓存过期与本地浏览器请求边界。
-- **2026-09-01 · 修复：** Workflow 事件仅展示，不覆盖明确的 Session 数据。
+- **2026-10-30 · v1.1.0 运行时：** 统一 Provider 网络策略，显式安全重启、归属验证与资源回收；文件变化防抖后定向刷新。
+- **2026-10-30 · Harness：** Kimi Code、ZCode、Cursor 原生上报；WorkBuddy 数据库/WAL 发现、DeepSeek Harness 快照与 Codex 身份修复。
+- **2026-10-30 · Agent 详情：** 按需查看 Codex、Claude、DeepSeek 子 Agent，分页对话及原生执行/Flow 证据。
+- **2026-10-30 · 界面与 Provider：** TUI Agents/Providers 检查器、安全内置命令框、稳定 Web 更新，明确缓存账单和用量数据。
+- **2026-10-26 · 保留 v1.0.0 修复：** Codex 配额窗口去重、30 分钟会话保留、本地浏览器安全边界与归属明确的 Hook 清理。
+
+> [!NOTE]
+> 此处保留最近五条重要变动，完整记录及安装包见 [Releases](https://github.com/Guojiacheng2017/SessionBar/releases)。
 
 > [!IMPORTANT]
 > SessionBar 目前仍在持续完善中，部分 Agent、状态识别和平台行为可能尚未完全覆盖。
@@ -37,6 +38,10 @@ Agent 进程。
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/copilot-color.svg" width="14" height="14" alt=""> GitHub Copilot CLI</kbd>
   <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude-color.svg" width="14" height="14" alt=""> Claude Desktop</kbd>
   <kbd><img src="public/provider-icons/workbuddy.svg" width="14" height="14" alt=""> WorkBuddy Desktop</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/moonshot.svg" width="14" height="14" alt=""> Kimi Code</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/cursor.svg" width="14" height="14" alt=""> Cursor</kbd>
+  <kbd><img src="https://unpkg.com/@lobehub/icons-static-svg@latest/icons/deepseek-color.svg" width="14" height="14" alt=""> DeepSeek Harness</kbd>
+  <kbd>ZCode</kbd>
 </p>
 
 <table>
@@ -53,7 +58,7 @@ Agent 进程。
   </tr>
 </table>
 
-> 截图于 2026-10-26 根据本次发布的实际 UI 生成，使用隔离的模拟项目、会话、系统指标和
+> 截图于 2026-10-30 根据本次发布的实际 UI 生成，使用隔离的模拟项目、会话、系统指标和
 > Provider 数值，不包含真实账户数据、凭据或个人路径。缺失字段仍显示为不可用；
 > 实际数据覆盖范围取决于 Harness 和 Provider Adapter。
 
@@ -67,6 +72,8 @@ Agent 进程。
 - 缓存 CPU、内存、负载、温度和网络读数。
 - Alternate-screen TUI 渲染和后台降频。
 - 每个状态目录一个 Relay，启动时动态分配端口。
+- 按需查看子 Agent 和有来源证据的执行/Flow 视图；缺失的关系不作推断。
+- 定向发现、防抖与 last-good 快照；内置命令不执行任意 Shell。
 
 ## 安装与更新
 
@@ -77,17 +84,16 @@ Monitor 需要 Bun 原生 FFI。macOS 是主要测试平台；Linux 部分支持
 ### 安装发布包
 
 从 [GitHub Releases](https://github.com/Guojiacheng2017/SessionBar/releases/latest)
-下载 `sessionbar-1.0.0.tgz` 和 `SHA256SUMS`，在下载目录运行：
+下载 `sessionbar-1.1.0.tgz` 和 `SHA256SUMS`，在下载目录运行：
 
 ```sh
 shasum -a 256 -c SHA256SUMS
-npm install --global ./sessionbar-1.0.0.tgz
+npm install --global ./sessionbar-1.1.0.tgz
 sessionbar
 ```
 
 这是 GitHub 发布包，不代表已发布到 npm Registry。
-本次保持版本号不变并刷新安装包，请重新一起下载安装包和校验文件，
-不要使用旧校验文件验证新安装包。
+安装包与对应的校验文件应从同一个 Release 一起下载。
 
 ### 从源码安装
 
@@ -100,7 +106,7 @@ npm link
 sessionbar
 ```
 
-无需全局链接时运行 `node dist/cli/cli.js`。源码安装更新：依次执行
+无需全局链接时运行 `node dist/cli/cli.js`。源码安装更新：
 在干净的 `main` 目录依次执行 `git pull --ff-only`、`npm install`、`npm run build`。
 历史分叉时先整理本地工作，不要丢弃未发布的改动。
 
@@ -108,25 +114,30 @@ sessionbar
 
 Landing 自动启动 Relay。用上下方向键或 j/k 选择，Enter 执行。
 快捷键：`1` Monitor、`2` Setup、`3` Status、`4` Settings、`W` Web、`Q` 退出。
+按 `:` 或 Tab 打开内置命令框，支持补全和历史，不会执行任意 Shell 命令。
 
 ```sh
 sessionbar monitor    # 实时终端面板 / Live terminal dashboard
+sessionbar agents     # 按需查看子 Agent / Inspect observed sub-agents
+sessionbar providers  # Provider 检查器 / Provider inspector
 sessionbar status     # 单次状态输出 / One-shot status
 sessionbar web        # 本地网页面板 / Local Web dashboard
 sessionbar setup      # 配置 Hook 范围 / Configure hook scope
 sessionbar harnesses  # 检查 Harness / Inspect harness availability
 sessionbar prune      # 清理过期标记 / Remove stale markers
 sessionbar stop       # 显式停止服务 / Explicitly stop the relay
+sessionbar restart    # 安全重启并应用环境 / Safely restart with the current environment
 ```
 
 Monitor 中先上下选择项目并 Enter，再上下选择其中的 Session。
 Tab、方括号或 `1`–`5` 切换详情，`a` 或 Backspace 返回全部项目，
-`v` 切换 Providers、`r` 刷新、`/` 过滤、`w` 打开网页、`q` 退出。
+`v` 切换 Providers、`A` 切换 Agents、`r` 刷新、`/` 过滤、`w` 打开网页、`q` 退出。
 未聚焦项目时显示全部 Session。Web 中点击项目和会话，向下滚动进入 Providers。
 详情支持 `PageUp`、`PageDown`、`Home`、`End`，窄终端也可访问底部内容。
 
-退出 TUI 不会关闭浏览器标签或停止后台 Relay；执行 `sessionbar stop` 显式停止。
-正常刷新不会重新分配运行中 Relay 的端口。
+退出 TUI 只释放当前客户端，不会关闭其他客户端或浏览器标签。最后一个客户端
+断开后有五分钟重连宽限；显式启动的无界面 Relay 不会仅因空闲而退出。
+执行 `sessionbar stop` 显式停止。正常刷新不改变端口，显式重启或新进程可能获得新端口。
 `sessionbar prune` 会先停止运行中的 Relay，再删除过期标记；属于维护操作，
 不应作为日常刷新方式。
 
@@ -138,9 +149,12 @@ sessionbar setup --global  # 所有项目 / All projects
 ```
 
 交互应用激活 SessionBar 管理的 Hook；单次 Status 不安装 Hook。Harness 可能需重启
-加载配置。Claude Code、Gemini CLI、Copilot 使用 Hook；Codex 另有本地日志和 App
-Server 元数据。Claude Desktop、WorkBuddy 使用本地 Registry 发现，不注入 Desktop
-Hook。本次不包含 OpenCode 发现和 Pi Extension。
+加载配置。Claude Code、Gemini CLI、Copilot、Cursor 使用 Hook；Codex 另有本地日志和
+App Server 元数据。Kimi Code 与 ZCode 使用用户级原生 Hook，不宣称项目级配置。
+Claude Desktop、WorkBuddy 读取本地文件，不注入 Desktop Hook；WorkBuddy 在存在
+`sqlite3` 时还读取有界 SQLite/WAL 快照。DeepSeek Harness 读取 `~/.dsh` 的版本化
+Checkpoint，与 DeepSeek API 余额独立。支持 Pi 生命周期回调，但不宣称通用 Pi 执行图
+或 OpenCode 发现。详见 [输入 Adapter](docs/harness-input-adapters.md)。
 
 自定义上报：
 
@@ -162,6 +176,7 @@ Session ID 必须标识独立会话，不能仅标识项目。可选字段包括
 默认绑定 **127.0.0.1** 的可用端口，记录于 `~/.sessionbar/port`。同目录包含
 `server.pid`、`server.log`、`sessions/`、`settings.json`、
 `provider-usage-history.json`、`provider-last-good.json`、`session-usage-history.json`。
+私有启动配置和 Codex 来源缓存同样存放于此。
 
 ```sh
 SESSIONBAR_PORT=8989 sessionbar             # 可选固定端口 / Optional fixed port
@@ -187,6 +202,14 @@ Kimi、xAI 及兼容 CC Switch 配置，覆盖取决于凭据和上游接口。
 七天 API Token 历史。没有它也能运行监控和官方 Adapter。DeepSeek、Kimi 可使用
 `SESSIONBAR_DEEPSEEK_API_KEY`、`SESSIONBAR_KIMI_API_KEY`。
 WorkBuddy 可配置只读 `SESSIONBAR_WORKBUDDY_BALANCE_COMMAND` 输出校验后的余额 JSON。
+本地 WorkBuddy Context/消耗不视为账户余额。Grok CLI 已安装并认证时，账单通过只读
+ACP 接口采集；xAI Management API 需要启动环境同时包含
+`SESSIONBAR_XAI_MANAGEMENT_API_KEY` 和 `SESSIONBAR_XAI_TEAM_ID`，本次不含 Web 凭据编辑器。
+采集值保留原始来源时间。
+
+Provider HTTP 共用 Relay 网络策略：显式代理环境优先，否则读取 macOS 现有系统代理，
+再否则沿用正常系统路由。Loopback 始终直连，不开启代理或修改系统设置。
+环境变化通过 `sessionbar restart` 应用，详见 [运行时边界与不支持的代理模式](docs/relay-runtime.md)。
 
 ```sh
 SESSIONBAR_PROVIDER_POLL=0 sessionbar
@@ -214,7 +237,7 @@ Provider 凭据不返回 UI Payload。上游接口、外部 Icon 会产生网络
 
 ## 开发
 
-源码按职责位于 `src/cli`、`hooks`、`providers`、`server`、`sessions`、
+源码按职责位于 `src/agents`、`cli`、`harness`、`hooks`、`providers`、`runtime`、`server`、`sessions`、
 `shared`、`system`、`tui`、`web`；资源在 `public/`，测试在 `test/`。
 截图与字标工具说明见 [scripts/docs/README.md](scripts/docs/README.md)。
 
@@ -222,6 +245,8 @@ Provider 凭据不返回 UI Payload。上游接口、外部 Icon 会产生网络
 npm run build
 npm test
 ```
+
+测试隔离 HOME、凭据与状态，使用模拟接口，不要求真实账户，也不发送模型请求。
 
 添加回归测试，状态放在仓库外，保留未知值，并区分项目与 Session 身份。
 实验中的费用、原生伴随应用及光学配对不在本次更新内。

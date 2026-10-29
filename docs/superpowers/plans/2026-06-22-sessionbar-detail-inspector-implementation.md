@@ -53,7 +53,7 @@ import {
 } from "../dist/sessions/sessionInspector.js";
 
 const baseSession = {
-  session_id: "codex-019ed3a2-a7ab-7a90-a6da-c1535a35afd0__atlas",
+  session_id: "codex-33333333-3333-4333-8333-333333333333__atlas",
   session_type: "Codex",
   status: "working",
   task_name: "running: npm run build",
@@ -67,7 +67,7 @@ const baseSession = {
 };
 
 test("session handles are compact and stable for sidebar use", () => {
-  assert.equal(sessionHandle(baseSession, 18), "019ed3a2-a7...afd0");
+  assert.equal(sessionHandle(baseSession, 18), "33333333-33...3333");
   assert.equal(sessionHandle({ ...baseSession, session_id: "claude-demo-abc123__atlas" }, 12), "demo-abc123");
 });
 

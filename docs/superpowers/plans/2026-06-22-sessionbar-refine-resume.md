@@ -15,7 +15,7 @@ Completed in this pass:
   - removed `PRIORITY RAIL`
 - Session sidebar formatter was added:
   - `buildSessionSidebarLine()`
-  - compact line shape like `> WORK 019ed3a2-a7...afd0 37s`
+  - compact line shape like `> WORK 33333333-33...3333 37s`
   - avoids repeated Project/Agent/Status table columns
 - OpenTUI session list was wired to the compact sidebar line.
 - Tests were green at 10 passing tests after those changes.
