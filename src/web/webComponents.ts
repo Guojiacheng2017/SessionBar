@@ -4,11 +4,6 @@ import { providerDisplayLabel, providerUsageTrendForMode } from "../providers/pr
 import { compactNumber } from "../tui/displayUtils.js";
 
 export const UI = {
-  app: "flex flex-col h-screen px-6 py-5 gap-3.5 max-w-[1180px] mx-auto",
-  topbar: "flex items-center justify-between gap-4 shrink-0",
-  brand: "text-[17px] font-bold tracking-[-0.3px] text-ink-strong",
-  connection: "mono text-[12px] text-green bg-green/10 border border-green/20 rounded-full px-2.5 py-1",
-  connectionOffline: "mono text-[12px] text-muted bg-muted/10 border border-muted/15 rounded-full px-2.5 py-1",
   statusSummary: "flex items-center gap-x-4 gap-y-2 shrink-0 min-h-7 flex-wrap text-[13px] text-muted",
   statusItem: "inline-flex items-center gap-2 whitespace-nowrap",
   statusValue: "text-[14px] text-ink-strong font-semibold tabular-nums",
@@ -43,7 +38,6 @@ export interface ProviderTableState {
   usageMode?: ProviderUsageMode;
 }
 
-
 // LobeHub icon CDN — light variant for dark backgrounds, dark variant for light.
 // https://lobehub.com/icons/<name>
 const ICON_CDN = "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@latest";
@@ -55,10 +49,13 @@ const ICONS: Record<string, string> = {
   "Gemini CLI": "gemini",
   Copilot: "copilot",
   "DeepSeek CLI": "deepseek",
+  "DeepSeek Harness": "deepseek",
   "Kimi CLI": "moonshot",
+  "Kimi Code": "moonshot",
   "Qwen CLI": "qwen",
   Windsurf: "windsurf",
   Cursor: "cursor",
+  Grok: "grok",
   Pi: "pi",
   "Pi Agent": "pi",
   Workbuddy: "workbuddy",
@@ -81,6 +78,10 @@ const PROVIDER_ICON_TYPES: Record<string, string> = {
   deepseek: "DeepSeek CLI",
   kimi: "Kimi CLI",
   workbuddy: "WorkBuddy Desktop",
+  cursor: "Cursor",
+  grok: "Grok",
+  xai: "Grok",
+  "three-in-one": "Grok",
 };
 
 export function cx(...parts: Array<string | false | null | undefined>): string {
@@ -448,6 +449,7 @@ function formatProviderNumber(value: number, maximumFractionDigits = 5): string 
 }
 
 function providerLevelLabel(row: PlanRow): string {
+  if (row.collectionError) return row.collectionError;
   if (row.stale) return "Stale";
   if (row.form === "api") return "—";
   const level = row.level === "green" ? "Healthy" : row.level === "yellow" ? "Watch" : "Critical";
@@ -485,7 +487,13 @@ function providerUsageValue(value: number, unit?: string): string {
 }
 
 function providerUsageMarkup(row: PlanRow, mode: ProviderUsageMode): string {
-  const trend = providerUsageTrendForMode(row, mode);
+  const fullTrend = providerUsageTrendForMode(row, mode);
+  const trend = fullTrend?.kind === "line" ? fullTrend : fullTrend && {
+    ...fullTrend,
+    days: Math.min(fullTrend.days, 7),
+    points: fullTrend.points.slice(-7),
+    labels: fullTrend.labels?.slice(-7),
+  };
   if (!trend || trend.points.every(point => point === null)) {
     return `<span class="provider-usage provider-usage-empty" role="cell" aria-label="Usage history unavailable"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>`;
   }
@@ -497,11 +505,13 @@ function providerUsageMarkup(row: PlanRow, mode: ProviderUsageMode): string {
     const max = Math.max(...values);
     const min = Math.min(...values);
     const range = Math.max(1, max - min);
-    const denominator = Math.max(1, trend.points.length - 1);
+    const firstIndex = trend.points.findIndex(point => point !== null && Number.isFinite(point));
+    const lastIndex = trend.points.length - 1 - [...trend.points].reverse().findIndex(point => point !== null && Number.isFinite(point));
+    const denominator = Math.max(1, lastIndex - firstIndex);
     const points = trend.points.flatMap((point, index) => point === null ? [] : [
-      `${(index / denominator * 100).toFixed(2)},${(18 - ((point - min) / range) * 16).toFixed(2)}`,
+      `${((index - firstIndex) / denominator * 100).toFixed(2)},${(18 - ((point - min) / range) * 16).toFixed(2)}`,
     ]).join(" ");
-    return `<span class="provider-usage provider-usage-line" role="cell" aria-label="${trend.days}-day usage trend"><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="${points}" /></svg></span>`;
+    return `<span class="provider-usage provider-usage-line" role="cell" aria-label="${trend.days}-day usage trend"><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><line class="provider-usage-track" x1="0" y1="18" x2="100" y2="18" /><polyline points="${points}" /></svg></span>`;
   }
   const max = Math.max(1, ...values);
   const bars = trend.points.map((point, index) => {
@@ -616,7 +626,7 @@ export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTab
         <span class="provider-name"><span class="provider-icon">${iconMarkup(providerIconType(row), state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${providerMeta ? `<small>${escapeHtml(providerMeta)}</small>` : ""}</span></span>
         <span class="provider-left provider-left-${tone}">${escapeHtml(providerLeftText(row))}</span>
       </header>
-      <div class="provider-gallery-usage"><span>Last 7 days</span>${providerUsageMarkup(row, state.usageMode ?? "token")}</div>
+      <div class="provider-gallery-usage"><span>${providerUsageTrendForMode(row, state.usageMode ?? "token")?.kind === "line" ? "Monthly cumulative" : "Last 7 days"}</span>${providerUsageMarkup(row, state.usageMode ?? "token")}</div>
       <dl class="provider-gallery-facts">
         <div><dt>Level</dt><dd><span class="provider-level provider-level-${tone}" aria-label="${escapeHtml(providerLevelLabel(row))}">${providerLevelMarkup(row)}</span></dd></div>
         ${resetPresent ? `<div><dt>Reset</dt><dd>${escapeHtml(providerResetText(row.autoResetIn!))}</dd></div>` : ""}

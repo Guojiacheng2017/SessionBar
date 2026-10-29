@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { detectHarnessAvailability, MAINSTREAM_HARNESSES, isSessionbarCommandFor, dedupeSessionbarHooks } from "../dist/hooks/hookManager.js";
-import { landingActions, parseLandingKeys } from "../dist/cli/landingMenu.js";
+import { createRainbow, landingActions, logoLines, parseLandingKeys } from "../dist/cli/landingMenu.js";
 
 const cliSource = readFileSync(new URL("../src/cli/cli.ts", import.meta.url), "utf8");
 
@@ -39,12 +39,50 @@ test("service readiness does not register hooks as a side effect", () => {
   assert.doesNotMatch(serviceBody, /injectHooksOnServerReady|setupClaudeHooks/);
 });
 
+test("start replaces a healthy relay when its build id differs", () => {
+  assert.match(cliSource, /health\.build_id/);
+  assert.match(cliSource, /currentBuildId/);
+  assert.match(cliSource, /build.*restart|restart.*build/i);
+});
+
+test("automatic build replacement preserves installed hooks", () => {
+  assert.doesNotMatch(functionBody("restartServerProcess"), /teardownHooks/);
+  const serverSource = readFileSync(new URL("../src/server/server.ts", import.meta.url), "utf8");
+  const cleanup = serverSource.slice(serverSource.indexOf("function cleanup"), serverSource.indexOf("const sessions"));
+  assert.doesNotMatch(cleanup, /remove.*Hooks/);
+});
+
 test("a live relay gets bounded health retries before it can be restarted", () => {
   const serviceBody = functionBody("ensureServerRunning");
   const retry = serviceBody.indexOf("if (await waitForReady(4)) return true;");
-  const restart = serviceBody.indexOf("stopServer(true)");
+  const restart = serviceBody.indexOf("await restartServerProcess(quiet)");
   assert.notEqual(retry, -1);
   assert.ok(restart > retry, "bounded health retry must happen before restart");
+});
+
+test("explicit restart waits for the previous relay before starting with the current environment", () => {
+  const restartCase = cliSource.slice(cliSource.indexOf('case "restart":'), cliSource.indexOf('case "prune":'));
+  assert.match(restartCase, /await restartServerProcess\(\).*await startServer\(\).*await waitForReady\(\)/);
+  assert.doesNotMatch(restartCase, /teardownHooks/);
+  const startBody = functionBody("startServer");
+  assert.match(startBody, /\.\.\.process\.env/);
+  assert.match(startBody, /await waitForChildSpawn\(proc\)/);
+  assert.match(cliSource, /SESSIONBAR_NODE_EXEC_PATH: process\.execPath/);
+});
+
+test("attached clients report startup environment differences without restarting the relay", () => {
+  const readyBody = functionBody("waitForReady");
+  assert.match(readyBody, /readRelayConfigMatch/);
+  assert.match(readyBody, /warnedStartupEnvironment/);
+  assert.match(readyBody, /use sessionbar restart/);
+  assert.doesNotMatch(readyBody, /restartServerProcess/);
+});
+
+test("health deadlines do not apply to the long-lived SSE request", () => {
+  assert.match(functionBody("fetchHealth"), /fetchRelayHealth/);
+  assert.match(functionBody("waitForReady"), /fetchRelayHealth/);
+  assert.doesNotMatch(functionBody("relayFetch"), /timeout|AbortController|setTimeout/);
+  assert.match(cliSource, /sessions\/stream`, \{ signal \}/);
 });
 
 test("an active TUI restarts the relay once after a connection failure", () => {
@@ -69,28 +107,18 @@ test("interactive hook registration covers every supported harness", () => {
   const start = hookSource.indexOf("export function injectHooksOnServerReady");
   const end = hookSource.indexOf("export async function setupHooks", start);
   const body = hookSource.slice(start, end);
-  for (const setup of ["setupClaudeHooks", "setupCodexHooks", "setupGeminiHooks", "setupCopilotHooks", "setupCodeBuddyHooks"]) {
+  for (const setup of ["setupClaudeHooks", "setupCodexHooks", "setupGeminiHooks", "setupCopilotHooks", "setupCursorHooks", "setupCodeBuddyHooks", "setupPiHooks", "setupKimiCodeHooks", "setupZCodeHooks"]) {
     assert.match(body, new RegExp(`${setup}\\(global, reportPath\\)`));
   }
 });
 
-test("harness availability covers local and remote mainstream harnesses", () => {
-  assert.deepEqual(MAINSTREAM_HARNESSES.map(harness => harness.id), ["claude", "codex", "gemini", "copilot", "codebuddy-cli", "workbuddy-desktop"]);
-  for (const scope of ["local", "remote"]) {
-    const rows = detectHarnessAvailability(scope);
-    assert.equal(rows.length, MAINSTREAM_HARNESSES.length);
-    assert.deepEqual(rows.map(row => row.scope), Array(rows.length).fill(scope));
-    assert.ok(rows.every(row => row.supported === true));
-    assert.ok(rows.every(row => typeof row.available === "boolean"));
-    assert.ok(rows.every(row => typeof row.configurable === "boolean"));
-  }
-  assert.ok(detectHarnessAvailability("local").every(row => row.kind === "installed"));
-  assert.ok(detectHarnessAvailability("local").every(row => row.configurable === false));
-  assert.ok(detectHarnessAvailability("remote").every(row => row.kind === "cloud/self-hosted"));
-  assert.ok(detectHarnessAvailability("remote").every(row => row.available === false));
-  assert.ok(detectHarnessAvailability("remote").every(row => row.configurable === true));
-  assert.ok(detectHarnessAvailability("remote").every(row => row.configPath === undefined));
-  assert.ok(MAINSTREAM_HARNESSES.every(harness => harness.remoteConfigKeys.some(key => key.includes("REMOTE_URL"))));
+test("harness availability covers every supported local harness", () => {
+  assert.deepEqual(MAINSTREAM_HARNESSES.map(harness => harness.id), ["kimi-code", "zcode", "dsh", "claude", "codex", "gemini", "copilot", "cursor", "pi", "codebuddy-cli", "workbuddy-desktop"]);
+  const rows = detectHarnessAvailability();
+  assert.equal(rows.length, MAINSTREAM_HARNESSES.length);
+  assert.ok(rows.every(row => row.supported === true));
+  assert.ok(rows.every(row => typeof row.available === "boolean"));
+  assert.ok(rows.every(row => row.kind === "installed"));
 });
 
 test("CodeBuddy hook matching handles quoted report paths", () => {
@@ -108,7 +136,7 @@ test("duplicate CodeBuddy hook entries are reduced to one", () => {
 });
 
 test("WorkBuddy Desktop availability is distinct from CodeBuddy CLI", () => {
-  const rows = detectHarnessAvailability("local");
+  const rows = detectHarnessAvailability();
   const cli = rows.find(row => row.id === "codebuddy-cli");
   const desktop = rows.find(row => row.id === "workbuddy-desktop");
   assert.ok(cli && desktop);
@@ -118,8 +146,7 @@ test("WorkBuddy Desktop availability is distinct from CodeBuddy CLI", () => {
 
 test("harness availability command is read-only", () => {
   assert.match(cliSource, /case "harnesses":/);
-  assert.match(cliSource, /detectHarnessAvailability\("local"\)/);
-  assert.match(cliSource, /detectHarnessAvailability\("remote"\)/);
+  assert.match(cliSource, /detectHarnessAvailability\(\)/);
   const harnessCase = cliSource.slice(cliSource.indexOf('case "harnesses":'), cliSource.indexOf('case "status":'));
   assert.doesNotMatch(harnessCase, /ensureServerRunning|startServer|injectHooksOnServerReady|setupHooks/);
 });
@@ -131,7 +158,7 @@ test("status and start paths do not register hooks", () => {
   assert.doesNotMatch(startCase, /injectHooksOnServerReady|setupClaudeHooks/);
 });
 
-test("landing menu exit does not stop the background relay", () => {
+test("landing menu exit releases its app client without immediately killing the relay", () => {
   // runLandingMenu lives in landingMenu.ts since Phase 6 extraction
   const landingSource = readFileSync(new URL("../src/cli/landingMenu.ts", import.meta.url), "utf8");
   const decl = new RegExp(`async function runLandingMenu\\s*\\([^)]*\\)`);
@@ -148,8 +175,34 @@ test("landing menu exit does not stop the background relay", () => {
       if (depth === 0) { menuBody = landingSource.slice(brace + 1, i); break; }
     }
   }
-  assert.doesNotMatch(menuBody, /stopServer\(true\)/);
   assert.match(menuBody, /teardownHooks\(true, true\)/);
+  const releaseStart = cliSource.indexOf("function releaseAppHooks");
+  const releaseEnd = cliSource.indexOf("function isBunRuntime", releaseStart);
+  const releaseBody = cliSource.slice(releaseStart, releaseEnd);
+  assert.match(releaseBody, /releaseAppClient/);
+  assert.match(releaseBody, /lifecycle\/unobserved/);
+  assert.doesNotMatch(releaseBody, /stopServer\(true\)/);
+});
+
+test("monitor always releases its app client when rendering fails", () => {
+  const mainSource = cliSource.slice(cliSource.indexOf("async function main"));
+  const monitorCase = mainSource.slice(mainSource.indexOf('case "watch":'), mainSource.indexOf("default:"));
+  assert.match(monitorCase, /try\s*{\s*await watch\(cmd === "providers" \|\| cmd === "agents" \? cmd : monitorViewArg\(\)\)/);
+  assert.match(monitorCase, /finally\s*{\s*await releaseAppHooks\(true, true\)/);
+});
+
+test("the final CLI client requests a grace period instead of stopping the relay", () => {
+  const releaseBody = functionBody("releaseAppHooks");
+  assert.match(releaseBody, /releaseAppClient\(HOME\)/);
+  assert.match(releaseBody, /relayFetch\(`\$\{apiBase\(\)\}\/lifecycle\/unobserved`, \{ method: "POST" \}\)/);
+  assert.doesNotMatch(releaseBody, /stopServer/);
+});
+
+test("landing renders the current dynamic relay port", () => {
+  const landingSource = readFileSync(new URL("../src/cli/landingMenu.ts", import.meta.url), "utf8");
+  assert.match(landingSource, /getPort:\s*\(\)\s*=>\s*number/);
+  assert.match(landingSource, /const port = getPort\(\)/);
+  assert.match(cliSource, /getPort:\s*refreshRuntimePort/);
 });
 
 test("landing menu does not poll sessions while waiting for input", () => {
@@ -171,6 +224,18 @@ test("landing web status is informational with a direct w shortcut", () => {
   assert.match(landingSource, /launchWeb/);
   assert.match(landingSource, /W web/);
   assert.match(cliSource, /launchWeb: openWebDashboard/);
+});
+
+test("landing renders the script brand while keeping narrow NO_COLOR output safe", () => {
+  const large = logoLines(76, createRainbow(false), "");
+  assert.ok(large.length >= 8 && large.length <= 12);
+  assert.equal(large.join("\n").includes("\u001b["), false);
+  assert.match(large.join("\n"), /AI CLI Session Monitor/);
+
+  const narrow = logoLines(64, createRainbow(false), "");
+  assert.ok(narrow.length <= 4);
+  assert.equal(narrow.join("\n").includes("\u001b["), false);
+  assert.match(narrow.join("\n"), /SessionBar/);
 });
 
 test("opening the web dashboard reuses the current relay", () => {
@@ -215,7 +280,7 @@ test("setup hook commands pass canonical hook event labels", () => {
 
 test("monitor fetches structurally valid system state from the independent endpoint", () => {
   const fetchSystemBody = functionBody("fetchSystem");
-  assert.match(fetchSystemBody, /fetch\(`\$\{apiBase\(\)\}\/system\/live`\)/);
+  assert.match(fetchSystemBody, /relayFetch\(`\$\{apiBase\(\)\}\/system\/live`\)/);
   assert.match(fetchSystemBody, /data\.system/);
   assert.match(fetchSystemBody, /isSystemEfficiencySnapshot/);
   assert.match(fetchSystemBody, /throw new Error\("invalid system response"\)/);

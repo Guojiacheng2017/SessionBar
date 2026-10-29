@@ -9,21 +9,16 @@
     <link rel="stylesheet" href="./tailwind.css">
     <link rel="stylesheet" href="./web.css">
 </head>
-<body class="bg-bg text-ink text-[14px] leading-relaxed overflow-x-hidden min-h-screen">
+<body class="app-body">
 
-<div id="app" class="flex flex-col min-h-screen px-6 py-5 mx-auto">
+<div id="app" class="app-shell app-shell--paged">
 
 <section class="dashboard-page sessions-page" aria-label="Sessions dashboard">
 
     <div id="connection-banner" class="connection-banner" role="status" aria-live="polite" hidden></div>
 
     <!-- Header -->
-    <div class="app-header">
-        <a class="app-brand" href="./" aria-label="SessionBar dashboard"><img src="./sessionbar-wordmark.svg" alt="SessionBar"></a>
-        <div class="app-header-actions">
-            <span id="port" class="connection-pill">offline</span>
-        </div>
-    </div>
+    <header class="app-header" data-app-header></header>
 
     <!-- Status summary -->
     <div id="counts" aria-live="polite" aria-atomic="true"></div>

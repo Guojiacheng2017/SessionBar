@@ -13,7 +13,7 @@ import {
   type TextChunk,
   type TextTableContent,
 } from "@opentui/core";
-import type { PlanRow } from "../providers/planTypes.js";
+import type { PlanRow, ProviderUsageMode } from "../providers/planTypes.js";
 import { providerDisplayLabel } from "../providers/providerUsageMetrics.js";
 import type { SessionPayload, SystemEfficiencySnapshot } from "../shared/types.js";
 import {
@@ -40,6 +40,13 @@ import {
   groupByProject as groupSessionsByProject,
 } from "../shared/projectUtils.js";
 import { TERMINAL_COLORS } from "./terminalTheme.js";
+import { AgentClient, type AgentSelection } from "../web/agentClient.js";
+import type { Snapshot } from "../shared/agentContract.js";
+import { AGENT_DETAIL_TABS, agentDetailText, agentList, type AgentDetailTab } from "./agentInspector.js";
+import { PROVIDER_USAGE_MODES, providerDetailText } from "./providerInspector.js";
+import { terminalText } from "./terminalText.js";
+
+export type MonitorView = "sessions" | "providers" | "agents";
 
 type Session = SessionPayload;
 export interface SessionFetchResult {
@@ -66,6 +73,8 @@ export interface OpenTuiMonitorOptions {
   toggleSSE?: () => boolean;
   isSSE?: () => boolean;
   closeTransport?: () => void;
+  initialView?: MonitorView;
+  agentRequest?: typeof fetch;
 }
 
 export function monitorPollDelay(focused: boolean, foregroundMs: number, backgroundMs = 10_000): number {
@@ -94,9 +103,15 @@ interface MonitorState {
   unreadSessionIds: Set<string>;
   unreadInitialized: boolean;
   sseMode: boolean;
-  view: "sessions" | "providers";
+  view: MonitorView;
   providers: PlanRow[];
   providersError?: string;
+  providerIndex?: number;
+  providerUsageMode?: ProviderUsageMode;
+  agentSnapshot?: Snapshot | null;
+  agentSelection?: AgentSelection | null;
+  agentCursorId?: string | null;
+  agentTab?: AgentDetailTab;
 }
 
 interface ProjectRow {
@@ -157,7 +172,7 @@ export interface MonitorWorkspaceLayout {
 }
 
 export interface MonitorVisibleModel {
-  view: "sessions" | "providers";
+  view: MonitorView;
   width: number;
   height: number;
   title: string;
@@ -179,7 +194,7 @@ export interface MonitorVisibleModel {
   detailsScrollKey: string;
   footer: string;
   footerError: boolean;
-  focusRegion: "projects" | "sessions" | "details" | "providers";
+  focusRegion: "projects" | "sessions" | "details" | "providers" | "agents";
 }
 
 const PALETTE = {
@@ -664,6 +679,7 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
 export function providerSummaryLine(row: PlanRow): string {
   const form = providerFormLabel(row);
   const label = providerDisplayLabel(row);
+  if (row.collectionError) return `${label} ${form} | ${row.collectionError}`;
   if (row.stale) return `${label} ${form} | STALE`;
   if (row.form === "api") {
     const unit = row.unit ? ` ${row.unit}` : "";
@@ -715,20 +731,22 @@ function levelColor(level: string): string {
   return PALETTE.green;
 }
 
-export function providerTableContent(rows: readonly PlanRow[], renderer: CliRenderer, error?: string): TextTableContent {
+export function providerTableContent(rows: readonly PlanRow[], renderer: CliRenderer, error?: string, selectedIndex?: number): TextTableContent {
   if (error) return [[cell(error, PALETTE.red)]];
   if (rows.length === 0) return [[cell("No quota data", PALETTE.muted)]];
   const compact = renderer.width < 100;
-  const content: TextTableContent = compact
-    ? [[header("Provider"), header("Quota / Usage"), header("Reset")]]
-    : [[header("Provider"), header("Quota / Usage"), header("Level"), header("Reset"), header("Card")]];
-  const visible = rows;
+  const terse = selectedIndex !== undefined && renderer.width < 54;
+  const usageHeader = selectedIndex === undefined ? "Left" : "Usage";
+  const content: TextTableContent = terse ? [[header("Provider"), header(usageHeader)]] : compact
+    ? [[header("Provider"), header(usageHeader), header("Reset")]]
+    : [[header("Provider"), header(usageHeader), header("Level"), header("Reset"), header("Card")]];
+  const visible = selectedIndex === undefined ? rows : visibleWindow(rows, selectedIndex, Math.max(2, renderer.height - 12));
   for (const row of visible) {
     const rowFg = row.form === "api" ? PALETTE.cyan : levelColor(row.level);
-    const providerCell = cell(providerDisplayLabel(row), PALETTE.fg);
+    const providerCell = cell(`${selectedIndex !== undefined ? (rows.indexOf(row) === selectedIndex ? "> " : "  ") : ""}${providerDisplayLabel(row)}`, PALETTE.fg);
     const leftCell = cell(providerLeftText(row), rowFg);
     const resetCell = cell(row.autoResetIn || "", PALETTE.muted);
-    content.push(compact
+    content.push(terse ? [providerCell, leftCell] : compact
       ? [providerCell, leftCell, resetCell]
       : [
           providerCell,
@@ -1117,21 +1135,26 @@ export function fitPanelTitle(title: string, panelWidth: number): string {
   return truncatePlain(title, Math.max(4, Math.floor(panelWidth) - 4));
 }
 
-function shortcutFooter(width: number, scope: "projects" | "sessions" | "details" | "providers"): string {
+function shortcutFooter(width: number, scope: "projects" | "sessions" | "details" | "providers" | "agents"): string {
   const variants: Record<typeof scope, string[]> = {
     providers: [
-      "v/P sessions · r refresh · / filter · w web · q quit",
-      "v sessions · r refresh · w web · q quit",
-      "v sessions · r refresh · q quit",
+      "↑↓ provider · 1 % 2 tokens 3 cash · Tab mode · A agents · v sessions · r refresh · q quit",
+      "↑↓ · Tab mode · A agents · v sessions · r refresh · q quit",
+      "↑↓ · Tab mode · v back · q quit",
+    ],
+    agents: [
+      "↑↓ agent · 1-3/Tab scope · PgUp/Dn scroll · n more · r refresh · Esc sessions · q quit",
+      "↑↓ · Tab scope · n more · r refresh · Esc back · q quit",
+      "↑↓ · Tab scope · n more · Esc back",
     ],
     projects: [
-      "↑↓ project · Enter open · r refresh · v providers · / filter · w web · q quit",
-      "↑↓ project · ↵ open · v providers · / filter · q quit",
+      "↑↓ project · Enter open · A agents · v providers · / filter · w web · q quit",
+      "↑↓ project · ↵ open · A agents · v providers · / filter · q quit",
       "↑↓ move · ↵ open · v view · q quit",
       "↑↓ · ↵ open · q",
     ],
     sessions: [
-      "↑↓ session · PgUp/PgDn details · Enter focus · a/Backspace projects · r refresh · v providers · / filter · w web · q quit",
+      "↑↓ session · A agents · PgUp/PgDn details · Enter focus · Esc projects · r refresh · v providers · / filter · w web · q quit",
       "↑↓ session · PgUp/PgDn details · Esc projects · q quit",
       "↑↓ · PgUp/PgDn details · Esc back",
       "↑↓ · PgUp/Dn · Esc",
@@ -1357,6 +1380,20 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
   };
 }
 
+function providerRowsForState(state: Readonly<MonitorState>): PlanRow[] {
+  const query = state.filterText.toLowerCase();
+  return state.providers.filter(row => !query || `${row.provider} ${row.label} ${row.form}`.toLowerCase().includes(query));
+}
+
+function agentScopeForState(state: Readonly<MonitorState>): string[] {
+  return state.detailId ? [state.detailId]
+    : state.projectFocusKey ? selectedProjectSessions(state).map(session => session.session_id) : [];
+}
+
+function agentsForState(state: Readonly<MonitorState>) {
+  return agentList(state.agentSnapshot, agentScopeForState(state), state.filterText);
+}
+
 export function monitorVisibleModel(
   state: Readonly<MonitorState>,
   renderer: CliRenderer,
@@ -1365,11 +1402,47 @@ export function monitorVisibleModel(
 ): MonitorVisibleModel {
   const port = displayPort(opts);
   const layout = monitorBodyLayout(renderer.width);
+  if (state.view === "agents") {
+    const rows = agentsForState(state);
+    const selectedId = state.agentCursorId ?? state.agentSelection?.agent.agent_id ?? rows[0]?.agent_id;
+    const selectedIndex = Math.max(0, rows.findIndex(agent => agent.agent_id === selectedId));
+    const selected = state.agentSelection && rows.some(agent => agent.agent_id === state.agentSelection!.agent.agent_id) ? state.agentSelection : null;
+    const narrow = renderer.width < 90;
+    const listWidth = narrow ? layout.bodyWidth : layout.sidebarPanelWidth;
+    const detailWidth = narrow ? layout.bodyWidth : layout.detailPanelWidth;
+    const tab = state.agentTab ?? "overview";
+    const visible = visibleWindow(rows, selectedIndex, narrow ? 4 : Math.max(2, renderer.height - 10));
+    const content: TextTableContent = rows.length ? [[header("Agent"), header("Status"), header("Provider")], ...visible.map(agent => [
+      cell(`${agent.agent_id === rows[selectedIndex]?.agent_id ? "> " : "  "}${terminalText(agent.name)}`, PALETTE.fg),
+      cell(["completed", "cancelled", "failed"].includes(agent.lifecycle) ? agent.lifecycle : agent.status, statusColor(agent.status)),
+      cell(terminalText(agent.provider_id), PALETTE.muted),
+    ])] : [];
+    const scope = new Set(agentScopeForState(state));
+    const coverage = [...new Set(state.agentSnapshot?.sessions.filter(session => !scope.size || scope.has(session.session_id)).map(session => session.agents_coverage) ?? [])].join(" / ");
+    return {
+      view: "agents", width: renderer.width, height: renderer.height,
+      title: "SessionBar [Agents]", online: `online :${port || ""}`,
+      activity: state.agentSnapshot ? `${rows.length} observed sub-agents${coverage ? `  ${coverage}` : ""}` : "",
+      projectsVisible: false, projectsTitle: "", projectsContent: [],
+      sessionsWidth: listWidth, sessionsTitle: fitPanelTitle("Agents", listWidth), sessionsVisible: true, sessionsContent: content,
+      providersVisible: false, providersContent: [], detailsVisible: true, detailsWidth: detailWidth,
+      detailsTitle: fitPanelTitle(`Agent / ${tab[0]!.toUpperCase() + tab.slice(1)}`, detailWidth),
+      detailsContent: agentDetailText(selected, tab, Math.max(1, detailWidth - 4)),
+      detailsScrollKey: `agent:${selected?.agent.agent_id ?? ""}:${tab}`,
+      footer: state.filterActive ? `/${state.filterText}_  Esc clear  Enter accept` : shortcutFooter(renderer.width, "agents"),
+      footerError: false, focusRegion: "agents",
+    };
+  }
   if (state.view === "providers") {
-    const providers = state.providers || [];
+    const providers = providerRowsForState(state);
     const apiCount = providers.filter(row => row.form === "api").length;
     const subCount = providers.length - apiCount;
     const error = state.providersError;
+    const narrow = renderer.width < 90;
+    const listWidth = narrow ? layout.bodyWidth : layout.sidebarPanelWidth;
+    const detailWidth = narrow ? layout.bodyWidth : layout.detailPanelWidth;
+    const selectedIndex = Math.max(0, Math.min(state.providerIndex ?? 0, providers.length - 1));
+    const usageMode = state.providerUsageMode ?? "percentage";
     return {
       view: state.view,
       width: renderer.width,
@@ -1386,18 +1459,18 @@ export function monitorVisibleModel(
       projectsVisible: false,
       projectsTitle: "",
       projectsContent: [],
-      sessionsWidth: layout.bodyWidth,
-      sessionsTitle: fitPanelTitle(`Providers (${providers.length})`, layout.bodyWidth),
+      sessionsWidth: listWidth,
+      sessionsTitle: fitPanelTitle(`Providers (${providers.length})`, listWidth),
       sessionsVisible: false,
       sessionsContent: [],
       providersVisible: true,
-      providersContent: providerTableContent(providers, renderer, error),
-      detailsVisible: false,
-      detailsWidth: layout.detailPanelWidth,
-      detailsTitle: "",
-      detailsContent: "",
-      detailsScrollKey: "providers",
-      footer: state.errorMsg ? `! ${state.errorMsg}` : shortcutFooter(renderer.width, "providers"),
+      providersContent: providerTableContent(providers, { width: listWidth, height: narrow ? 15 : renderer.height } as CliRenderer, error, selectedIndex),
+      detailsVisible: true,
+      detailsWidth: detailWidth,
+      detailsTitle: fitPanelTitle(`Usage / ${usageMode === "percentage" ? "%" : usageMode === "token" ? "Tokens" : "Cash"}`, detailWidth),
+      detailsContent: providerDetailText(providers[selectedIndex], usageMode, Math.max(1, detailWidth - 4)),
+      detailsScrollKey: `providers:${providers[selectedIndex]?.provider}:${selectedIndex}:${usageMode}`,
+      footer: state.errorMsg ? `! ${state.errorMsg}` : state.filterActive ? `/${state.filterText}_  Esc clear  Enter accept` : shortcutFooter(renderer.width, "providers"),
       footerError: Boolean(state.errorMsg),
       focusRegion: "providers",
     };
@@ -1481,6 +1554,9 @@ export function monitorVisibleModel(
 }
 
 function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
+  const compactSecondary = model.view !== "sessions" && model.width < 90;
+  refs.sessionsBox.paddingY = compactSecondary ? 0 : 1;
+  refs.detailsBox.paddingY = compactSecondary ? 0 : 1;
   refs.title.content = brandHeaderContent(model.title);
   refs.online.content = model.online;
   refs.activity.content = model.activity;
@@ -1501,15 +1577,18 @@ function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
     refs.detailsBox.width = workspace.detailsWidth;
     refs.detailsBox.height = workspace.detailsHeight;
   } else {
-    refs.body.flexDirection = "row";
-    refs.sessionsBox.width = "100%";
-    refs.sessionsBox.height = "100%";
-    refs.detailsBox.width = model.detailsWidth;
-    refs.detailsBox.height = "100%";
+    const narrow = model.width < 90;
+    refs.body.flexDirection = narrow ? "column" : "row";
+    refs.sessionsBox.width = narrow ? "100%" : model.sessionsWidth;
+    refs.sessionsBox.height = narrow ? Math.max(4, Math.min(6, model.height - 14)) : "100%";
+    refs.sessionsBox.flexGrow = 0;
+    refs.detailsBox.width = narrow ? "100%" : model.detailsWidth;
+    refs.detailsBox.height = narrow ? "auto" : "100%";
+    refs.detailsBox.flexGrow = 1;
   }
   refs.sessionsBox.title = model.sessionsTitle;
-  refs.sessionsBox.borderColor = model.focusRegion === "sessions" || model.focusRegion === "providers" ? color(PALETTE.accent) : color(PALETTE.border);
-  refs.sessionsBox.titleColor = model.focusRegion === "sessions" || model.focusRegion === "providers" ? color(PALETTE.accent) : color(PALETTE.fg);
+  refs.sessionsBox.borderColor = model.focusRegion === "sessions" || model.focusRegion === "providers" || model.focusRegion === "agents" ? color(PALETTE.accent) : color(PALETTE.border);
+  refs.sessionsBox.titleColor = model.focusRegion === "sessions" || model.focusRegion === "providers" || model.focusRegion === "agents" ? color(PALETTE.accent) : color(PALETTE.fg);
   refs.sessionsTable.visible = model.sessionsVisible;
   refs.sessionsTable.content = model.sessionsContent;
   refs.providersTable.visible = model.providersVisible;
@@ -1565,9 +1644,9 @@ export function nextDetailTabFromMonitorKey(current: DetailTab, key: MonitorKeyL
 }
 
 export function nextViewFromMonitorKey(
-  current: "sessions" | "providers",
+  current: MonitorView,
   key: MonitorKeyLike,
-): "sessions" | "providers" | null {
+): MonitorView | null {
   const normalized = {
     ...key,
     raw: key.raw || "",
@@ -1577,6 +1656,7 @@ export function nextViewFromMonitorKey(
     option: Boolean(key.option),
   } as KeyEvent;
   const char = printableChar(normalized);
+  if (char === "A") return current === "agents" ? "sessions" : "agents";
   if (char === "v" || char === "P") return current === "providers" ? "sessions" : "providers";
   return null;
 }
@@ -1696,7 +1776,7 @@ export function nextVisibleFreshnessDelay(
   now = Date.now(),
   _opts?: RuntimeDisplayOptions,
 ): number | undefined {
-  if (state.view === "providers") return undefined;
+  if (state.view === "providers" || state.view === "agents") return undefined;
   let deadline = visibleSessionAgeDeadline(state, renderer, now);
   deadline = earlierDeadline(deadline, activeDetailDeadline(state, now), now);
   if (!state.projectFocusKey && state.system) {
@@ -1882,7 +1962,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       unreadSessionIds: new Set(),
       unreadInitialized: false,
       sseMode: false,
-      view: "sessions",
+      view: opts.initialView ?? "sessions",
       providers: [],
       providersError: undefined,
     });
@@ -1931,12 +2011,28 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       () => fetchProviderState(opts),
       fetched => update(current => applyProviderFetch(current, fetched)),
     );
+    let agentClient: AgentClient | undefined;
+    if (opts.agentRequest) {
+      agentClient = new AgentClient(opts.agentRequest, () => {
+        update(current => ({ ...current, agentSnapshot: agentClient!.snapshot, agentSelection: agentClient!.selected }));
+      });
+    }
+    const refreshAgents = async () => {
+      await agentClient?.refreshSnapshot();
+      if (disposed || state.view !== "agents") return;
+      const rows = agentsForState(state);
+      if (!rows.some(agent => agent.agent_id === agentClient?.selected?.agent.agent_id)) {
+        const selected = rows.find(agent => agent.agent_id === state.agentCursorId) ?? rows[0];
+        if (selected) agentClient?.select(selected.agent_id);
+      }
+    };
     const close = () => {
       if (disposed) return;
       disposed = true;
       if (pollTimer) clearTimeout(pollTimer);
       if (freshnessTimer) clearTimeout(freshnessTimer);
       opts.closeTransport?.();
+      agentClient?.stop();
       renderer.keyInput.off("keypress", keyHandler);
       renderer.off("resize", resizeHandler);
       renderer.off("focus", focusHandler);
@@ -1946,7 +2042,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       resolve();
     };
     const keyHandler = (key: KeyEvent) => {
-      if ((key.ctrl && key.name === "c") || key.name === "q") {
+      if ((key.ctrl && key.name === "c") || (!state.filterActive && key.name === "q")) {
         close();
         return;
       }
@@ -1969,6 +2065,61 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
         return;
       }
 
+      const nextView = nextViewFromMonitorKey(state.view, key);
+      if (nextView) {
+        update(current => ({ ...current, view: nextView, filterText: "", filterActive: false }));
+        if (nextView === "agents") void refreshAgents();
+        if (nextView === "providers") void refreshProviders("manual");
+        return;
+      }
+
+      if (state.view === "agents") {
+        if (scrollDetails(refs, key)) { renderer.requestRender(); return; }
+        const rows = agentsForState(state);
+        const char = printableChar(key);
+        const tab = state.agentTab ?? "overview";
+        const number = /^[1-3]$/.test(char) ? Number(char) - 1 : -1;
+        if (number >= 0 || key.name === "tab" || char === "[" || char === "]") {
+          const index = number >= 0 ? number : (AGENT_DETAIL_TABS.indexOf(tab) + (char === "[" ? 2 : 1)) % 3;
+          update(current => ({ ...current, agentTab: AGENT_DETAIL_TABS[index] }));
+        } else if (["up", "down", "j", "k"].includes(key.name) || isEnter(key)) {
+          const current = Math.max(0, rows.findIndex(agent => agent.agent_id === (state.agentCursorId ?? agentClient?.selected?.agent.agent_id)));
+          const index = Math.max(0, Math.min(rows.length - 1, current + (["up", "k"].includes(key.name) ? -1 : isEnter(key) ? 0 : 1)));
+          const agent = rows[index];
+          if (agent) {
+            update(current => ({ ...current, agentCursorId: agent.agent_id }));
+            agentClient?.select(agent.agent_id);
+          }
+        } else if (key.name === "n" && tab !== "overview") void agentClient?.loadMore(tab === "conversation" ? "conversation" : "workflow");
+        else if (key.name === "r") {
+          if (agentClient?.selected) void agentClient.refreshDetail();
+          else void refreshAgents();
+        } else if (key.name === "escape" || isBackspace(key)) {
+          agentClient?.clearSelection();
+          update(current => ({ ...current, view: "sessions", filterText: "" }));
+        } else if (char === "/") update(current => ({ ...current, filterActive: true, filterText: "" }));
+        else if (key.name === "w") void opts.openWebDashboard();
+        return;
+      }
+
+      if (state.view === "providers") {
+        if (scrollDetails(refs, key)) { renderer.requestRender(); return; }
+        const char = printableChar(key);
+        const mode = state.providerUsageMode ?? "percentage";
+        const number = /^[1-3]$/.test(char) ? Number(char) - 1 : -1;
+        if (number >= 0 || key.name === "tab" || char === "[" || char === "]") {
+          const index = number >= 0 ? number : (PROVIDER_USAGE_MODES.indexOf(mode) + (char === "[" ? 2 : 1)) % 3;
+          update(current => ({ ...current, providerUsageMode: PROVIDER_USAGE_MODES[index] }));
+        } else if (["up", "down", "j", "k"].includes(key.name)) {
+          update(current => ({ ...current, providerIndex: Math.max(0, Math.min(providerRowsForState(current).length - 1,
+            (current.providerIndex ?? 0) + (["up", "k"].includes(key.name) ? -1 : 1))) }));
+        } else if (key.name === "r") void refreshProviders("manual");
+        else if (char === "/") update(current => ({ ...current, filterActive: true, filterText: "" }));
+        else if (key.name === "escape") update(current => ({ ...current, view: "sessions", filterText: "" }));
+        else if (key.name === "w") void opts.openWebDashboard();
+        return;
+      }
+
       if (state.projectFocusKey && scrollDetails(refs, key)) {
         renderer.requestRender();
         return;
@@ -1977,12 +2128,6 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       const nextTab = nextDetailTabFromMonitorKey(state.detailTab, key);
       if (state.projectFocusKey && nextTab) {
         update(current => clampState({ ...current, detailTab: nextTab }));
-        return;
-      }
-
-      const nextView = nextViewFromMonitorKey(state.view, key);
-      if (nextView) {
-        update(current => clampState({ ...current, view: nextView }));
         return;
       }
 
@@ -2026,6 +2171,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
     const runPoll = async () => {
       void refreshMonitor("poll");
       if (state.view === "providers") void refreshProviders("poll");
+      if (state.view === "agents") void refreshAgents();
       schedulePoll();
     };
     const focusHandler = () => {
@@ -2046,6 +2192,7 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
     scheduleFreshnessUpdate();
     void refreshMonitor("poll");
     void refreshProviders("poll");
+    if (state.view === "agents") void refreshAgents();
     schedulePoll();
   });
 }

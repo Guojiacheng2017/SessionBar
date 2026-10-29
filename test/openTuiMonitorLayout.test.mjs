@@ -658,13 +658,6 @@ function apiRow(overrides = {}) {
   };
 }
 
-test("provider table labels used values explicitly rather than calling them remaining", () => {
-  const row = subscriptionRow({ used: 22, remaining: 78, limit: 100, unit: "%" });
-  const content = providerTableContent([row], { width: 120, height: 40 });
-  assert.equal(content[0][1][0].text, "Quota / Usage");
-  assert.equal(content[1][1][0].text, "22/100 % used");
-});
-
 test("provider summary line renders subscription rows with level/pacing/card/reset", () => {
   const line = providerSummaryLine(subscriptionRow({ measuredRate: 0.66, unit: "%" }));
   assert.match(line, /Subscription/);
@@ -719,7 +712,7 @@ test("provider table renders a header plus one row per PlanRow with columns", ()
   const content = providerTableContent(rows, renderer);
   assert.equal(content.length, 3); // header + 2 rows
   assert.equal(content[0][0][0].text, "Provider");
-  assert.equal(content[0][1][0].text, "Quota / Usage");
+  assert.equal(content[0][1][0].text, "Left");
   assert.equal(content[0][2][0].text, "Level");
   assert.equal(content[0][3][0].text, "Reset");
   assert.equal(content[0][4][0].text, "Card");
@@ -743,7 +736,7 @@ test("provider table uses compact 3-column layout on narrow terminals", () => {
   assert.equal(content.length, 2); // header + 1 row
   assert.equal(content[0].length, 3);
   assert.equal(content[0][0][0].text, "Provider");
-  assert.equal(content[0][1][0].text, "Quota / Usage");
+  assert.equal(content[0][1][0].text, "Left");
   assert.equal(content[0][2][0].text, "Reset");
   assert.equal(content[1].length, 3);
 });

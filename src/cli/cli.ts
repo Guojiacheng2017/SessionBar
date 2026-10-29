@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
-import { execSync, spawn } from "child_process";
-import { readFileSync, unlinkSync, existsSync, openSync, closeSync, fchmodSync } from "fs";
+import { execFileSync, execSync, spawn } from "child_process";
+import { readFileSync, unlinkSync, existsSync, openSync, closeSync, statSync, fchmodSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
 import { ensurePrivateDirectory } from "../shared/privateState.js";
-import { promptSetupFocus } from "./setupFocusPrompt.js";
 import { createSSETransport, type SSETransport } from "../tui/sseTransport.js";
+import { terminalAnsiTheme } from "../tui/terminalTheme.js";
 import { pruneSessionMarkerFiles } from "../sessions/sessionMarkers.js";
 import {
   detectHarnessAvailability,
@@ -17,18 +17,27 @@ import {
   injectHooksOnServerReady,
   type HarnessRegistryEntry,
 } from "../hooks/hookManager.js";
-import { sessionDisplayName, stripAnsi, truncateAnsi } from "../tui/displayUtils.js";
+import {
+  age as formatAge,
+  agentName as compactAgentName,
+  sessionDisplayName,
+  sessionProjectName,
+  statusLabel,
+  stripAnsi,
+} from "../tui/displayUtils.js";
 import { isSystemEfficiencySnapshot, type SystemEfficiencySnapshot } from "../shared/types.js";
-import { acquireAppClient, configuredPort, readRuntimeState, releaseAppClient, releaseRuntimeState } from "../server/runtimeState.js";
+import { acquireAppClient, configuredPort, readRuntimeState, releaseAppClient } from "../server/runtimeState.js";
 import { readSettings, updateSettings } from "../server/settings.js";
 import {
-  createRainbow,
-  panelTop as _panelTop,
-  panelBot as _panelBot,
-  panelRow as _panelRow,
   runLandingMenu,
   type LandingMenuDeps,
 } from "./landingMenu.js";
+import { promptSetupFocus } from "./setupFocusPrompt.js";
+import { fetchRelayHealth, relayNodeExecutable, stopRelayProcess, waitForChildSpawn } from "../server/relayLifecycle.js";
+import { localFetch } from "../runtime/networkRuntime.js";
+import { readRelayConfigMatch } from "../runtime/relayConfig.js";
+import type { MonitorView } from "../tui/openTuiMonitor.js";
+import { isCodexTraceInvocation, traceCodex } from "./codexTrace.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HOME = process.env.SESSIONBAR_HOME || process.env.AGENTBAR_HOME || join(homedir(), ".sessionbar");
@@ -38,6 +47,26 @@ const SESSION_ID_DIR = join(HOME, "sessions");
 const EXPLICIT_PORT = configuredPort();
 let PORT = EXPLICIT_PORT || readRuntimeState(HOME)?.port || 0;
 const API_HOST = process.env.SESSIONBAR_HOST || "127.0.0.1";
+
+async function relayFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = process.env.SESSIONBAR_DEVICE_TOKEN;
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return localFetch(url, { ...init, headers });
+}
+
+function openBrowser(url: string): void {
+  const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
+  const child = spawn(command, [url], { detached: true, stdio: "ignore" });
+  child.on("error", () => console.error(`Open this URL in your browser: ${url}`));
+  child.unref();
+}
+
+function currentBuildId(): string {
+  const serverPath = join(__dirname, "..", "server", "server.js");
+  const stat = statSync(serverPath);
+  return `${stat.size}:${Math.trunc(stat.mtimeMs)}`;
+}
 
 function refreshRuntimePort(): number {
   PORT = EXPLICIT_PORT || readRuntimeState(HOME)?.port || PORT;
@@ -97,7 +126,7 @@ function pidAlive(): boolean {
   } catch { return false; }
 }
 
-function startServer(quiet = false): boolean {
+async function startServer(quiet = false): Promise<boolean> {
   ensureDir();
   if (pidAlive()) return true;
   const js = join(__dirname, "..", "server", "server.js");
@@ -117,8 +146,9 @@ function startServer(quiet = false): boolean {
   if (useICloud) env.SESSIONBAR_ICLOUD = "1";
   if (useWeb) env.SESSIONBAR_WEB = "1";
   try {
-    const proc = spawn("node", [js], { detached: true, stdio: ["ignore", fd, fd], env });
-    proc.unref();
+    const executable = relayNodeExecutable(process.execPath, isBunRuntime(), process.env);
+    const proc = spawn(executable, [js], { detached: true, stdio: ["ignore", fd, fd], env });
+    await waitForChildSpawn(proc);
     return true;
   } catch (e: any) {
     if (!quiet) console.error(`Cannot start server: ${e?.message || e}`);
@@ -128,19 +158,73 @@ function startServer(quiet = false): boolean {
   }
 }
 
-function stopServer(quiet = false) {
-  if (!existsSync(PID_FILE)) { if (!quiet) console.log("Not running."); return; }
-  teardownHooks(true, quiet);
+function relayOwner(): string | undefined {
   try {
-    process.kill(parseInt(readFileSync(PID_FILE, "utf-8").trim().split("|")[0], 10), "SIGTERM");
-    if (!quiet) console.log("Stopped.");
-  } catch { /* */ }
-  if (!pidAlive()) releaseRuntimeState(HOME);
+    const owner = readFileSync(PID_FILE, "utf8").trim();
+    const pid = Number(owner.split("|")[0]);
+    return Number.isSafeInteger(pid) && pid > 0 ? owner : undefined;
+  } catch { return undefined; }
+}
+
+function processExists(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function verifyRelayOwner(pid: number): Promise<boolean> {
+  try {
+    if (Number(readFileSync(join(HOME, "server.lock"), "utf8").trim()) !== pid) return false;
+  } catch { return false; }
+  const state = readRuntimeState(HOME);
+  if (state?.pid === pid) {
+    const health = await fetchRelayHealth(relayFetch, `http://${API_HOST}:${state.port}/health`);
+    if (health?.service === "sessionbar" && health.pid === pid && health.port === state.port) return true;
+  }
+  // An unavailable API is not proof of ownership. Verify the exact server
+  // entry point before signalling; never kill an arbitrary reused Node PID.
+  try {
+    const command = execFileSync("ps", ["-ww", "-p", String(pid), "-o", "args="], { encoding: "utf8", timeout: 1_000 }).trim();
+    return command.endsWith(join(__dirname, "..", "server", "server.js"));
+  } catch { return false; }
+}
+
+async function restartServerProcess(quiet = false): Promise<boolean> {
+  if (!existsSync(PID_FILE)) {
+    // A Relay can own its lock before publishing its PID/port, or during
+    // shutdown. Missing markers alone must not be reported as a stopped owner.
+    try {
+      const lockedPid = Number(readFileSync(join(HOME, "server.lock"), "utf8").trim());
+      if (Number.isSafeInteger(lockedPid) && lockedPid > 0 && processExists(lockedPid)) {
+        if (!quiet) console.error("Relay ownership is incomplete; wait for startup or shutdown to finish.");
+        return false;
+      }
+    } catch { /* no lock */ }
+    return true;
+  }
+  const owner = relayOwner();
+  const result = owner ? await stopRelayProcess({
+    pid: Number(owner.split("|")[0]), owner, readOwner: relayOwner,
+    isAlive: processExists, verifyOwner: verifyRelayOwner,
+    signal: (pid, signal) => process.kill(pid, signal),
+  }) : "unverified";
+  if (result === "stopped") return true;
+  if (!quiet) console.error(`Relay did not stop (${result}); its state was preserved.`);
+  return false;
+}
+
+async function stopServer(quiet = false): Promise<boolean> {
+  const hadPid = existsSync(PID_FILE);
+  if (!await restartServerProcess(quiet)) return false;
+  if (!hadPid) { if (!quiet) console.log("Not running."); return true; }
+  teardownHooks(true, quiet);
+  if (!quiet) console.log("Stopped.");
+  return true;
 }
 
 async function requestSessions(): Promise<{ sessions: any[], error?: string }> {
   try {
-    const resp = await fetch(sessionsApi());
+    const resp = await relayFetch(sessionsApi());
     if (!resp.ok) return { sessions: [], error: `HTTP ${resp.status}` };
     const data = await resp.json();
     if (!Array.isArray(data)) return { sessions: [], error: "invalid response" };
@@ -160,39 +244,42 @@ async function fetchSessions(): Promise<{ sessions: any[], error?: string }> {
 }
 
 async function fetchSystem(): Promise<SystemEfficiencySnapshot | undefined> {
-  const resp = await fetch(`${apiBase()}/system/live`);
+  const resp = await relayFetch(`${apiBase()}/system/live`);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   if (!isSystemEfficiencySnapshot(data.system)) throw new Error("invalid system response");
   return data.system;
 }
 
+async function fetchHealth(): Promise<any> {
+  return fetchRelayHealth(relayFetch, `${apiBase()}/health`);
+}
+
 async function fetchWebStatus(): Promise<boolean> {
-  try {
-    const response = await fetch(`${apiBase()}/health`);
-    const data = await response.json();
-    return response.ok && data?.service === "sessionbar" && data?.web === true;
-  } catch {
-    return false;
-  }
+  const data = await fetchHealth();
+  return data?.service === "sessionbar" && data?.web === true;
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+let warnedStartupEnvironment = false;
 
 async function waitForReady(attempts = 15): Promise<boolean> {
   for (let i = 0; i < attempts; i++) {
     try {
       const state = readRuntimeState(HOME);
       if (state?.port) {
-        const response = await fetch(`http://${API_HOST}:${state.port}/health`);
-        const health = await response.json();
+        const health = await fetchRelayHealth(relayFetch, `http://${API_HOST}:${state.port}/health`);
         if (
-          response.ok
-          && health?.service === "sessionbar"
+          health?.service === "sessionbar"
           && health?.pid === state.pid
           && health?.port === state.port
+          && health.build_id === currentBuildId()
         ) {
           PORT = health.port;
+          if (!warnedStartupEnvironment && readRelayConfigMatch(HOME, process.env, state.pid, health.config_revision) === false) {
+            warnedStartupEnvironment = true;
+            console.error("Running Relay keeps its startup environment; use sessionbar restart to apply changes.");
+          }
           return true;
         }
       }
@@ -207,12 +294,11 @@ async function ensureServerRunning(quiet = false): Promise<boolean> {
   if (await waitForReady(1)) return true;
   if (pidAlive()) {
     if (await waitForReady(4)) return true;
-    // A live PID without a reachable API is not useful for the app. Restart it
+    // A live PID without a reachable API or matching build is not useful. Restart the build.
     // only after bounded retries rule out a transient sleep or scheduling gap.
-    stopServer(true);
-    await delay(300);
+    if (!await restartServerProcess(quiet)) return false;
   }
-  if (!startServer(quiet)) return false;
+  if (!await startServer(quiet)) return false;
   return waitForReady();
 }
 
@@ -228,25 +314,30 @@ async function ensureAppRunning(quiet = false): Promise<boolean> {
   return ready;
 }
 
-function releaseAppHooks(_global = true, quiet = true): void {
-  if (releaseAppClient(HOME)) teardownHooks(true, quiet);
+async function releaseAppHooks(global = true, quiet = true): Promise<void> {
+  if (!releaseAppClient(HOME)) return;
+  teardownHooks(global, quiet);
+  try {
+    await relayFetch(`${apiBase()}/lifecycle/unobserved`, { method: "POST" });
+  } catch { /* relay is already unavailable */ }
 }
 
 function isBunRuntime(): boolean {
   return !!(process.versions as Record<string, string | undefined>).bun;
 }
 
-function bunMonitorArgs(): string[] {
-  if (cmd === "monitor" || cmd === "watch") return args;
-  return ["monitor", ...args.filter(arg => arg.startsWith("--"))];
+function bunMonitorArgs(view: MonitorView): string[] {
+  const base = cmd === "monitor" || cmd === "watch" ? args : ["monitor", ...args.filter(arg => arg.startsWith("--"))];
+  const clean = base.filter((arg, index) => arg !== "--view" && !arg.startsWith("--view=") && base[index - 1] !== "--view");
+  return [...clean, "--view", view];
 }
 
-async function relaunchMonitorWithBun(): Promise<boolean> {
+async function relaunchMonitorWithBun(view: MonitorView): Promise<boolean> {
   if (isBunRuntime() || process.env.SESSIONBAR_BUN_REEXEC === "1") return false;
   return new Promise((resolve, reject) => {
-    const proc = spawn("bun", [fileURLToPath(import.meta.url), ...bunMonitorArgs()], {
+    const proc = spawn("bun", [fileURLToPath(import.meta.url), ...bunMonitorArgs(view)], {
       stdio: "inherit",
-      env: { ...process.env, SESSIONBAR_BUN_REEXEC: "1" },
+      env: { ...process.env, SESSIONBAR_BUN_REEXEC: "1", SESSIONBAR_NODE_EXEC_PATH: process.execPath },
     });
     proc.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "ENOENT") resolve(false);
@@ -271,29 +362,24 @@ async function openWebDashboard() {
     return;
   }
   await injectHooksOnServerReady(true);
-  spawn("open", [apiBase()], { detached: true, stdio: "ignore" }).unref();
+  openBrowser(apiBase());
 }
 
 // ANSI codes — auto-disabled if terminal lacks color support
 // Respects NO_COLOR (https://no-color.org), TERM=dumb, and non-TTY output
 const _COLOR = !process.env.NO_COLOR && process.env.TERM !== "dumb" && !!process.stdout.isTTY;
 const _TTY = !!process.stdout.isTTY; // gate screen-control sequences (cursor, clear) for pipe/redirect
-const _B = _COLOR ? "\x1b[1m" : "";
-const _D = _COLOR ? "\x1b[0m" : "";
-const _K = _COLOR ? "\x1b[38;5;245m" : ""; // explicit gray (~#8a8a8a) replacing dim for WCAG contrast
-const _BL = _COLOR ? "\x1b[34m" : "";
-const _GN = _COLOR ? "\x1b[32m" : "";
-const _YL = _COLOR ? "\x1b[33m" : "";
-const _RD = _COLOR ? "\x1b[1;31m" : ""; // bold red for WCAG 1.4.3 contrast minimum
-const _CY = _COLOR ? "\x1b[36m" : "";
-
-let CC = {
-  B: _B, D: _D, K: _K, BL: _BL, GN: _GN, YL: _YL, RD: _RD, CY: _CY,
-};
+const _THEME = terminalAnsiTheme(_COLOR);
+const _B = _THEME.bold;
+const _D = _THEME.reset;
+const _K = _THEME.muted;
+const _GN = _THEME.working;
+const _YL = _THEME.blocked;
+const _RD = _THEME.error;
 
 const S = {
-  working: { c: _BL, icon: "●", label: "RUNNING" },
-  idle:    { c: _GN, icon: "○", label: "IDLE" },
+  working: { c: _GN, icon: "●", label: "RUNNING" },
+  idle:    { c: _THEME.idle, icon: "○", label: "IDLE" },
   blocked: { c: _YL, icon: "◈", label: "AWAITING" },
   error:   { c: _RD, icon: "▲", label: "ERROR" },
 };
@@ -302,879 +388,50 @@ function pad(s: string, n: number): string {
   return s + " ".repeat(Math.max(0, n - stripAnsi(s)));
 }
 
-function truncateText(s: string, max: number): string {
-  if (max <= 0) return "";
-  if (s.length <= max) return s;
-  if (max === 1) return "…";
-  return s.slice(0, max - 1) + "…";
+function age(timestamp: number): string {
+  return formatAge(timestamp);
 }
 
-function tailText(s: string, max: number): string {
-  if (max <= 0) return "";
-  if (s.length <= max) return s;
-  if (max <= 2) return s.slice(-max);
-  return "…" + s.slice(-(max - 1));
+function agentName(type: string, max = 12): string {
+  const name = compactAgentName(type);
+  return name.length > max ? `${name.slice(0, Math.max(0, max - 1))}…` : name;
 }
 
-function age(ts: number): string {
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 10) return `${CC.CY}now`;  // caller appends _D
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  return `${Math.floor(s / 3600)}h`;
-}
-
-function extractProject(s: any): string {
-  // Use explicit project field from payload if available
-  if (s.project) return s.project;
-  // Derive from full path if available
-  if (s.project_path) {
-    const parts = s.project_path.split("/");
-    return parts[parts.length - 1] || s.project_path;
-  }
-  const sid = s.session_id || "";
-  // Embedded format: {uuid}__{project}
-  const sep = sid.indexOf("__");
-  if (sep !== -1) return sid.slice(sep + 2);
-  // Legacy format: "{type}-{project}-{pid}-{random}"
-  const cleaned = sid.replace(/^(claude|gemini|codex|copilot|opencode|pi-agent|pi|kimi|qwen|deepseek|windsurf|cursor|workbuddy|minimax)-/, "");
-  const parsed = cleaned.replace(/-\d+-\d+$/, "");
-  // If parsed is a UUID (contains only hex + dashes), project is unknown
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(parsed)) {
-    return s.project_path || "unknown";
-  }
-  return parsed || sid;
-}
-
-function pathTail(path: string): string {
-  const parts = path.replace(/\/+$/, "").split("/").filter(Boolean);
-  return parts.at(-1) || path;
-}
-
-function rawProjectPath(s: any): string {
-  return typeof s.project_path === "string" ? s.project_path.trim() : "";
-}
-
-function compactUserPath(path: string): string {
-  const clean = path.replace(/\/+$/, "") || path;
-  const home = homedir().replace(/\/+$/, "");
-  return clean === home ? "~" : clean.startsWith(`${home}/`) ? `~${clean.slice(home.length)}` : clean;
-}
-
-function projectKey(s: any): string {
-  const path = rawProjectPath(s);
-  return path ? `path:${compactUserPath(path)}` : `name:${projectLabel(s)}`;
-}
-
-function projectLabel(s: any): string {
-  return s.project || extractProject(s);
-}
-
-function projectPathLabel(s: any): string {
-  return s.project_path || projectLabel(s);
-}
-
-function uniqueProjectPathsByName(sessions: any[]): Map<string, string> {
-  const paths = new Map<string, Set<string>>();
-  for (const s of sessions) {
-    const path = rawProjectPath(s);
-    if (!path) continue;
-    const name = s.project || pathTail(path);
-    if (!paths.has(name)) paths.set(name, new Set());
-    paths.get(name)!.add(compactUserPath(path));
-  }
-  const unique = new Map<string, string>();
-  for (const [name, values] of paths.entries()) {
-    if (values.size === 1) unique.set(name, [...values][0]!);
-  }
-  return unique;
-}
-
-function projectGroupKey(s: any, uniquePaths: Map<string, string>): string {
-  const path = rawProjectPath(s);
-  if (path) return `path:${compactUserPath(path)}`;
-  const name = projectLabel(s);
-  const inferred = uniquePaths.get(name);
-  return inferred ? `path:${inferred}` : `name:${name}`;
-}
-
-function projectPathSummary(sessions: any[]): string {
-  if (sessions.length === 0) return "unknown";
-  const paths = [...new Set(sessions.map(rawProjectPath).filter(Boolean).map(compactUserPath))];
-  if (paths.length === 0) return projectPathLabel(sessions[0]);
-  return paths.length === 1 ? paths[0]! : `${paths[0]} +${paths.length - 1}`;
-}
-
-function statusStyle(status: string) {
-  return S[status as keyof typeof S] || S.idle;
+function projectLabel(session: any): string {
+  return sessionProjectName(session);
 }
 
 function statusShort(status: string): string {
-  if (status === "working") return "WORK";
-  if (status === "blocked") return "WAIT";
-  if (status === "error") return "ERR";
-  return "IDLE";
+  return statusLabel(status);
 }
 
-function statusCounts(sessions: any[]) {
-  let working = 0, idle = 0, blocked = 0, errored = 0;
-  for (const s of sessions) {
-    if (s.status === "working") working++;
-    else if (s.status === "blocked") blocked++;
-    else if (s.status === "error") errored++;
-    else idle++;
+// Stable one-shot output for `status` and non-TTY monitor invocations.
+// Interactive layout belongs exclusively to OpenTUI.
+function render(sessions: any[], _frame = 0, errorMsg?: string): void {
+  if (errorMsg) console.error(errorMsg);
+  const ordered = [...sessions].sort((a, b) => {
+    const projectOrder = projectLabel(a).localeCompare(projectLabel(b));
+    return projectOrder || sessionDisplayName(a).localeCompare(sessionDisplayName(b));
+  });
+  const projects = new Map<string, any[]>();
+  for (const session of ordered) {
+    const project = projectLabel(session);
+    const rows = projects.get(project) ?? [];
+    rows.push(session);
+    projects.set(project, rows);
   }
-  return { working, idle, blocked, errored, total: sessions.length };
-}
 
-function inlineStatus(sessions: any[]): string {
-  const c = statusCounts(sessions);
-  const parts = [
-    c.working > 0 ? `${_BL}${c.working} work${_D}` : "",
-    c.blocked > 0 ? `${_YL}${c.blocked} wait${_D}` : "",
-    c.errored > 0 ? `${_RD}${c.errored} err${_D}` : "",
-    c.idle > 0 ? `${_GN}${c.idle} idle${_D}` : "",
-  ].filter(Boolean);
-  return parts.join(` ${_K}·${_D} `) || `${_K}none${_D}`;
-}
-
-function cell(s: string, w: number): string {
-  return pad(truncateAnsi(s, w, _D), w);
-}
-
-function rightCell(s: string, w: number): string {
-  const clipped = truncateAnsi(s, w, _D);
-  return " ".repeat(Math.max(0, w - stripAnsi(clipped))) + clipped;
-}
-
-function displayPath(p: string, max: number): string {
-  const home = homedir();
-  const compact = p.startsWith(home) ? `~${p.slice(home.length)}` : p;
-  return tailText(compact, max);
-}
-
-function agentName(t: string, max = 12): string {
-  const compact = (t || "?")
-    .replace(/\s+Code$/i, "")
-    .replace(/\s+CLI$/i, "")
-    .replace(/\s+/g, " ");
-  return truncateText(compact, max);
-}
-
-function rawSessionId(s: any): string {
-  return String(s.session_id || "").split("__")[0] || "?";
-}
-
-function sessionShortId(s: any, max = 8): string {
-  const cleaned = rawSessionId(s).replace(/^(claude|codex|gemini|copilot|opencode|pi-agent|pi|kimi|qwen|deepseek|windsurf|cursor|workbuddy|minimax)-/i, "");
-  const scoped = /-([0-9a-f]{8})$/i.exec(cleaned);
-  if (scoped) {
-    if (max <= 12) return scoped[1].slice(0, max);
-    const prefixW = Math.max(1, max - 9);
-    return truncateText(`${cleaned.slice(0, prefixW)}-${scoped[1]}`, max);
-  }
-  return truncateText(cleaned, max);
-}
-
-function firstFiniteNumber(...values: any[]): number | undefined {
-  for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
-}
-
-function compactNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
-  return String(Math.round(n));
-}
-
-function sessionContextPercent(s: any): number | undefined {
-  const raw = firstFiniteNumber(s.context_percent, s.context_pct, s.context);
-  if (raw === undefined) return undefined;
-  const pct = raw <= 1 && raw >= 0 ? raw * 100 : raw;
-  return Math.max(0, Math.min(100, pct));
-}
-
-function sessionStatsText(s: any, max = 18): string {
-  const context = sessionContextPercent(s);
-  const tokens = firstFiniteNumber(s.tokens, s.token_count, s.total_tokens);
-  const turns = firstFiniteNumber(s.turns, s.turn_count);
-  const parts = [
-    context === undefined ? `${_K}ctx --${_D}` : `${Math.round(context)}% ctx`,
-    tokens === undefined ? `${_K}tok --${_D}` : `${compactNumber(tokens)} tok`,
-    turns === undefined ? `${_K}turn --${_D}` : `${Math.round(turns)} turn`,
-  ];
-  return truncateAnsi(parts.join(` ${_K}·${_D} `), max, _D);
-}
-
-function sessionHealth(sessions: any[]) {
-  if (sessions.length === 0) {
-    return { score: 0, icon: "○", color: _K, label: "waiting for sessions" };
-  }
-  const now = Date.now();
-  const counts = statusCounts(sessions);
-  const stale = sessions.filter((s: any) => now - (s.timestamp || 0) > 120_000).length;
-  const contextRisk = sessions.filter((s: any) => {
-    const pct = sessionContextPercent(s);
-    return pct !== undefined && pct >= 85;
-  }).length;
-  const penalty = counts.errored * 35 + counts.blocked * 20 + stale * 10 + contextRisk * 8;
-  const score = Math.max(0, Math.min(100, 100 - penalty));
-  if (counts.errored > 0) return { score, icon: "▲", color: _RD, label: `${counts.errored} session error` };
-  if (counts.blocked > 0) return { score, icon: "◈", color: _YL, label: `${counts.blocked} blocked` };
-  if (contextRisk > 0) return { score, icon: "◆", color: _YL, label: `${contextRisk} high context` };
-  if (stale > 0) return { score, icon: "○", color: _K, label: `${stale} stale` };
-  if (counts.working > 0) return { score, icon: "●", color: _BL, label: `${counts.working} working` };
-  return { score, icon: "●", color: _GN, label: "stable" };
-}
-
-function agentIcons(sessions: any[], max = 10): string {
-  const counts = new Map<string, number>();
-  for (const s of sessions) {
-    const type = s.session_type || "?";
-    counts.set(type, (counts.get(type) || 0) + 1);
-  }
-  const out = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([_type, count]) => `${count > 1 ? count : ""}`)
-    .join(" ");
-  return truncateText(out, max);
-}
-
-function latestTimestamp(sessions: any[]): number {
-  return sessions.length > 0
-    ? Math.max(...sessions.map((s: any) => s.timestamp || 0))
-    : Date.now();
-}
-
-function projectTableLayout(w: number) {
-  const available = Math.max(42, w - 8);
-  const marker = 2;
-  const project = available >= 128 ? 24 : available >= 100 ? 20 : 16;
-  const sessions = 8;
-  const agents = available >= 112 ? 18 : 14;
-  const status = available >= 112 ? 22 : 16;
-  const ageW = 5;
-  const gaps = 5;
-  const path = Math.max(8, available - marker - project - sessions - agents - status - ageW - gaps);
-  return { marker, project, sessions, agents, status, path, age: ageW };
-}
-
-function projectTableHeader(w: number): string {
-  const c = projectTableLayout(w);
-  return `${cell("", c.marker)}${cell(`${_B}Project${_D}`, c.project)} ${cell(`${_B}Sessions${_D}`, c.sessions)} ${cell(`${_B}Agents${_D}`, c.agents)} ${cell(`${_B}Status${_D}`, c.status)} ${cell(`${_B}Path${_D}`, c.path)} ${rightCell(`${_B}Age${_D}`, c.age)}`;
-}
-
-function projectTableRow(
-  key: string,
-  sessions: any[],
-  cursorKey: string | null,
-  focusKey: string | null,
-  w: number,
-): string {
-  const c = projectTableLayout(w);
-  const sample = sessions[0];
-  const marker = key === focusKey ? `${_BL}●${_D}` : key === cursorKey ? `${_BL}>${_D}` : " ";
-  const row = `${cell(marker, c.marker)}${cell(projectLabel(sample), c.project)} ${cell(String(sessions.length), c.sessions)} ${cell(agentIcons(sessions, c.agents), c.agents)} ${cell(inlineStatus(sessions), c.status)} ${cell(displayPath(projectPathSummary(sessions), c.path), c.path)} ${rightCell(`${_K}${age(latestTimestamp(sessions))}${_D}`, c.age)}`;
-  return panelRow(key === cursorKey ? `${_B}${row}${_D}` : row, w);
-}
-
-function renderProjectsPanel(
-  groups: Map<string, any[]>,
-  cursorKey: string | null,
-  focusKey: string | null,
-  w: number,
-  totalRows: number,
-): string[] {
-  const contentRows = Math.max(1, totalRows - 2);
-  const lines = [panelTop("Projects", w, `${groups.size} project${groups.size !== 1 ? "s" : ""}`)];
-  lines.push(panelRow(projectTableHeader(w), w));
-
-  const entries = [...groups.entries()];
-  if (entries.length === 0) {
-    lines.push(panelRow(`${_K}No projects reporting yet${_D}`, w));
-  } else {
-    const selected = cursorKey ? entries.findIndex(([key]) => key === cursorKey) : 0;
-    const safeSel = Math.max(0, selected);
-    const rowSlots = Math.max(0, contentRows - 1);
-    let offset = Math.max(0, safeSel - Math.floor(rowSlots / 2));
-    offset = Math.min(offset, Math.max(0, entries.length - rowSlots));
-    const hasOverflow = entries.length > rowSlots && rowSlots > 1;
-    const visible = entries.slice(offset, offset + (hasOverflow ? rowSlots - 1 : rowSlots));
-    for (const [key, ss] of visible) {
-      lines.push(projectTableRow(key, ss, cursorKey, focusKey, w));
-    }
-    if (hasOverflow) {
-      const hidden = entries.length - visible.length;
-      lines.push(panelRow(`${_K}... ${hidden} more project${hidden !== 1 ? "s" : ""}${_D}`, w));
+  console.log(`${sessions.length} session${sessions.length === 1 ? "" : "s"} · ${projects.size} project${projects.size === 1 ? "" : "s"}`);
+  for (const [project, rows] of projects) {
+    console.log(`${_B}${project}${_D}`);
+    for (const session of rows) {
+      const style = S[session.status as keyof typeof S] || S.idle;
+      const state = `${style.c}${style.icon} ${statusShort(session.status)}${_D}`;
+      const name = sessionDisplayName(session);
+      const agent = agentName(session.session_type || "?");
+      console.log(`  ${pad(state, 10)} ${pad(agent, 14)} ${name} ${_K}${age(session.timestamp || Date.now())}${_D}`);
     }
   }
-
-  while (lines.length < totalRows - 1) lines.push(panelRow("", w));
-  lines.push(panelBot(w));
-  return lines.slice(0, totalRows);
-}
-
-function renderProjectDetailsLines(
-  scopeSessions: any[],
-  allSessions: any[],
-  w: number,
-): string[] {
-  const stats = computeStats(scopeSessions);
-  const health = sessionHealth(scopeSessions);
-  const sample = scopeSessions[0];
-  if (!sample) {
-    return [
-      `${_B}PROJECT${_D} ${_K}none selected${_D}`,
-      `${_K}Sessions${_D} 0`,
-      `${_K}All sessions${_D} ${allSessions.length}`,
-      "",
-      `${_K}API${_D} ${API_HOST}:${PORT}`,
-      `${_K}State${_D} ${displayPath(HOME, Math.max(8, w - 10))}`,
-    ];
-  }
-
-  return [
-    `${_B}PROJECT${_D} ${projectLabel(sample)}`,
-    `${_K}path${_D} ${displayPath(projectPathSummary(scopeSessions), Math.max(8, w - 8))}`,
-    `${_K}sessions${_D} ${stats.total}  ${_K}agents${_D} ${agentIcons(scopeSessions, Math.max(8, w - 22))}`,
-    `${_K}status${_D} ${inlineStatus(scopeSessions)}`,
-    `${_K}health${_D} ${health.color}${health.icon} ${String(health.score).padStart(3)}${_D} ${health.label}`,
-    `${_K}latest${_D} ${age(latestTimestamp(scopeSessions))}${_D}`,
-    "",
-    `${_K}API${_D} ${API_HOST}:${PORT}`,
-    `${_K}State${_D} ${displayPath(HOME, Math.max(8, w - 10))}`,
-  ];
-}
-
-function renderSessionSummaryLines(sessions: any[], w: number): string[] {
-  const stats = computeStats(sessions);
-  return [
-    `${_B}SESSIONS${_D} ${_K}all projects${_D}`,
-    `${_K}total${_D} ${stats.total}`,
-    `${_K}working${_D} ${stats.working}`,
-    `${_K}blocked${_D} ${stats.blocked}`,
-    `${_K}errors${_D} ${stats.errored}`,
-    `${_K}idle${_D} ${stats.idle}`,
-    "",
-    `${_K}API${_D} ${API_HOST}:${PORT}`,
-    `${_K}State${_D} ${displayPath(HOME, Math.max(8, w - 10))}`,
-  ];
-}
-
-function renderDetailsPanel(
-  scopeSessions: any[],
-  allSessions: any[],
-  selected: any | null,
-  frame: number,
-  w: number,
-  totalRows: number,
-  projectFocused: boolean,
-): string[] {
-  const title = selected ? "Details / Session" : projectFocused ? "Details / Project" : "Details / Sessions";
-  const content = selected
-    ? renderSelectedSessionLines(selected, frame, w)
-    : projectFocused ? renderProjectDetailsLines(scopeSessions, allSessions, w) : renderSessionSummaryLines(allSessions, w);
-  return panelBlock(title, w, content, Math.max(1, totalRows - 2));
-}
-
-function panelBlock(title: string, w: number, content: string[], rows: number, right?: string): string[] {
-  const lines = [panelTop(title, w, right)];
-  const visible = content.length > rows && rows > 0
-    ? [...content.slice(0, rows - 1), `${_K}... ${content.length - rows + 1} more${_D}`]
-    : content;
-  for (let i = 0; i < rows; i++) lines.push(panelRow(visible[i] || "", w));
-  lines.push(panelBot(w));
-  return lines;
-}
-
-function composeColumns(columns: string[][]): string[] {
-  const rows = Math.max(...columns.map(c => c.length));
-  const out: string[] = [];
-  for (let r = 0; r < rows; r++) out.push(columns.map(c => c[r] || "").join(" "));
-  return out;
-}
-
-function sessionTableLayout(w: number) {
-  const available = Math.max(42, w - 8);
-  const marker = 2;
-  const project = available >= 118 ? 22 : available >= 92 ? 18 : 14;
-  const agent = available >= 118 ? 14 : available >= 92 ? 12 : 10;
-  const session = available >= 104 ? 12 : 10;
-  const status = available >= 92 ? 10 : 8;
-  const stats = available >= 118 ? 20 : available >= 96 ? 14 : 10;
-  const ageW = 5;
-  const gaps = 6;
-  const task = Math.max(8, available - marker - project - agent - session - status - stats - ageW - gaps);
-  return { marker, project, agent, session, task, status, stats, age: ageW };
-}
-
-function sessionTableHeader(w: number): string {
-  const c = sessionTableLayout(w);
-  return `${cell("", c.marker)}${cell(`${_B}Project${_D}`, c.project)} ${cell(`${_B}Agent${_D}`, c.agent)} ${cell(`${_B}Name${_D}`, c.session)} ${cell(`${_B}Task${_D}`, c.task)} ${cell(`${_B}Status${_D}`, c.status)} ${cell(`${_B}Stats${_D}`, c.stats)} ${rightCell(`${_B}Age${_D}`, c.age)}`;
-}
-
-function sessionTableRow(s: any, frame: number, w: number, idx: number, selected: boolean): string {
-  const c = sessionTableLayout(w);
-  const style = statusStyle(s.status);
-  const pulse = s.status === "working" ? PULSE(frame + idx) : style.icon;
-  const marker = selected ? `${_BL}>${_D}` : " ";
-  const project = projectLabel(s);
-  const agent = `${agentName(s.session_type || "?", c.agent - 2)}`;
-  const task = s.task_name || `${_K}no task reported${_D}`;
-  const status = `${style.c}${pulse} ${statusShort(s.status)}${_D}`;
-  const stats = sessionStatsText(s, c.stats);
-  const row = `${cell(marker, c.marker)}${cell(project, c.project)} ${cell(agent, c.agent)} ${cell(sessionDisplayName(s), c.session)} ${cell(task, c.task)} ${cell(status, c.status)} ${cell(stats, c.stats)} ${rightCell(`${_K}${age(s.timestamp || Date.now())}${_D}`, c.age)}`;
-  return panelRow(selected ? `${_B}${row}${_D}` : row, w);
-}
-
-function renderSelectedSessionLines(s: any, frame: number, w: number): string[] {
-  const style = statusStyle(s.status);
-  const pulse = s.status === "working" ? PULSE(frame) : style.icon;
-  return [
-    `${_B}PROJECT${_D} ${projectLabel(s)}  ${_K}·${_D}  ${displayPath(projectPathLabel(s), Math.max(10, w - 38))}`,
-    `${_B}SESSION${_D} ${sessionShortId(s, 22)}  ${_K}·${_D}  ${agentName(s.session_type || "?", 16)}  ${_K}·${_D}  ${style.c}${pulse} ${statusShort(s.status)}${_D}  ${_K}updated${_D} ${age(s.timestamp || Date.now())}${_D}`,
-    `${_K}task${_D} ${truncateAnsi(s.task_name || "no task reported", Math.max(8, w - 13), _D)}`,
-    `${_K}stats${_D} ${sessionStatsText(s, Math.max(8, w - 10))}`,
-    `${_K}id${_D} ${truncateText(String(s.session_id || "?"), Math.max(8, w - 9))}`,
-  ];
-}
-
-function renderSessionsPanel(
-  allSessions: any[],
-  shown: any[],
-  selectedIdx: number,
-  selected: any | null,
-  frame: number,
-  w: number,
-  totalRows: number,
-  title: string,
-  showDetail = true,
-): string[] {
-  const contentRows = Math.max(1, totalRows - 2);
-  const lines = [panelTop(title, w, shown.length !== allSessions.length ? `${shown.length}/${allSessions.length}` : undefined)];
-
-  const hasSelection = selectedIdx >= 0 && !!selected;
-  const detail = showDetail && hasSelection && contentRows >= 10 ? renderSelectedSessionLines(selected, frame, w).slice(0, Math.min(5, contentRows - 6)) : [];
-  const detailSpace = detail.length > 0 ? detail.length + 1 : 0;
-  const tableRows = Math.max(0, contentRows - 1 - detailSpace);
-
-  lines.push(panelRow(sessionTableHeader(w), w));
-  if (shown.length === 0) {
-    lines.push(panelRow(`${_K}No sessions match the current filter${_D}`, w));
-    for (let i = 1; i < tableRows; i++) lines.push(panelRow("", w));
-  } else {
-    const safeSel = hasSelection ? Math.max(0, Math.min(selectedIdx, shown.length - 1)) : -1;
-    let offset = Math.max(0, safeSel - Math.floor(tableRows / 2));
-    offset = Math.min(offset, Math.max(0, shown.length - tableRows));
-    const visible = shown.slice(offset, offset + tableRows);
-    for (let i = 0; i < visible.length; i++) {
-      const absolute = offset + i;
-      lines.push(sessionTableRow(visible[i], frame, w, absolute, absolute === safeSel));
-    }
-    for (let i = visible.length; i < tableRows; i++) lines.push(panelRow("", w));
-  }
-
-  if (detail.length > 0) {
-    lines.push(panelRow(`${_K}${"─".repeat(Math.max(1, w - 8))}${_D}`, w));
-    for (const line of detail) lines.push(panelRow(line, w));
-  }
-
-  while (lines.length < totalRows - 1) lines.push(panelRow("", w));
-  lines.push(panelBot(w));
-  return lines.slice(0, totalRows);
-}
-
-// ── TUI helpers ──
-
-const PULSE_FRAMES = ["●", "◉", "◎", "◉"]; // 4-frame pulse for working — never collides with idle ○
-const PULSE = (i: number) => animateTui ? PULSE_FRAMES[i % PULSE_FRAMES.length] : "●";
-
-function groupByProject(sessions: any[]): Map<string, any[]> {
-  const groups = new Map<string, any[]>();
-  const uniquePaths = uniqueProjectPathsByName(sessions);
-  for (const s of sessions) {
-    const proj = projectGroupKey(s, uniquePaths);
-    if (!groups.has(proj)) groups.set(proj, []);
-    groups.get(proj)!.push(s);
-  }
-  // Keep project order stable. Heartbeats should update age/status, not move rows.
-  return new Map(
-    [...groups.entries()].sort((a, b) =>
-      projectLabel(a[1][0]).localeCompare(projectLabel(b[1][0])) || a[0].localeCompare(b[0])
-    )
-  );
-}
-
-interface SessionStats {
-  working: number;
-  idle: number;
-  blocked: number;
-  errored: number;
-  total: number;
-  groups: Map<string, any[]>;
-  fingerprint: string;
-}
-
-function computeStats(sessions: any[]): SessionStats {
-  let working = 0, idle = 0, blocked = 0, errored = 0;
-  const ids: string[] = new Array(sessions.length);
-  for (let i = 0; i < sessions.length; i++) {
-    const s = sessions[i];
-    if (s.status === "working") working++;
-    else if (s.status === "idle") idle++;
-    else if (s.status === "blocked") blocked++;
-    else if (s.status === "error") errored++;
-    const timestampBucket = Math.floor((s.timestamp || 0) / tuiRenderMs);
-    const context = sessionContextPercent(s);
-    const tokens = firstFiniteNumber(s.tokens, s.token_count, s.total_tokens);
-    const turns = firstFiniteNumber(s.turns, s.turn_count);
-    ids[i] = [
-      projectKey(s),
-      s.session_id || "",
-      s.session_type || "",
-      s.status || "",
-      s.task_name || "",
-      timestampBucket,
-      context === undefined ? "" : Math.round(context),
-      tokens === undefined ? "" : Math.round(tokens),
-      turns === undefined ? "" : Math.round(turns),
-    ].join(":");
-  }
-  return {
-    working, idle, blocked, errored,
-    total: sessions.length,
-    groups: groupByProject(sessions),
-    fingerprint: ids.join("\x1f"),
-  };
-}
-
-function layoutBudget(
-  totalCols: number,
-  termRows: number,
-): {
-  desktop: boolean;
-  totalW: number;
-  bodyRows: number;
-} {
-  const totalW = Math.max(40, totalCols - 4); // margin, no upper cap for wide terminals
-  const desktop = totalW >= 100;
-  const headerRows = 2;  // title + status bar
-  const footerRows = 2;
-  const bodyRows = Math.max(4, termRows - headerRows - footerRows);
-
-  return { desktop, totalW, bodyRows };
-}
-
-// ── Right-panel content builders ──
-
-function renderDetailLines(s: any, frame: number, w: number): string[] {
-  const proj = extractProject(s);
-  const style = S[s.status as keyof typeof S] || S.idle;
-  const statusLabel = style.label || s.status;
-  const pulseChar = s.status === "working" ? PULSE(frame % 4) : style.icon;
-  const pathDisplay = tailText(s.project_path || proj, Math.max(8, w - 12));
-
-  const lines: string[] = [
-    `${_B}${s.session_type || "?"}${_D}`,
-    `${_K}Project:${_D} ${proj}`,
-    `${_K}Path:${_D} ${pathDisplay}`,
-    `${pulseChar}  ${style.c}${statusLabel}${_D}  ${_K}·${_D}  ${s.task_name || ""}`,
-    `${_K}Active:${_D} ${age(s.timestamp || Date.now())}${_D}`,
-  ];
-
-  if (s.progress !== undefined) {
-    const pct = Math.round(s.progress * 100);
-    const barW = Math.min(16, w - 16);
-    const filled = Math.round(s.progress * barW);
-    const bar = `${_BL}${"█".repeat(filled)}${_D}${_K}${"░".repeat(barW - filled)}${_D}`;
-    lines.push(`${_K}Progress:${_D} ${bar} ${pct}%`);
-  }
-
-  lines.push(`${_K}ID:${_D} ${truncateText(s.session_id, Math.max(8, w - 10))}`);
-  return lines;
-}
-
-function renderFrame(
-  sessions: any[],
-  frame: number,
-  opts?: {
-    selectedIdx?: number;
-    detailId?: string | null;
-    projectIdx?: number;
-    projectCursorKey?: string | null;
-    projectFocusKey?: string | null;
-    filterText?: string;
-    errorMsg?: string;
-    stats?: SessionStats;
-  }
-) {
-  const sel = opts?.selectedIdx ?? -1;
-  const detailId = opts?.detailId ?? null;
-  const projectIdx = opts?.projectIdx ?? 0;
-  const projectFocusKey = opts?.projectFocusKey ?? null;
-  const filterText = opts?.filterText ?? "";
-  const errorMsg = opts?.errorMsg;
-  const stats = opts?.stats ?? computeStats(sessions);
-  const filterActive = filterText.length > 0;
-
-  // Apply filter
-  let shown = sessions;
-  if (filterActive) {
-    const q = filterText.toLowerCase();
-    shown = sessions.filter((s: any) =>
-      extractProject(s).toLowerCase().includes(q) ||
-      sessionDisplayName(s).toLowerCase().includes(q) ||
-      (s.task_name || "").toLowerCase().includes(q) ||
-      (s.session_type || "").toLowerCase().includes(q)
-    );
-  }
-  const shownGroups = groupByProject(shown);
-  const projectKeys = [...shownGroups.keys()];
-  const projectCursorKey = opts?.projectCursorKey ?? projectKeys[Math.max(0, Math.min(projectIdx, projectKeys.length - 1))] ?? null;
-  const focusedSessions = projectFocusKey ? shownGroups.get(projectFocusKey) || [] : shown;
-  const selectedSession = projectFocusKey ? (focusedSessions[sel] || focusedSessions[0] || null) : null;
-  const detailSession = detailId
-    ? sessions.find((s: any) => s.session_id === detailId) || selectedSession
-    : selectedSession;
-
-  const totalCols = process.stdout.columns || 80;
-  const termRows = process.stdout.rows || 24;
-  const budget = layoutBudget(totalCols, termRows);
-  const { desktop, totalW, bodyRows } = budget;
-
-  // Tiny terminal — one-liner
-  if (totalW < 40 || termRows < 10) {
-    process.stdout.write(`${_TTY ? "\x1b[H" : ""}${_B}SessionBar${_D}  ${stats.total}s  ${stats.working}w${_TTY ? "\x1b[K\n\x1b[J" : "\n"}`);
-    return;
-  }
-
-  const write = _TTY
-    ? (s: string) => process.stdout.write(`${s}\x1b[K\n`)
-    : (s: string) => process.stdout.write(`${s}\n`);
-  if (_TTY) process.stdout.write("\x1b[H");
-
-  // ── Aggregate stats ──
-  const { working, errored, blocked, idle, groups } = stats;
-
-  // ── Header (2 rows, compact) ──
-  let title = "  ";
-  const name = "SessionBar";
-  for (let i = 0; i < name.length; i++) title += `${RAINBOW[i % RAINBOW.length]}${_B}${name[i]}${_D}`;
-  if (desktop) {
-    // Right-align server info on the title row to save space
-    const rightInfo = `${_GN}●${_D} online ${_K}:${PORT}${_D}`;
-    const titleVis = stripAnsi(title);
-    const rightVis = stripAnsi(rightInfo);
-    const pad = Math.max(1, totalW - titleVis - rightVis + 1);
-    write(title + " ".repeat(pad) + rightInfo);
-  } else {
-    write(title);
-  }
-
-  // Stats bar
-  let statusBar = `  ${sessions.length} session${sessions.length !== 1 ? "s" : ""}`;
-  if (working > 0) statusBar += `  ${_BL}${working} working${_D}`;
-  if (errored > 0) statusBar += `  ${_RD}${errored} error${_D}`;
-  if (blocked > 0) statusBar += `  ${_YL}${blocked} blocked${_D}`;
-  if (idle > 0) statusBar += `  ${_K}${idle} idle${_D}`;
-  if (groups.size > 1) statusBar += `  ${_K}·${_D} ${groups.size} projects`;
-  write(statusBar);
-
-  if (desktop) {
-    // Desktop hierarchy: Projects -> Sessions -> Details.
-    let printed = 0;
-    const printLines = (lines: string[]) => {
-      for (const line of lines) write(line);
-      printed += lines.length;
-    };
-    const gap = () => {
-      if (printed < bodyRows) {
-        write("");
-        printed++;
-      }
-    };
-
-    const projectPanelRows = Math.max(4, Math.min(bodyRows >= 28 ? 9 : 7, bodyRows - 7));
-    printLines(renderProjectsPanel(shownGroups, projectCursorKey, projectFocusKey, totalW, projectPanelRows));
-    if (bodyRows - printed >= 6) gap();
-
-    const selectedProjectKey = projectFocusKey || projectCursorKey;
-    const projectSessions = selectedProjectKey ? shownGroups.get(selectedProjectKey) || [] : shown;
-    const sessionTitle = projectSessions[0]
-      ? `Sessions / ${projectLabel(projectSessions[0])}`
-      : "Sessions";
-    const lowerRows = Math.max(4, bodyRows - printed);
-    const detailsW = Math.max(34, Math.floor((totalW - 1) * 0.34));
-    const sessionsW = totalW - detailsW - 1;
-    const blocks = [
-      renderSessionsPanel(shown, projectSessions, projectFocusKey ? sel : -1, projectFocusKey ? detailSession : null, frame, sessionsW, lowerRows, sessionTitle, false),
-      renderDetailsPanel(projectSessions, shown, projectFocusKey ? detailSession : null, frame, detailsW, lowerRows, Boolean(projectFocusKey)),
-    ];
-    printLines(composeColumns(blocks));
-
-    for (let i = printed; i < bodyRows; i++) write("");
-  } else {
-    // ═══════════════════════════════════════════════════
-    // NARROW: single-column layout (< 100 cols)
-    // ═══════════════════════════════════════════════════
-
-	    const listSessionsN = focusedSessions;
-	    const selectedSessionN = projectFocusKey ? detailSession : null;
-	    const detailBody = 8;
-	    const showSummaryN = !projectFocusKey && bodyRows >= 12;
-	    const detailRows = (selectedSessionN || showSummaryN) && bodyRows >= 12
-	      ? Math.min(detailBody, Math.floor(bodyRows * 0.42))
-	      : 0;
-    const sessionsBody = bodyRows - detailRows - (detailRows > 0 ? 1 : 0);
-
-	    write(panelTop(
-	      projectFocusKey && listSessionsN[0]
-	        ? `Sessions / ${projectLabel(listSessionsN[0])}`
-	        : shown.length !== sessions.length
-	          ? `All Sessions (${shown.length}/${sessions.length})`
-	          : "All Sessions",
-	      totalW
-	    ));
-
-	    const listRows = Math.max(1, sessionsBody - 2); // minus panel header + panel bot
-	    const useGroupsN = !projectFocusKey && sessions.length > 3 && groupByProject(shown).size > 1;
-	    const showTypeN = totalW >= 70;
-	    const showTaskFullN = totalW >= 45;
-
-    if (useGroupsN) {
-	      const grp = groupByProject(shown);
-	      let rowIdx = 0;
-	      let fIdx = 0;
-	      const lines: string[] = [];
-
-	      for (const [proj, ss] of grp) {
-	        if (rowIdx >= listRows) break;
-	        const projectMarker = proj === projectFocusKey ? `${_BL}●${_D}` : proj === projectCursorKey ? `${_BL}>${_D}` : " ";
-	        lines.push(panelRow(
-	          `${projectMarker} ${_B}${projectLabel(ss[0])}${_D} ${_K}─ ${ss.length} session${ss.length !== 1 ? "s" : ""}${_D}`,
-	          totalW
-	        ));
-	        rowIdx++;
-	        for (const s of ss) {
-	          if (rowIdx >= listRows) break;
-	          const marker = projectFocusKey && fIdx === sel ? `${_B}${_BL}>${_D}` : " ";
-	          lines.push(sessionRow(s, frame, totalW, fIdx, marker, showTypeN, showTaskFullN));
-          rowIdx++;
-          fIdx++;
-        }
-      }
-      const overflow = fIdx > 0 && rowIdx >= listRows ? shown.length - fIdx : 0;
-      for (const l of lines) write(l);
-      if (overflow > 0) write(panelRow(`${_K}... and ${overflow} more${_D}`, totalW));
-      for (let i = lines.length + (overflow > 0 ? 1 : 0); i < listRows; i++) write(panelRow("", totalW));
-	    } else {
-	      const overflow = listSessionsN.length - listRows;
-	      const showN = Math.min(listSessionsN.length, listRows - (overflow > 0 ? 1 : 0));
-	      for (let i = 0; i < showN; i++) {
-	        const s = listSessionsN[i];
-	        if (!s) continue;
-	        const marker = projectFocusKey && i === sel ? `${_B}${_BL}>${_D}` : " ";
-	        write(sessionRow(s, frame, totalW, i, marker, showTypeN, showTaskFullN));
-	      }
-      if (overflow > 0) write(panelRow(`${_K}... and ${overflow} more${_D}`, totalW));
-      for (let i = showN + (overflow > 0 ? 1 : 0); i < listRows; i++) write(panelRow("", totalW));
-    }
-
-    write(panelBot(totalW));
-
-    // ── Detail panel (below sessions in narrow mode) ──
-    if ((selectedSessionN || showSummaryN) && detailRows > 0) {
-      write(panelRow("", totalW));
-      const detailTitle = selectedSessionN ? (detailId ? "Detail" : "Inspector") : "Details / Sessions";
-      write(panelTop(detailTitle, totalW));
-      const detailContent = selectedSessionN
-        ? renderDetailLines(selectedSessionN, frame, totalW)
-        : renderSessionSummaryLines(shown, totalW);
-      for (const l of detailContent.slice(0, detailRows - 1)) write(panelRow(l, totalW));
-      for (let i = Math.min(detailContent.length, detailRows - 1); i < detailRows - 1; i++) write(panelRow("", totalW));
-      write(panelBot(totalW));
-    }
-  }
-
-  // ── Footer ──
-  write(`\x1b[K`);
-  if (errorMsg) {
-    write(`  ${_RD}⚠ ${errorMsg}${_D}`);
-  } else if (filterActive) {
-    write(`  ${_B}/${filterText}_${_D}  ${_K}${shown.length}/${sessions.length} sessions  (Esc clear)${_D}`);
-  } else {
-    // Adaptive footer using totalW for threshold
-    if (totalW >= 100) {
-	      const nav = projectFocusKey
-	        ? `${_K}↑↓${_D} session  ${_K}Enter${_D} detail  ${_K}a/⌫${_D} all projects`
-	        : `${_K}↑↓${_D} project  ${_K}Enter${_D} open project`;
-	      write(`  ${nav}  ${_K}r${_D} refresh  ${_K}/${_D} filter  ${_K}w${_D} web  ${_K}q${_D} quit`);
-    } else if (totalW >= 70) {
-	      const nav = projectFocusKey ? `${_K}↑↓${_D} session  ${_K}a${_D} all` : `${_K}↑↓${_D} project  ${_K}Enter${_D} open`;
-	      write(`  ${nav}  ${_K}/${_D} filter  ${_K}r${_D} refresh  ${_K}q${_D} quit`);
-    } else {
-	      write(`  ${_K}↑↓${_D} ${projectFocusKey ? "session" : "project"}  ${_K}q${_D} quit`);
-    }
-  }
-  if (_TTY) process.stdout.write("\x1b[J");
-
-
-}
-
-function sessionRow(
-  s: any,
-  frame: number,
-  w: number,
-  idx: number,
-  marker: string,
-  showType: boolean,
-  showTaskFull: boolean
-): string {
-  const style = S[s.status as keyof typeof S] || S.idle;
-  const active = s.status === "working";
-  const sd = active
-    ? `${style.c}${PULSE(frame + idx)}${_D}`
-    : `${style.c}${style.icon}${_D}`;
-  const proj = extractProject(s);
-  const task = s.task_name || "";
-  const stChar = active ? "R" : s.status === "idle" ? "I" : s.status === "blocked" ? "A" : "E";
-  const stColor = active ? `${_BL}` : s.status === "idle" ? `${_K}` : s.status === "blocked" ? `${_YL}` : `${_RD}`;
-
-  // Build row from columns based on width
-  const projCol = proj.slice(0, 16);
-  const projPadded = projCol.length < 16 ? projCol + " ".repeat(16 - projCol.length) : projCol;
-
-  let content: string;
-  if (showType) {
-    // Wide: icon+status, project(16), task(fill), status_char, age, type
-    const typeCol = (s.session_type || "?").slice(0, 12);
-    const taskMax = Math.max(4, w - 22 - 16 - 4 - 14);
-    const taskCol = task.length > taskMax ? task.slice(0, taskMax - 1) + "…" : task;
-    const taskPadded = taskCol.length < taskMax ? taskCol + " ".repeat(taskMax - taskCol.length) : taskCol;
-    content = `${marker}${sd} ${projPadded} ${taskPadded} ${stColor}${stChar}${_D} ${_K}${age(s.timestamp || Date.now())}${_D}  ${_K}${typeCol}${_D}`;
-  } else if (showTaskFull) {
-    // Medium: icon+status, project(16), task(fill), status_char, age
-    const taskMax = Math.max(4, w - 22 - 16 - 4);
-    const taskCol = task.length > taskMax ? task.slice(0, taskMax - 1) + "…" : task;
-    const taskPadded = taskCol.length < taskMax ? taskCol + " ".repeat(taskMax - taskCol.length) : taskCol;
-    content = `${marker}${sd} ${projPadded} ${taskPadded} ${stColor}${stChar}${_D} ${_K}${age(s.timestamp || Date.now())}${_D}`;
-  } else {
-    // Narrow: icon+status, project(12), task (short), age
-    const projShort = proj.slice(0, 12);
-    const projShortPadded = projShort.length < 12 ? projShort + " ".repeat(12 - projShort.length) : projShort;
-    const taskMax = Math.max(3, w - 22 - 12 - 4);
-    const taskCol = task.length > taskMax ? task.slice(0, taskMax - 1) + "…" : task;
-    content = `${marker}${sd} ${projShortPadded} ${_K}·${_D} ${taskCol} ${stColor}${stChar}${_D} ${_K}${age(s.timestamp || Date.now())}${_D}`;
-  }
-
-  return panelRow(content, w);
-}
-
-// One-shot render entry for non-interactive status output.
-function render(sessions: any[], frame: number, errorMsg?: string) {
-  renderFrame(sessions, frame, { errorMsg });
 }
 
 // ── watch() — full-screen interactive TUI ──
@@ -1183,7 +440,7 @@ function render(sessions: any[], frame: number, errorMsg?: string) {
 
 async function startSSE(signal: AbortSignal): Promise<ReadableStreamDefaultReader<string> | null> {
   try {
-    const resp = await fetch(`${apiBase()}/sessions/stream`, { signal });
+    const resp = await relayFetch(`${apiBase()}/sessions/stream`, { signal });
     if (!resp.ok || !resp.body) return null;
     const reader = resp.body
       .pipeThrough(new TextDecoderStream())
@@ -1192,14 +449,19 @@ async function startSSE(signal: AbortSignal): Promise<ReadableStreamDefaultReade
   } catch { return null; }
 }
 
-async function watch() {
+function monitorViewArg(): MonitorView {
+  const view = argValue("--view");
+  return view === "agents" || view === "providers" ? view : "sessions";
+}
+
+async function watch(initialView: MonitorView = monitorViewArg()) {
   if (!process.stdout.isTTY) {
     const result = await fetchSessions();
     render(result.sessions, 0, result.error);
     return;
   }
 
-  if (await relaunchMonitorWithBun()) return;
+  if (await relaunchMonitorWithBun(initialView)) return;
 
   // SSE-aware fetch wrapper: toggles between REST polling and SSE push
   let sse = false;
@@ -1230,8 +492,13 @@ async function watch() {
     await runOpenTuiMonitor({
       fetchSessions: sseToggleFetch,
       fetchSystem,
+      initialView,
+      agentRequest: (input, init) => {
+        const path = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return relayFetch(new URL(path, apiBase()).href, init);
+      },
       fetchProviders: async () => {
-        const resp = await fetch(`${apiBase()}/providers/live`);
+        const resp = await relayFetch(`${apiBase()}/providers/live`);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         if (data.initializing) throw new Error("Initializing...");
@@ -1276,6 +543,7 @@ async function setup() {
     return;
   }
   console.log("SessionBar service starts automatically when the app opens.\nSetup configures supported local agent hooks: Claude Code, Codex, Gemini CLI, and Copilot.\n");
+  console.log("Local focus uses this project's agent config files; global focus uses home agent config files.");
   const focus = await promptSetupFocus();
   if (focus === "cancel") return;
   await setupHooks(focus === "global");
@@ -1310,19 +578,13 @@ function harnesses() {
   renderHarnessAvailability(detectHarnessAvailability());
 }
 
-// ---- Terminal UI theme wrappers (bind cli.ts ANSI constants) ----
-
-function panelTop(title: string, w: number, right?: string): string {
-  return _panelTop(title, w, _K, _D, right);
+function argValue(name: string): string | undefined {
+  const prefix = `${name}=`;
+  const inline = args.find(arg => arg.startsWith(prefix));
+  if (inline) return inline.slice(prefix.length);
+  const index = args.indexOf(name);
+  return index >= 0 ? args[index + 1] : undefined;
 }
-function panelBot(w: number): string {
-  return _panelBot(w, _K, _D);
-}
-function panelRow(content: string, w: number): string {
-  return _panelRow(content, w, _K, _D);
-}
-
-const RAINBOW = createRainbow(_COLOR);
 
 // ---- Landing menu wiring -----------------------------------------------
 
@@ -1330,6 +592,7 @@ function buildLandingDeps(): LandingMenuDeps {
   return {
     tty: _TTY,
     colorEnabled: _COLOR,
+    animateLogo: !noAnim && process.env.SESSIONBAR_ANIMATE !== "0",
     formatAge: (ts) => age(ts),
     agentName,
     projectLabel,
@@ -1340,6 +603,10 @@ function buildLandingDeps(): LandingMenuDeps {
     fetchWebStatus,
     pidAlive,
     launchMonitor: watch,
+    launchCommand: async command => {
+      if (command === "harnesses") harnesses();
+      await ask("\nPress enter...");
+    },
     launchSetup: async () => {
       console.log("\nSessionBar service starts automatically when the app opens.");
       console.log("Setup chooses local or global reporting for supported harnesses.\n");
@@ -1373,7 +640,7 @@ function buildLandingDeps(): LandingMenuDeps {
         const next = updateSettings(HOME, { autoConsumeResetCards: !current.autoConsumeResetCards });
         console.log(`\nAuto-consume reset cards: ${next.autoConsumeResetCards ? "ON" : "OFF"}`);
         try {
-          await fetch(`${apiBase()}/providers/refresh`, { method: "POST" });
+          await relayFetch(`${apiBase()}/providers/refresh`, { method: "POST" });
         } catch { /* the next provider poll will pick up the setting */ }
         await ask("Press enter...");
       }
@@ -1391,7 +658,7 @@ async function status() {
   }
   if (result.error && !pidAlive()) {
     console.log("Server not running. Starting...");
-    if (!startServer() || !(await waitForReady())) {
+    if (!await startServer() || !(await waitForReady())) {
       console.error("Server failed to start.");
       return;
     }
@@ -1415,10 +682,10 @@ function pruneMaxAgeMs(): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 300_000;
 }
 
-function pruneMarkers() {
+async function pruneMarkers(): Promise<void> {
   ensureDir();
   if (pidAlive()) {
-    stopServer(true);
+    if (!await stopServer()) { process.exitCode = 1; return; }
   }
   const maxAgeMs = pruneMaxAgeMs();
   const result = pruneSessionMarkerFiles(SESSION_ID_DIR, { maxAgeMs });
@@ -1430,6 +697,16 @@ function pruneMarkers() {
 
 async function main() {
   switch (cmd) {
+    case "trace": {
+      const nativeArgs = args.slice(2);
+      if (args[1] !== "codex" || !isCodexTraceInvocation(nativeArgs)) {
+        console.error("Usage: sessionbar trace codex exec --json [Codex arguments]\n       sessionbar trace codex app-server --listen stdio://");
+        process.exitCode = 2; break;
+      }
+      process.exitCode = await traceCodex({ binary: process.env.SESSIONBAR_CODEX_BIN || process.env.CODEX_APP_RUNTIME_CLI_PATH || "codex", args: nativeArgs,
+        cwd: process.cwd(), eventsRoot: process.env.SESSIONBAR_CODEX_EVENTS_DIR || join(HOME, "codex-events") });
+      break;
+    }
     case "web":
       useWeb = true;
       ensureDir();
@@ -1441,7 +718,7 @@ async function main() {
       await injectHooksOnServerReady(true);
       console.log(`SessionBar server started on :${PORT}`);
       console.log(`Dashboard: ${apiBase()}`);
-      spawn("open", [apiBase()], { detached: true, stdio: "ignore" }).unref();
+      openBrowser(apiBase());
       break;
     case "start":
       if (await waitForReady(1)) { console.log("Already running."); break; }
@@ -1454,10 +731,18 @@ async function main() {
       if (useWeb) console.log(`Dashboard: ${apiBase()}`);
       break;
     case "stop":
-      stopServer();
+      if (!await stopServer()) process.exitCode = 1;
+      break;
+    case "restart":
+      if (!await restartServerProcess() || !await startServer() || !await waitForReady()) {
+        console.error("Server failed to restart.");
+        process.exitCode = 1;
+        break;
+      }
+      console.log(`SessionBar server restarted on :${PORT}`);
       break;
     case "prune":
-      pruneMarkers();
+      await pruneMarkers();
       break;
     case "setup":
       await setup();
@@ -1471,13 +756,18 @@ async function main() {
       break;
     case "watch":
     case "monitor":
+    case "providers":
+    case "agents":
       if (!await ensureAppRunning()) {
         console.error("Server failed to start.");
         process.exitCode = 1;
         break;
       }
-      await watch();
-      releaseAppHooks(true, true);
+      try {
+        await watch(cmd === "providers" || cmd === "agents" ? cmd : monitorViewArg());
+      } finally {
+        await releaseAppHooks(true, true);
+      }
       break;
     default:
       await runLandingMenu(buildLandingDeps());

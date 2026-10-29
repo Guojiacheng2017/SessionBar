@@ -9,7 +9,11 @@
 
 import { stripAnsi, truncateAnsi } from "../tui/displayUtils.js";
 import { terminalAnsiTheme } from "../tui/terminalTheme.js";
-import { playWordmarkIntro, terminalWordmark } from "../tui/wordmark.js";
+import { playWordmarkIntro, startWordmarkLoop, terminalWordmark } from "../tui/wordmark.js";
+import { createParticleWordmark } from "../tui/particleWordmark.js";
+import { deleteKittyImage, encodeKittyImage, probeTerminalGraphics, TerminalGraphicsReplies } from "../tui/terminalGraphics.js";
+import type { TerminalGraphicsInfo } from "../tui/terminalGraphics.js";
+import { LANDING_COMMANDS, LandingCommandInput, resolveLandingCommand, type LandingCommand } from "./landingCommand.js";
 
 // ---- ANSI helpers (self-contained — no external color constants) ----------
 
@@ -140,14 +144,15 @@ export interface LandingMenuDeps {
   pidAlive: () => boolean;
 
   // Navigation actions — each callback handles its own terminal suspend/resume
-  launchMonitor: () => Promise<void>;
+  launchMonitor: (view?: "sessions" | "providers" | "agents") => Promise<void>;
   launchSetup: () => Promise<void>;
   launchStatus: (sessions: any[]) => Promise<void>;
   launchSettings: () => Promise<void>;
   launchWeb: () => Promise<void>;
+  launchCommand?: (command: LandingCommand) => Promise<void>;
 
   // Cleanup
-  teardownHooks: (global: boolean, quiet?: boolean) => void | Promise<void>;
+  teardownHooks: (global: boolean, quiet?: boolean) => Promise<void>;
 
   // Config
   getPort: () => number;
@@ -190,7 +195,35 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
   let menuScreen = false;
   let menuFrameLines = 0;
   let logoIntroPlayed = false;
+  let graphicsProbed = false;
+  let graphicsInfo: TerminalGraphicsInfo | undefined;
+  let imageVisible = false;
+  let logoLoopFrame = 0;
+  let startWaitingLogoLoop: (() => () => void) | undefined;
+  let stopLogoLoop = () => {};
+  const terminalReplies = new TerminalGraphicsReplies(undefined, process.stdout.columns || 80, process.stdout.rows || 24);
   const menuKeyQueue: string[] = [];
+  const commandInput = new LandingCommandInput();
+  let commandMessage = "";
+  let paintCommandBox: (() => void) | undefined;
+  let wakeMenuInput: (() => void) | undefined;
+  let escapeTimer: ReturnType<typeof setTimeout> | undefined;
+  const queueMenuInput = (text: string) => {
+    menuKeyQueue.push(...commandInput.feed(text));
+    wakeMenuInput?.();
+  };
+  const readMenuInput = (buf: Buffer) => {
+    if (escapeTimer) clearTimeout(escapeTimer);
+    queueMenuInput(terminalReplies.feed(buf.toString()));
+    if (commandInput.active && buf.at(-1) === 27) {
+      escapeTimer = setTimeout(() => queueMenuInput(terminalReplies.flushBareEscape()), 40);
+    }
+  };
+  const clearLogoImage = () => {
+    stopLogoLoop();
+    if (imageVisible) process.stdout.write(deleteKittyImage(terminalReplies.imageId));
+    imageVisible = false;
+  };
 
   // ---- Terminal control --------------------------------------------------
   const setMenuRaw = (enabled: boolean) => {
@@ -200,6 +233,7 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
       process.stdin.resume();
       menuRaw = true;
     } else if (!enabled && menuRaw) {
+      if (escapeTimer) clearTimeout(escapeTimer);
       try { process.stdin.setRawMode(false); } catch { /* */ }
       process.stdin.pause();
       menuRaw = false;
@@ -212,6 +246,7 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
       process.stdout.write("\x1b[?25l");
       menuScreen = true;
     } else if (!enabled && menuScreen) {
+      clearLogoImage();
       process.stdout.write("\x1b[?25h");
       menuScreen = false;
       menuFrameLines = 0;
@@ -219,6 +254,7 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
   };
 
   const clearMenuFrame = () => {
+    clearLogoImage();
     if (!tty || menuFrameLines <= 0) return;
     process.stdout.write(`\x1b[${menuFrameLines}F\x1b[J`);
     menuFrameLines = 0;
@@ -254,6 +290,8 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     setMenuScreen(true);
     const port = getPort();
 
+    clearLogoImage();
+    startWaitingLogoLoop = undefined;
     if (tty && menuFrameLines > 0) process.stdout.write(`\x1b[${menuFrameLines}F\x1b[J`);
     else console.log("");
     let printed = tty && menuFrameLines > 0 ? 0 : 1;
@@ -275,15 +313,28 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     ].filter(Boolean).join(` ${K}|${D} `);
 
     const w = Math.min((process.stdout.columns || 80) - 4, 76);
-    const sessionPanelRows = menuSessions.length > 0
-      ? Math.min(menuSessions.length, 4) + 3 + Number(menuSessions.length > 4) : 0;
-    const logoFits = (process.stdout.rows || 24) >= 14 + sessionPanelRows + Number(Boolean(menuError)) + logoLines(w, RAINBOW, D).length;
+    let previewCount = Math.min(menuSessions.length, 4);
+    const panelRows = (count: number) => count > 0 ? count + 3 + Number(menuSessions.length > count) : 0;
+    while (previewCount > 0 && 17 + panelRows(previewCount) + Number(Boolean(menuError))
+      + logoLines(Math.min(w, 64), RAINBOW, D).length > (process.stdout.rows || 24)) previewCount--;
+    const sessionPanelRows = panelRows(previewCount);
+    const logoFits = (process.stdout.rows || 24) >= 17 + sessionPanelRows + Number(Boolean(menuError)) + logoLines(w, RAINBOW, D).length;
     const logoWidth = logoFits ? w : Math.min(w, 64);
+    if (!graphicsProbed && logoWidth >= 65 && tty && process.stdin.isTTY && colorEnabled
+      && process.env.TERM !== "dumb" && !process.env.TMUX && !process.env.STY) {
+      graphicsProbed = true;
+      setMenuRaw(true);
+      graphicsInfo = await probeTerminalGraphics(terminalReplies, process.stdin, process.stdout, queueMenuInput);
+    }
     const animateIntro = !logoIntroPlayed && logoWidth >= 65 && tty && process.stdin.isTTY
-      && colorEnabled && deps.animateLogo !== false;
+      && colorEnabled && deps.animateLogo !== false && menuKeyQueue.length === 0;
     logoIntroPlayed = true;
     const logoStartLine = printed;
-    for (const line of logoLines(logoWidth, RAINBOW, D, animateIntro ? 0 : 1)) out(line);
+    const logo = logoLines(logoWidth, RAINBOW, D, animateIntro ? 0 : 1);
+    const imageRows = logo.length - 4;
+    const particles = graphicsInfo && logoWidth >= 65
+      ? createParticleWordmark(logoWidth - 4, imageRows, graphicsInfo.cell) : undefined;
+    for (let row = 0; row < logo.length; row++) out(particles && row > 0 && row <= imageRows ? "" : logo[row]);
 
     const dot = menuServerRunning ? `${GN}●${D}` : `${K}○${D}`;
     out(`${panelTop("Status", w, K, D)}`);
@@ -293,17 +344,17 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     if (menuError) out(panelRow(`${RD}${menuError}${D}`, w, K, D));
     out(panelBot(w, K, D));
 
-    if (menuSessions.length > 0) {
+    if (previewCount > 0) {
       out("");
       out(panelTop("Sessions", w, K, D));
-      for (const s of menuSessions.slice(0, 4)) {
+      for (const s of menuSessions.slice(0, previewCount)) {
         const style = statusStyle(s.status);
         const sd = `${style.c}${style.icon}${D}`;
         const ai = `${agentName(s.session_type || "?", 12)}`;
         const line = `${sd} ${ai.padEnd(14)} ${projectLabel(s).padEnd(16)} ${statusShort(s.status).padEnd(5)} ${formatAge(s.timestamp || Date.now()).padStart(4)}`;
         out(panelRow(line, w, K, D));
       }
-      if (menuSessions.length > 4) out(panelRow(`${K}+${menuSessions.length - 4} more sessions${D}`, w, K, D));
+      if (menuSessions.length > previewCount) out(panelRow(`${K}+${menuSessions.length - previewCount} more sessions${D}`, w, K, D));
       out(panelBot(w, K, D));
     }
 
@@ -325,17 +376,52 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     const webState = menuWebRunning ? `${GN}online${D}` : `${K}offline${D}`;
     const webHint = menuWebRunning ? `http://127.0.0.1:${port}` : "start with: sessionbar web";
     out(panelRow(`  ${K}Web dashboard${D}  ${webDot} ${webState}  ${K}${webHint}${D}`, w, K, D));
-    out(panelRow(`${K}↑↓/jk select  Enter run  W web  R refresh  Q quit${D}`, w, K, D));
+    out(panelRow(`${K}↑↓/jk select  Enter run  : command  W web  Q quit${D}`, w, K, D));
     out(panelBot(w, K, D));
+    const commandStartLine = printed;
+    const commandLines = () => [
+      panelTop(commandMessage ? `Command / ${commandMessage}` : "Command", w, commandInput.active ? BL : K, D),
+      panelRow(commandInput.display(Math.max(1, w - 8)), w, commandInput.active ? BL : K, D),
+      panelBot(w, commandInput.active ? BL : K, D),
+    ];
+    for (const line of commandLines()) out(line);
     out("");
     if (tty) process.stdout.write("\x1b[J");
     menuFrameLines = printed;
+    paintCommandBox = () => {
+      if (!tty) return;
+      process.stdout.write(`\x1b[s\x1b[${printed - commandStartLine}F${commandLines().map(line => `\x1b[2K${line}`).join("\n")}\x1b[u`);
+    };
+    const writeParticleLogo = (frame: string) => {
+      process.stdout.write(`\x1b[s\x1b[${printed - logoStartLine - 1}F\x1b[2C${frame}\x1b[u`);
+      imageVisible = true;
+    };
+    const loopFrames = new Map<number, string>();
+    const drawLoopFrame = (frame: number) => {
+      if (!particles || !graphicsInfo) return;
+      let encoded = loopFrames.get(frame);
+      if (!encoded) {
+        encoded = encodeKittyImage(particles.renderLoop(frame / 48, graphicsInfo.light), terminalReplies.imageId, logoWidth - 4, imageRows);
+        loopFrames.set(frame, encoded);
+      }
+      writeParticleLogo(encoded);
+    };
+    const drawParticleLogo = (progress: number) => {
+      if (!particles || !graphicsInfo) return;
+      const frame = encodeKittyImage(particles.render(progress, graphicsInfo.light), terminalReplies.imageId, logoWidth - 4, imageRows);
+      writeParticleLogo(frame);
+    };
+    if (particles) {
+      if (!animateIntro && deps.animateLogo !== false) drawLoopFrame(logoLoopFrame);
+      else drawParticleLogo(animateIntro ? 0 : 1);
+    }
     if (animateIntro) {
       setMenuRaw(true);
-      const onIntroKey = (buf: Buffer) => menuKeyQueue.push(...parseLandingKeys(buf.toString()));
+      const onIntroKey = readMenuInput;
       process.stdin.on("data", onIntroKey);
       try {
         await playWordmarkIntro(progress => {
+          if (particles) { drawParticleLogo(progress); return; }
           const lines = logoLines(logoWidth, RAINBOW, D, progress);
           process.stdout.write(`\x1b[s\x1b[${printed - logoStartLine}F${lines.map(line => `\x1b[2K${line}`).join("\n")}\x1b[u`);
         }, () => menuKeyQueue.length > 0 || !menuRunning);
@@ -343,20 +429,35 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
         process.stdin.off("data", onIntroKey);
       }
     }
+    if (particles && deps.animateLogo !== false) {
+      startWaitingLogoLoop = () => startWordmarkLoop(frame => {
+        logoLoopFrame = frame;
+        drawLoopFrame(frame);
+      }, logoLoopFrame);
+    }
   };
 
   // ---- Key input ---------------------------------------------------------
   const readMenuKey = async (): Promise<string> => {
     const queued = menuKeyQueue.shift();
     if (queued) return queued;
-    if (!process.stdin.isTTY) return (await ask("> ")).trim().toLowerCase();
+    if (!process.stdin.isTTY) return `command:${await ask("> ")}`;
     setMenuRaw(true);
     return new Promise(resolve => {
-      const onData = (buf: Buffer) => {
-        menuKeyQueue.push(...parseLandingKeys(buf.toString()));
-        resolve(menuKeyQueue.shift() || "");
+      stopLogoLoop = startWaitingLogoLoop?.() || (() => {});
+      const finish = () => {
+        const key = menuKeyQueue.shift();
+        if (!key) return;
+        stopLogoLoop();
+        process.stdin.off("data", onData);
+        wakeMenuInput = undefined;
+        resolve(key);
       };
-      process.stdin.once("data", onData);
+      const onData = (buf: Buffer) => {
+        readMenuInput(buf);
+      };
+      wakeMenuInput = finish;
+      process.stdin.on("data", onData);
     });
   };
 
@@ -395,6 +496,30 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
     }
   };
 
+  const runCommand = async (value: string) => {
+    const command = resolveLandingCommand(value);
+    commandMessage = "";
+    if (!command) { commandMessage = "Unknown command"; paintCommandBox?.(); return; }
+    if (command === "quit") { menuRunning = false; return; }
+    if (command === "help") { commandMessage = LANDING_COMMANDS.join(" "); paintCommandBox?.(); return; }
+    if (command === "refresh") { await refreshSessions(); needsRender = true; return; }
+    if (command === "monitor" || command === "providers" || command === "agents") {
+      setMenuRaw(false);
+      suspendLandingForAction();
+      await launchMonitor(command === "monitor" ? "sessions" : command);
+      needsRender = true;
+      return;
+    }
+    const action = { setup: "2", status: "3", settings: "4", web: "w" }[command as "setup" | "status" | "settings" | "web"];
+    if (action) { await runAction(action); return; }
+    if (deps.launchCommand) {
+      setMenuRaw(false);
+      suspendLandingForAction();
+      await deps.launchCommand(command);
+      needsRender = true;
+    }
+  };
+
   // ---- Event loop --------------------------------------------------------
   await ensureAppRunning(true);
   await refreshSessions(); // initial data load
@@ -407,6 +532,8 @@ export async function runLandingMenu(deps: LandingMenuDeps): Promise<void> {
 
     const c = await readMenuKey();
     if (!c) continue;
+    if (c === "input") { commandMessage = ""; paintCommandBox?.(); continue; }
+    if (c.startsWith("command:")) { await runCommand(c.slice(8)); continue; }
     if (c === "q" || c === "quit") { menuRunning = false; break; }
     if (c === "up") {
       selectedAction = (selectedAction + landingActions().length - 1) % landingActions().length;

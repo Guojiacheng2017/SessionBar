@@ -33,10 +33,24 @@ function brandInk(x: number, y: number, progress: number): string {
   return `\x1b[38;2;${rgb.join(";")}m`;
 }
 
-function pixel(x: number, y: number): boolean {
+function sourcePixel(x: number, y: number): boolean {
   if (x < 0 || x >= WORDMARK_MASK_WIDTH || y < 0 || y >= WORDMARK_MASK_HEIGHT) return false;
   const index = y * WORDMARK_MASK_WIDTH + x;
   return Boolean(mask[index >> 3]! & (128 >> (index & 7)));
+}
+
+// Expand the ink by one source pixel, once. This gives the dots weight even
+// when the terminal's fallback font has no bold Braille glyphs.
+const weightedMask = Uint8Array.from({ length: WORDMARK_MASK_WIDTH * WORDMARK_MASK_HEIGHT }, (_, index) => {
+  const x = index % WORDMARK_MASK_WIDTH;
+  const y = Math.floor(index / WORDMARK_MASK_WIDTH);
+  return Number(sourcePixel(x, y) || sourcePixel(x - 1, y) || sourcePixel(x + 1, y)
+    || sourcePixel(x, y - 1) || sourcePixel(x, y + 1));
+});
+
+function pixel(x: number, y: number): boolean {
+  if (x < 0 || x >= WORDMARK_MASK_WIDTH || y < 0 || y >= WORDMARK_MASK_HEIGHT) return false;
+  return Boolean(weightedMask[y * WORDMARK_MASK_WIDTH + x]);
 }
 
 export function terminalWordmark(width: number, rainbow: readonly string[], reset: string, progress = 1): string[] {
@@ -91,4 +105,20 @@ export async function playWordmarkIntro(
     render(frame / INTRO_FRAMES);
   }
   render(1);
+}
+
+// A slow 12-second ambient cycle. The caller owns cancellation when the menu
+// loses control of the terminal; no session or server polling is involved.
+export function startWordmarkLoop(render: (frame: number) => void, initialFrame = 0): () => void {
+  let frame = initialFrame;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const tick = () => {
+    if (stopped) return;
+    frame = (frame + 1) % 48;
+    render(frame);
+    if (!stopped) timer = setTimeout(tick, 250);
+  };
+  timer = setTimeout(tick, 250);
+  return () => { stopped = true; clearTimeout(timer); };
 }

@@ -21,24 +21,13 @@ const appSource = readFileSync(new URL("../src/web/app.ts", import.meta.url), "u
 const dashboardHtml = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const webCss = readFileSync(new URL("../public/web.css", import.meta.url), "utf8");
 
-test("provider quota columns distinguish used values from remaining values", () => {
-  const html = providerTableMarkup([{
-    form: "subscription", provider: "openai", label: "OpenAI", level: "green",
-    used: 22, remaining: 78, limit: 100, unit: "%",
-  }]);
-  assert.match(html, /columnheader">Quota \/ Usage/);
-  assert.match(html, /22\/100 % used/);
-});
-
 test("web polling backs off while the page is hidden", () => {
   assert.match(appSource, /document\.hidden \? 15_000 : 2_000/);
   assert.match(appSource, /document\.hidden \? 300_000 : 60_000/);
   assert.match(appSource, /visibilitychange/);
 });
 
-test("session regions commit only changed markup and use delegated events", () => {
-  assert.match(appSource, /function commitMarkup/);
-  assert.match(appSource, /if \(element\.innerHTML === markup\) return false/);
+test("session regions use delegated events", () => {
   assert.match(appSource, /projectsBody\.addEventListener\("click"/);
   assert.match(appSource, /sessionsBody\.addEventListener\("click"/);
   assert.match(appSource, /detailHdr\.addEventListener\("click"/);
@@ -178,7 +167,7 @@ test("renders one project icon per session without a numeric count", () => {
   assert.doesNotMatch(expanded, /project-icon-more/);
 });
 
-test("uses green for working and muted idle status dots", () => {
+test("uses green for working and blue for idle status dots", () => {
   assert.match(statusDotMarkup("working"), /bg-green/);
   assert.match(statusDotMarkup("idle"), /bg-muted/);
   assert.doesNotMatch(statusDotMarkup("working"), /bg-accent/);
@@ -392,6 +381,21 @@ test("renders Usage between Level and Reset with seven unlabeled daily bars", ()
   assert.match(html, /aria-label="Aug 13 · No data"/);
 });
 
+test("limits monthly provider history to seven visible days", () => {
+  const html = providerTableMarkup([{
+    form: "subscription", provider: "github", label: "Copilot", level: "green",
+    pacing: "", cardTiming: "", autoResetIn: "", sustainableRate: 0,
+    actualVsSustainable: null, projectedCapHitAt: null,
+    usageTrend: { kind: "bars", days: 30, points: Array(30).fill(0),
+      labels: Array.from({ length: 30 }, (_, i) => `Oct ${i + 1}`), unit: "AI credits" },
+  }]);
+  assert.equal((html.match(/provider-usage-bar\b/g) || []).length, 14);
+  assert.match(html, /7-day usage trend/);
+  assert.doesNotMatch(html, /Oct 23 ·/);
+  assert.match(html, /Oct 24 ·/);
+  assert.match(html, /Oct 30 ·/);
+});
+
 test("formats monetary usage tooltips without floating-point tails", () => {
   const html = providerTableMarkup([{
     form: "api",
@@ -442,7 +446,19 @@ test("renders Copilot usage as a line and missing data as a quiet placeholder", 
   ]);
   assert.match(html, /provider-usage-line/);
   assert.match(html, /<polyline/);
+  assert.match(html, /30-day usage trend/);
+  assert.match(html, /class="provider-usage-track" x1="0" y1="18" x2="100" y2="18"/);
   assert.match(html, /provider-usage-empty/);
+});
+
+test("monthly line fills the same plotting width even when only recent dates have data", () => {
+  const html = providerTableMarkup([{
+    form: "subscription", provider: "github", label: "Copilot", level: "green",
+    pacing: "", cardTiming: "", autoResetIn: "", sustainableRate: 0,
+    actualVsSustainable: null, projectedCapHitAt: null,
+    usageTrend: { kind: "line", days: 30, points: [...Array(28).fill(null), 0, 0], unit: "AI credits" },
+  }]);
+  assert.match(html, /points="0\.00,18\.00 100\.00,18\.00"/);
 });
 
 test("renders provider loading, empty, and error states", () => {

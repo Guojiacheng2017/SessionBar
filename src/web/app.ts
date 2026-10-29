@@ -1,7 +1,16 @@
 // SessionBar web dashboard — Tailwind + vanilla TS
+import { mountAppHeader } from "./appShell.js";
 import type { SessionPayload } from "../shared/types.js";
+import type { Snapshot } from "../shared/agentContract.js";
+import { AgentClient } from "./agentClient.js";
+import { installWorkflowCanvases, sessionFlowMarkup } from "./workflowViews.js";
+import { createMarkupCommitter } from "./markupCommitter.js";
+import { ExecutionClient } from "./executionClient.js";
+import { executionTraceMarkup, installExecutionViews } from "./executionViews.js";
+import { reportedWorkflowGraph } from "../shared/workflowGraph.js";
+import { agentProjectKey, UNASSIGNED_PROJECT_KEY, agentAvatarMarkup, agentRosterMarkup, agentTabsMarkup, agentDetailMarkup, projectAgentRoster, sessionAgentRoster, installAgentAvatarFallbacks, syncAgentAvatars, withoutAgentAvatarLoadState, type AgentTab } from "./agentViews.js";
 import type { PlanRow, ProviderUsageMode } from "../providers/planTypes.js";
-import { sessionDisplayName, sessionListColumns } from "../tui/displayUtils.js";
+import { sessionDisplayName, sessionListColumns, sessionServiceLabel } from "../tui/displayUtils.js";
 import {
   UI,
   countSessions,
@@ -37,7 +46,7 @@ declare global {
   interface Window { Splide?: SplideConstructor; }
 }
 
-const portEl   = document.getElementById("port")!;
+const appHeader = mountAppHeader("dashboard", "connecting");
 const countsEl = document.getElementById("counts")!;
 const projectsBody = document.getElementById("projects-body")!;
 const projectsHdr  = document.getElementById("projects-header")!;
@@ -60,6 +69,7 @@ const providersStatus = document.getElementById("providers-status")!;
 const providersDailyUsage = document.getElementById("providers-daily-usage")!;
 const providersBody = document.getElementById("providers-body")!;
 const providerUsageModeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-provider-usage-mode]")];
+const stopAgentAvatarFallbacks = installAgentAvatarFallbacks(document);
 
 const disconnectedBanner = document.getElementById("connection-banner") as HTMLDivElement;
 let sessionConnectionState: "connecting" | "online" | "offline" = "connecting";
@@ -83,12 +93,27 @@ let providerGalleryIndex = 0;
 const iconCache = new Map<string, string>();
 const PROVIDER_USAGE_MODE_KEY = "sessionbar:provider-usage-mode";
 let providerUsageMode = readProviderUsageMode();
-
-function commitMarkup(element: Element, markup: string): boolean {
-  if (element.innerHTML === markup) return false;
-  element.innerHTML = markup;
-  return true;
+let lastAgentSnapshot: Snapshot | null = null;
+let agentDetailTab: AgentTab = "overview";
+let agentRefreshTimer: number | undefined;
+let agentDialog: HTMLDialogElement | null = null;
+const expandedAgentRosters = new Set<string>();
+const executionClient = new ExecutionClient(window.fetch.bind(window), () => { syncExecutionViews(); });
+const agentClient = new AgentClient(window.fetch.bind(window), () => {
+  const focusedSession = focusedProject ? lastSessions.find(session => agentProjectKey(session, lastAgentSnapshot) === focusedProject) : undefined;
+  lastAgentSnapshot = agentClient.snapshot;
+  if (focusedSession) focusedProject = agentProjectKey(focusedSession, lastAgentSnapshot);
+  render(lastSessions);
+});
+function projectKey(session: SessionPayload): string { return agentProjectKey(session, lastAgentSnapshot); }
+function focusedProjectName(): string {
+  if (focusedProject === UNASSIGNED_PROJECT_KEY) return "Unassigned sessions";
+  return lastSessions.find(session => projectKey(session) === focusedProject) ? extractProject(lastSessions.find(session => projectKey(session) === focusedProject)!) : "All sessions";
 }
+
+const commitMarkup = createMarkupCommitter<Element>(withoutAgentAvatarLoadState, syncAgentAvatars);
+installWorkflowCanvases();
+installExecutionViews();
 
 function readProviderUsageMode(): ProviderUsageMode {
   try {
@@ -137,6 +162,7 @@ const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const providerGalleryMedia = window.matchMedia("(max-width: 640px)");
 
 function extractProject(s: SessionPayload): string {
+  if (projectKey(s) === UNASSIGNED_PROJECT_KEY) return "Unassigned sessions";
   if (s.project) return s.project;
   if (s.project_path) {
     const p = s.project_path.split("/");
@@ -183,7 +209,7 @@ function syncSessionWorkspace(): void {
 function currentSceneSummaryMarkup(): string {
   const counts = countSessions(lastSessions);
   const selected = selectedId ? lastSessions.find(s => s.session_id === selectedId) : undefined;
-  const current = selected ? sessionDisplayName(selected) : focusedProject || "All sessions";
+  const current = selected ? sessionDisplayName(selected) : focusedProject ? focusedProjectName() : "All sessions";
   return sceneSummaryMarkup(counts, current);
 }
 
@@ -455,10 +481,24 @@ function detailIdentityMarkup(s: SessionPayload, project: string): string {
   const projectPath = s.project_path || project;
   const task = s.task_name?.trim();
   return detailSectionMarkup("Session", `<div class="detail-fields">
+    <div class="detail-field"><span class="detail-field-label">Created by</span><span class="detail-field-value">${escapeHtml(s.session_kind === "background" ? `${s.session_type?.trim() || "Harness"} (automatic)` : s.session_kind === "user" ? "User" : "Unknown")}</span></div>
+    ${s.session_service ? `<div class="detail-field"><span class="detail-field-label">Service</span><span class="detail-field-value">${escapeHtml(sessionServiceLabel(s.session_service) || s.session_service)}</span></div>` : ""}
     <div class="detail-field"><span class="detail-field-label">Project</span><span class="detail-field-value detail-mono" title="${escapeHtml(projectPath)}">${escapeHtml(projectPath)}</span></div>
     ${task ? `<div class="detail-field"><span class="detail-field-label">Task</span><span class="detail-field-value">${escapeHtml(task)}</span></div>` : ""}
     <div class="detail-field detail-field-id"><span class="detail-field-label">Session ID</span><span class="detail-field-value detail-mono" title="${escapeHtml(s.session_id)}">${escapeHtml(s.session_id)}</span></div>
   </div>`);
+}
+
+function sessionOriginLabel(s: SessionPayload): string {
+  return s.session_kind === "background" ? "Harness-created" : s.session_kind === "user" ? "" : "Unknown origin";
+}
+
+function sessionOriginMarkup(s: SessionPayload): string {
+  const label = sessionOriginLabel(s);
+  const description = s.session_kind === "background"
+    ? `Automatically created by ${s.session_type?.trim() || "the harness"}`
+    : "User or harness creation has not been confirmed";
+  return label ? `<span class="session-origin-badge" data-session-kind="${s.session_kind === "background" ? "background" : "unknown"}" title="${escapeHtml(description)}">${escapeHtml(label)}</span>` : "";
 }
 
 function detailOverviewMarkup(s: SessionPayload, project: string, timestamp: number): string {
@@ -515,17 +555,17 @@ function detailResetLabel(value: number): string {
 }
 
 function detailFlowMarkup(s: SessionPayload): string {
-  const graph = s.flow;
-  const edges = graph?.edges ?? [];
-  if (graph && edges.length > 0) {
-    const labels = new Map((graph.nodes ?? []).map(node => [node.id, node.label || node.id]));
-    return `<div class="detail-tab-content">${detailSectionMarkup("Flow graph", `<div class="detail-flow-list">${edges.slice(0, 12).map(edge => `<div class="detail-flow-row"><span>${escapeHtml(labels.get(edge.from) || edge.from)}</span><b aria-hidden="true">→</b><span>${escapeHtml(labels.get(edge.to) || edge.to)}</span>${edge.label ? `<small>${escapeHtml(edge.label)}</small>` : ""}</div>`).join("")}</div>`)}</div>`;
+  return sessionFlowMarkup(s, lastAgentSnapshot, agentAvatarMarkup, null);
+}
+
+function syncExecutionViews(): void {
+  const id = executionClient.sessionId;
+  if (!id) return;
+  const session = lastSessions.find(item => item.session_id === id);
+  const graph = session?.flow ? reportedWorkflowGraph(session.flow) : null;
+  for (const slot of document.querySelectorAll<HTMLElement>("[data-execution-session]")) {
+    if (slot.dataset.executionSession === id) commitMarkup(slot, executionTraceMarkup(executionClient.value, executionClient.error, graph));
   }
-  const workflow = (s.workflow_events ?? []).slice().reverse().slice(0, 12);
-  if (workflow.length > 0) {
-    return `<div class="detail-tab-content">${detailSectionMarkup("Workflow events", `<div class="detail-event-list">${workflow.map(event => `<div class="detail-event-row"><span class="detail-event-kind">${escapeHtml(event.canonical_stage_id)}</span><span class="detail-event-text">${escapeHtml(event.raw_event)}</span><span class="detail-event-age">${escapeHtml(ageLabel(event.timestamp))}</span></div>`).join("")}</div>`)}</div>`;
-  }
-  return `<div class="detail-tab-content">${detailSectionMarkup("Flow", detailEmptyMarkup("No workflow data", "This session has not reported a structured flow or workflow events."))}</div>`;
 }
 
 function detailHTML(s: SessionPayload): string {
@@ -543,12 +583,101 @@ function showMobileDetail(s: SessionPayload) {
   if (existing) existing.remove();
   const ov = document.createElement("div");
   ov.className = "detail-overlay";
+  ov.dataset.sessionId = s.session_id;
   ov.innerHTML =
     `<div class="overlay-header"><span>${escapeHtml(s.session_type||"Session")} / ${escapeHtml(extractProject(s))}</span><button class="overlay-close" aria-label="Close details">&times;</button></div>` +
+    `<div class="mobile-detail-tabs detail-tabs">${tabsMarkup(["Overview", "Activity", "Usage", "Flow", "Raw"], detailTab)}</div>` +
     `<div class="overlay-body">${detailHTML(s)}</div>`;
-  ov.querySelector("button")!.addEventListener("click", (e) => { e.stopPropagation(); ov.remove(); });
-  ov.addEventListener("click", (e) => { if (e.target===ov) ov.remove(); });
+  ov.querySelector("button")!.addEventListener("click", (e) => { e.stopPropagation(); ov.remove(); executionClient.watch(null); });
+  ov.addEventListener("click", (e) => {
+    if (e.target === ov) { ov.remove(); executionClient.watch(null); return; }
+    if (handleAgentAction(e)) return;
+    const tab = (e.target as Element | null)?.closest<HTMLElement>(".detail-tab");
+    if (!tab) return;
+    detailTab = Number.parseInt(tab.dataset.tab || "0", 10);
+    ov.querySelector(".mobile-detail-tabs")!.innerHTML = tabsMarkup(["Overview", "Activity", "Usage", "Flow", "Raw"], detailTab);
+    ov.querySelector(".overlay-body")!.innerHTML = detailHTML(lastSessions.find(item => item.session_id === s.session_id) ?? s);
+    executionClient.watch(detailTab === 3 ? s.session_id : null);
+    syncExecutionViews();
+  });
   document.body.appendChild(ov);
+  executionClient.watch(detailTab === 3 ? s.session_id : null);
+  syncExecutionViews();
+}
+
+function syncAgentDialog(): void {
+  const selected = agentClient.selected;
+  if (!selected || window.innerWidth >= 1024) {
+    if (agentDialog?.open) agentDialog.close();
+    return;
+  }
+  if (!agentDialog) {
+    agentDialog = document.createElement("dialog");
+    agentDialog.className = "agent-dialog";
+    agentDialog.setAttribute("aria-label", "Agent details");
+    agentDialog.innerHTML = '<div class="agent-dialog-top"><strong>Agent details</strong><button type="button" class="agent-action" data-agent-close aria-label="Close agent details">Close</button></div><div class="agent-dialog-tabs"></div><div class="agent-dialog-body"></div>';
+    agentDialog.addEventListener("click", handleAgentAction);
+    agentDialog.addEventListener("cancel", event => { event.preventDefault(); agentClient.clearSelection(); });
+    document.body.appendChild(agentDialog);
+  }
+  commitMarkup(agentDialog.querySelector(".agent-dialog-tabs")!, agentTabsMarkup(agentDetailTab));
+  commitMarkup(agentDialog.querySelector(".agent-dialog-body")!, agentDetailMarkup(selected, agentDetailTab));
+  if (!agentDialog.open) {
+    document.querySelector(".detail-overlay")?.remove();
+    agentDialog.showModal();
+  }
+}
+
+function handleAgentAction(event: Event): boolean {
+  const target = event.target as Element | null;
+  const avatar = target?.closest<HTMLElement>("[data-agent-id]");
+  if (avatar) {
+    const session = lastSessions.find(item => item.session_id === avatar.dataset.agentSession);
+    if (!session || !avatar.dataset.agentId) return true;
+    event.stopPropagation();
+    const query = filterInput.value.trim().toLowerCase();
+    if (query && ![extractProject(session), sessionDisplayName(session), session.task_name || "", session.session_type || ""].some(value => value.toLowerCase().includes(query))) filterInput.value = "";
+    selectedId = session.session_id;
+    if (focusedProject) focusedProject = projectKey(session);
+    agentDetailTab = "overview";
+    agentClient.select(avatar.dataset.agentId);
+    return true;
+  }
+  const expand = target?.closest<HTMLElement>("[data-agent-expand]");
+  if (expand?.dataset.agentExpand) {
+    const key = expand.dataset.agentExpand;
+    if (expandedAgentRosters.has(key)) expandedAgentRosters.delete(key);
+    else expandedAgentRosters.add(key);
+    render(lastSessions);
+    return true;
+  }
+  const tab = target?.closest<HTMLElement>("[data-agent-tab]")?.dataset.agentTab;
+  if (tab === "overview" || tab === "conversation" || tab === "workflow") {
+    agentDetailTab = tab;
+    render(lastSessions);
+    return true;
+  }
+  const more = target?.closest<HTMLElement>("[data-agent-more]")?.dataset.agentMore;
+  if (more === "conversation" || more === "workflow") { void agentClient.loadMore(more); return true; }
+  if (target?.closest("[data-agent-refresh]")) { void agentClient.refreshDetail(); return true; }
+  if (target?.closest("[data-agent-back]")) {
+    const session = lastSessions.find(item => item.session_id === selectedId);
+    agentClient.clearSelection();
+    if (session && window.innerWidth < 1024) showMobileDetail(session);
+    return true;
+  }
+  if (target?.closest("[data-agent-close]")) { agentClient.clearSelection(); return true; }
+  return false;
+}
+
+function scheduleAgentRefresh(): void {
+  if (agentRefreshTimer !== undefined) window.clearTimeout(agentRefreshTimer);
+  agentRefreshTimer = undefined;
+  if (document.hidden) return;
+  agentRefreshTimer = window.setTimeout(() => {
+    agentRefreshTimer = undefined;
+    void Promise.allSettled([agentClient.refreshSnapshot(), executionClient.refresh()]).finally(scheduleAgentRefresh);
+  }, 5000);
 }
 
 // ── Disconnected ──
@@ -565,15 +694,12 @@ function hideBanner() {
 function setSessionConnectionState(state: "connecting" | "online" | "offline") {
   if (sessionConnectionState === state) return;
   sessionConnectionState = state;
+  appHeader.setConnectionState(state);
   if (state === "offline") {
-    portEl.textContent = "offline";
-    portEl.className = UI.connectionOffline;
     showBanner("Retrying automatically…");
     return;
   }
   if (state === "online") {
-    portEl.textContent = ":" + location.port;
-    portEl.className = UI.connection;
     hideBanner();
   }
 }
@@ -593,7 +719,7 @@ function render(sessions: SessionPayload[]) {
     filterHint.textContent = shown.length + "/" + sessions.length + " sessions";
   } else { filterHint.textContent = ""; }
 
-  if (focusedProject && !shown.some(s => extractProject(s) === focusedProject)) {
+  if (focusedProject && !shown.some(s => projectKey(s) === focusedProject)) {
     focusedProject = null;
     selectedId = null;
   }
@@ -605,15 +731,21 @@ function render(sessions: SessionPayload[]) {
   // Projects
   const groups = new Map<string,SessionPayload[]>();
   for (const s of shown) {
-    const p = extractProject(s);
+    const p = projectKey(s);
     if (!groups.has(p)) groups.set(p,[]);
     groups.get(p)!.push(s);
   }
-  const sorted = [...groups.entries()].sort((a,b)=>Math.max(...b[1].map(s=>s.timestamp||0))-Math.max(...a[1].map(s=>s.timestamp||0)));
+  const sorted = [...groups.entries()].sort((a,b)=>
+    Number(a[0] === UNASSIGNED_PROJECT_KEY) - Number(b[0] === UNASSIGNED_PROJECT_KEY)
+    || Math.max(...b[1].map(s=>s.timestamp||0))-Math.max(...a[1].map(s=>s.timestamp||0)));
 
-  commitMarkup(projectsHdr, `<span class="${UI.panelTitle}">Projects (${sorted.length})</span>`);
+  const projectCount = sorted.filter(([key]) => key !== UNASSIGNED_PROJECT_KEY).length;
+  commitMarkup(projectsHdr, `<span class="${UI.panelTitle}">Projects (${projectCount})</span>`);
   let pH = "";
   for (const [proj, ss] of sorted) {
+    const projectName = proj === UNASSIGNED_PROJECT_KEY ? "Unassigned sessions" : extractProject(ss[0]!);
+    const roster = projectAgentRoster(lastAgentSnapshot, ss);
+    const rosterKey = `project:${proj}`;
     const ws = ss.filter(s=>s.status==="working").length;
     const bs = ss.filter(s=>s.status==="blocked").length;
     const es = ss.filter(s=>s.status==="error").length;
@@ -636,34 +768,39 @@ function render(sessions: SessionPayload[]) {
     const sel = proj===focusedProject ? UI.rowSelected : "";
     const iconActionLabel = iconsExpanded ? "Collapse agent icons" : "Expand agent icons";
 
-    pH += `<button type="button" class="${cx(UI.row, "project-row w-full text-left", sel)}" data-project="${escapeHtml(proj)}" aria-pressed="${proj===focusedProject}">`
-      +`<span class="project-row-main">${statusDotMarkup(projectStatus)}<span class="project-row-name" title="${escapeHtml(proj)}">${escapeHtml(proj)}</span></span>`
-      +`<span class="${UI.projectIconSlot}"><span class="${UI.projectIconStack}${iconsExpanded ? " is-expanded" : ""}${sessionTypes.length === 1 ? " is-single" : ""}" style="width:${iconStackWidth}px" data-project-icons="${escapeHtml(proj)}" role="button" tabindex="0" aria-expanded="${iconsExpanded}" aria-label="${iconActionLabel}" title="${iconActionLabel}">${icons}</span></span>`
+    pH += `<div class="${cx(UI.row, "project-row agent-project-row w-full text-left", sel)}">`
+      +`<button type="button" class="project-row-main row-select-button" data-project="${escapeHtml(proj)}" aria-pressed="${proj===focusedProject}">${statusDotMarkup(projectStatus)}<span class="project-row-name" title="${escapeHtml(ss[0]?.project_path || projectName)}">${escapeHtml(projectName)}</span></button>`
+      +(roster ? `<div class="project-agent-slot">${agentRosterMarkup(roster, rosterKey, agentClient.selected?.agent.agent_id ?? null, expandedAgentRosters.has(rosterKey))}</div>` : `<span class="${UI.projectIconSlot}"><span class="${UI.projectIconStack}${iconsExpanded ? " is-expanded" : ""}${sessionTypes.length === 1 ? " is-single" : ""}" style="width:${iconStackWidth}px" data-project-icons="${escapeHtml(proj)}" role="button" tabindex="0" aria-expanded="${iconsExpanded}" aria-label="${iconActionLabel}" title="${iconActionLabel}">${icons}</span></span>`)
       +`<span class="project-row-meta" aria-label="${escapeHtml(`${projectMeta}, ${lastActiveLabel}`)}"><span class="project-row-status">${escapeHtml(projectMeta)}</span><span class="project-row-age">${escapeHtml(lastActive)}</span></span>`
-      +"</button>";
+      +"</div>";
   }
   commitMarkup(projectsBody, pH || `<div class="panel-empty"><strong>No projects</strong><span>Projects appear when a session reports its workspace.</span></div>`);
 
   // Sessions
-  const scope = focusedProject ? shown.filter(s=>extractProject(s)===focusedProject) : shown;
+  const scope = focusedProject ? shown.filter(s=>projectKey(s)===focusedProject) : shown;
   if (selectedId && !scope.find(s=>s.session_id===selectedId)) selectedId = null;
+  if (agentClient.selected && agentClient.selected.agent.identity.session_id !== selectedId) agentClient.clearSelection(false);
   const sSorted = [...scope].sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
   syncSessionWorkspace();
-  commitMarkup(sessionsHdr, `<span class="${UI.panelTitle}">${focusedProject ? `Sessions / ${escapeHtml(focusedProject)}` : `All Sessions (${sSorted.length})`}</span>`);
+  commitMarkup(sessionsHdr, `<span class="${UI.panelTitle}">${focusedProject ? `Sessions / ${escapeHtml(focusedProjectName())}` : `All Sessions (${sSorted.length})`}</span>`);
   let sH = "";
   for (const s of sSorted) {
     const st = s.status||"idle";
     const sel = s.session_id===selectedId ? UI.rowSelected : "";
     const blk = st==="blocked" ? UI.rowBlocked : "";
     const columns = sessionListColumns(s);
-    sH += `<button type="button" class="${cx(UI.row, "session-row w-full text-left", sel, blk)}" aria-pressed="${s.session_id === selectedId}" data-sid="${escapeHtml(s.session_id)}">`
+    const roster = sessionAgentRoster(lastAgentSnapshot, s.session_id);
+    const rosterKey = `session:${s.session_id}`;
+    sH += `<div class="${cx("session-entry", sel, blk)}"><button type="button" class="${cx(UI.row, "session-row w-full text-left", sel, blk)}" aria-pressed="${s.session_id === selectedId}" data-sid="${escapeHtml(s.session_id)}">`
       +`<span class="session-row-icon">${icon(s.session_type||"?")}</span>`
       +statusDotMarkup(st)
-      +`<span class="session-row-name">${escapeHtml(columns.name)}</span>`
-      +`<span class="session-row-project" title="${escapeHtml(columns.project)}">${escapeHtml(columns.project)}</span>`
+      +`<span class="session-row-name"><span>${escapeHtml(columns.name)}</span>${sessionOriginMarkup(s)}</span>`
+      +`<span class="session-row-project" title="${escapeHtml(columns.project)}">${escapeHtml(projectKey(s) === UNASSIGNED_PROJECT_KEY ? "Unassigned" : columns.project)}</span>`
       +`<span class="session-row-status">${statusLabel(st)}</span>`
       +`<span class="session-row-age">${age(s.timestamp||Date.now())}</span>`
-      +"</button>";
+      +"</button>"
+      +(roster ? `<div class="session-agent-slot">${agentRosterMarkup(roster, rosterKey, agentClient.selected?.agent.agent_id ?? null, expandedAgentRosters.has(rosterKey))}</div>` : "")
+      +"</div>";
   }
   const emptySessionsTitle = q ? "No matching sessions" : "No sessions";
   const emptySessionsHint = q ? "Try another project, task, or type." : "Sessions appear when an agent reports activity.";
@@ -671,7 +808,10 @@ function render(sessions: SessionPayload[]) {
 
   // Detail — desktop
   const sel = selectedId ? sSorted.find(s=>s.session_id===selectedId) : null;
-  if (sel) {
+  if (sel && agentClient.selected) {
+    commitMarkup(detailHdr, `<span class="${UI.panelTitle}">Details / Agent</span>${agentTabsMarkup(agentDetailTab)}`);
+    commitMarkup(detailBody, agentDetailMarkup(agentClient.selected, agentDetailTab));
+  } else if (sel) {
     const tabs = ["Overview","Activity","Usage","Flow","Raw"];
     commitMarkup(detailHdr,
       `<span class="${UI.panelTitle}">Details / ${escapeHtml(sel.session_type||"Session")}</span>` +
@@ -681,7 +821,7 @@ function render(sessions: SessionPayload[]) {
     commitMarkup(detailHdr, `<span class="${UI.panelTitle}">Details / Project</span>`);
     const agents = [...new Set(scope.map(s=>s.session_type||"?"))].join(", ");
     commitMarkup(detailBody, detailListMarkup([
-      { label: "Project", value: focusedProject },
+      { label: "Project", value: focusedProjectName() },
       { label: "Sessions", value: String(scope.length) },
       { label: "Agents", value: agents },
       { label: "Path", value: scope[0]?.project_path || "" },
@@ -690,7 +830,11 @@ function render(sessions: SessionPayload[]) {
     systemMonitor.render();
   }
 
+  syncAgentDialog();
   syncSessionWorkspace();
+  const mobileDetail = document.querySelector<HTMLElement>(".detail-overlay");
+  executionClient.watch(sel && !agentClient.selected && detailTab === 3 && (window.innerWidth >= 1024 || mobileDetail?.dataset.sessionId === sel.session_id) ? sel.session_id : null);
+  syncExecutionViews();
 
   // Footer
   if (q) footerEl.textContent = `${shown.length}/${sessions.length} sessions  Esc to clear`;
@@ -720,6 +864,7 @@ function connect() {
 filterInput.addEventListener("input", () => { if (lastSessions.length) render(lastSessions); });
 filterInput.addEventListener("keydown", e => { if (e.key==="Escape") { filterInput.value=""; focusedProject=null; if (lastSessions.length) render(lastSessions); } });
 projectsBody.addEventListener("click", event => {
+  if (handleAgentAction(event)) return;
   const target = event.target as Element | null;
   const stack = target?.closest<HTMLElement>("[data-project-icons]");
   if (stack) {
@@ -733,6 +878,7 @@ projectsBody.addEventListener("click", event => {
   if (!row) return;
   focusedProject = row.dataset.project === focusedProject ? null : row.dataset.project!;
   selectedId = null;
+  agentClient.clearSelection(false);
   expandedProjectIcons = null;
   render(lastSessions);
 });
@@ -745,9 +891,12 @@ projectsBody.addEventListener("keydown", event => {
   render(lastSessions);
 });
 sessionsBody.addEventListener("click", event => {
+  if (handleAgentAction(event)) return;
   const row = (event.target as Element | null)?.closest<HTMLElement>("[data-sid]");
   if (!row) return;
   const sid = row.dataset.sid || null;
+  agentClient.clearSelection(false);
+  selectedId = sid;
   if (window.innerWidth < 1024) {
     const session = lastSessions.find(item => item.session_id === sid);
     if (session) showMobileDetail(session);
@@ -756,7 +905,9 @@ sessionsBody.addEventListener("click", event => {
   selectedId = sid;
   render(lastSessions);
 });
+detailBody.addEventListener("click", handleAgentAction);
 detailHdr.addEventListener("click", event => {
+  if (handleAgentAction(event)) return;
   const tab = (event.target as Element | null)?.closest<HTMLElement>(".detail-tab");
   if (!tab) return;
   detailTab = Number.parseInt(tab.dataset.tab || "0", 10);
@@ -775,6 +926,7 @@ document.addEventListener("click", event => {
 window.addEventListener("scroll", handleSceneScroll, { passive: true });
 window.addEventListener("resize", () => {
   syncSessionWorkspace();
+  syncAgentDialog();
   scheduleSceneMeasure();
 });
 reducedMotion.addEventListener("change", scheduleSceneMeasure);
@@ -820,7 +972,9 @@ document.addEventListener("visibilitychange", () => {
   scheduleProviderRefresh();
   scheduleSystemRefresh();
   scheduleSessionAgeRefresh();
+  scheduleAgentRefresh();
   if (!document.hidden) {
+    void agentClient.refreshSnapshot();
     void systemMonitor.refresh();
     void fetchProviders();
   }
@@ -828,7 +982,13 @@ document.addEventListener("visibilitychange", () => {
 scheduleProviderRefresh();
 scheduleSystemRefresh();
 scheduleSessionAgeRefresh();
+scheduleAgentRefresh();
+if (!document.hidden) void agentClient.refreshSnapshot();
 window.addEventListener("beforeunload", () => {
+  agentClient.stop();
+  executionClient.stop();
+  stopAgentAvatarFallbacks();
+  if (agentRefreshTimer !== undefined) window.clearTimeout(agentRefreshTimer);
   if (providerRefreshTimer !== undefined) window.clearTimeout(providerRefreshTimer);
   if (providersRetryTimer !== undefined) window.clearTimeout(providersRetryTimer);
   if (systemRefreshTimer !== undefined) window.clearTimeout(systemRefreshTimer);
