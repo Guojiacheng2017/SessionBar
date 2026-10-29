@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import { LANDING_COMMANDS } from "../dist/cli/landingCommand.js";
+import { HARNESS_INPUT_MATRIX } from "../dist/harness/harnessInputMatrix.js";
 
 test("v1.1.0 omits unfinished runtime modules and entry points", () => {
   const root = new URL("../", import.meta.url);
@@ -12,6 +13,7 @@ test("v1.1.0 omits unfinished runtime modules and entry points", () => {
   }
   assert.ok(!LANDING_COMMANDS.includes("pair"));
   assert.ok(!LANDING_COMMANDS.includes("devices"));
+  assert.ok(!HARNESS_INPUT_MATRIX.some(input => input.harness === "remote"));
   const manifest = JSON.parse(readFileSync(new URL("package.json", root), "utf8"));
   assert.equal(manifest.version, "1.1.0");
   assert.equal(manifest.dependencies.express, "^5.2.1");

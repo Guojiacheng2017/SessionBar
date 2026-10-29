@@ -38,7 +38,6 @@ export const HARNESS_INPUT_MATRIX: readonly HarnessInputDefinition[] = [
   { harness: "copilot", label: "GitHub Copilot CLI", transport: "hook", contract: "native_hook_payload", role: "primary", adapter: "adaptNativeHookPayload" },
   { harness: "cursor", label: "Cursor", transport: "hook", contract: "native_hook_payload", role: "primary", adapter: "adaptNativeHookPayload", notes: "conversation_id is the native session identity; model/model_id preserves Grok provider identity without changing the Cursor harness." },
   { harness: "pi", label: "Pi Agent", transport: "hook", contract: "native_hook_payload", role: "primary", adapter: "Pi extension bridge", notes: "Extension callbacks are normalized as Hook events; no polling." },
-  { harness: "remote", label: "Registered remote harness", transport: "otlp", contract: "otlp_spans", role: "primary", adapter: "OTLP telemetry adapter" },
 ];
 
 export function harnessInputsFor(harness: string): HarnessInputDefinition[] {
