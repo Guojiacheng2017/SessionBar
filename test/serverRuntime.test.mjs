@@ -511,11 +511,14 @@ syncBuiltinESMExports();
   const codexReadsAfterSessionSort = lineCount(codexReads);
   const nextStreamChunk = streamReader.read();
 
-  await waitFor(() => lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
-  const later = await fetch(`${baseUrl}/system/live`).then(response => response.json());
+  const later = await waitFor(async () => {
+    const body = await fetch(`${baseUrl}/system/live`).then(response => response.json());
+    return body.system?.sampled_at > initial.system.sampled_at ? body : undefined;
+  }, "system sampler did not advance across samples");
   await fetch(`${baseUrl}/system/live`).then(response => response.json());
   assert.equal(typeof later.system.sampled_at, "number");
-  assert.ok(lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
+  if (process.platform === "darwin") assert.ok(lineCount(netstatCalls) >= 2, "macOS network sampling must advance");
+  else assert.equal(lineCount(netstatCalls), 0, "non-macOS sampling must not invoke the macOS netstat adapter");
   assert.equal(lineCount(codexReads), codexReadsAfterSessionSort, "system samples or endpoint reads must not sort/discover sessions");
   assert.equal(lineCount(psCalls), 0, "system samples must not read the process table");
   const extraStreamData = await Promise.race([
