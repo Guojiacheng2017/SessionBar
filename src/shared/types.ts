@@ -2,6 +2,15 @@ import type { PlanRow } from "../providers/planTypes.js";
 
 export type SessionStatus = "idle" | "working" | "blocked" | "error";
 
+export type SessionSource =
+  | "hook"
+  | "codex_jsonl"
+  | "native_registry"
+  | "filesystem_snapshot"
+  | "filesystem_registry"
+  | "remote_telemetry";
+export type SessionOrigin = "local" | "remote";
+
 export interface SessionPlanSignal {
   state: "now" | "next" | "done" | "blocked" | string;
   text: string;
@@ -117,10 +126,14 @@ export function isSystemEfficiencySnapshot(value: unknown): value is SystemEffic
 }
 
 export interface SessionPayload {
+  observation?: import("../harness/harnessObservation.js").HarnessObservation;
+  observation_cursors?: readonly import("../harness/harnessObservation.js").HarnessObservationCursor[];
   session_id: string;    // unique per session, e.g. "vision-dash-40393"
   session_type: string;  // label, e.g. "Claude Code", "Gemini CLI"
   session_name?: string; // human-readable session name, when reported by the agent
-  source?: "hook" | "codex_jsonl" | "native_registry";
+  session_kind?: "user" | "background" | "unknown";
+  session_service?: string; // explicit native service identity, never inferred from a missing name
+  source?: SessionSource;
   status: SessionStatus;
   task_name: string;
   activity_tail?: string[]; // short recent activity lines, agent-specific adapters may report this
@@ -143,12 +156,15 @@ export interface SessionPayload {
   unknown_events?: SessionUnknownEvent[];
   timestamp: number;
   project?: string;       // project dir basename, e.g. "vision-dash"
-  project_path?: string;  // Full project dir / 完整项目目录，例如 "/demo/projects/atlas".
+  project_path?: string;  // full project dir, e.g. "/Users/…/atlas"
   session_source?: string; // source reported by the agent's native session registry
   model_provider?: string;
   session_preview?: string;
   git_branch?: string;
   git_sha?: string;
   session_updated_at?: number;
+  origin?: SessionOrigin; // local vs remote telemetry-derived session
+  harness_instance_id?: string; // remote harness registry id, when origin === "remote"
+  remote_session_id?: string; // remote harness's own session id, when origin === "remote"
   advisorRows?: PlanRow[]; // server-internal derived field, NOT from POST /session/status
 }

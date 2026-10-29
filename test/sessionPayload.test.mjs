@@ -10,7 +10,7 @@ const basePayload = {
   task_name: "running: npm test",
   timestamp: 1_700_000_000_000,
   project: "atlas",
-  project_path: "/demo/projects/atlas",
+  project_path: "/projects/atlas",
 };
 
 test("validates canonical usage fields", () => {
@@ -158,6 +158,20 @@ test("merge preserves previous usage fields when hook omits them", () => {
   assert.equal(merged.token_rate, 17000);
   assert.equal(merged.quota_percent, 65);
   assert.equal(merged.quota_reset, "5h38m");
+});
+
+test("model provider is validated and preserved when later hooks omit it", () => {
+  const payload = {
+    ...basePayload,
+    session_type: "Cursor",
+    model_provider: "grok",
+  };
+  assert.equal(validateSessionPayload(payload), true);
+  assert.equal(validateSessionPayload({ ...payload, model_provider: "" }), false);
+
+  const first = mergeSessionPayload(undefined, payload, 100);
+  const next = mergeSessionPayload(first, { ...payload, model_provider: undefined }, 200);
+  assert.equal(next.model_provider, "grok");
 });
 
 test("merge derives token rate through hook event reduction", () => {

@@ -1,10 +1,50 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+
+test("Codex child hooks do not create top-level markers or status reports", t => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-codex-child-hook-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = join(root, "bin"); mkdirSync(bin);
+  writeFileSync(join(bin, "curl"), '#!/bin/sh\nprintf posted > "$SESSIONBAR_CAPTURE"\n', { mode: 0o755 });
+  const parent = "11111111-1111-4111-8111-111111111111";
+  const child = "22222222-2222-4222-8222-222222222222";
+  for (const [name, thread, input, expected] of [
+    ["child-env", child, "", false],
+    ["child-input", child, JSON.stringify({ session_id: child }) + "\n", false],
+    ["parent", parent, "", true],
+    ["explicit-other", child, JSON.stringify({ session_id: "other-native-session" }) + "\n", true],
+  ]) {
+    const state = join(root, name), capture = join(root, name + ".posted");
+    execFileSync("bash", ["report.sh", "working", "Probe", "8989"], {
+      cwd: new URL("..", import.meta.url), input,
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: root,
+        SESSIONBAR_HOME: state, SESSIONBAR_PROJECT_DIR: "/fixture/project",
+        SESSIONBAR_AGENT: "codex", SESSIONBAR_CAPTURE: capture,
+        SESSIONBAR_SESSION_ID: "", AGENTBAR_SESSION_ID: "",
+        CODEX_THREAD_ID: thread, CODEX_SESSION_ID: parent },
+    });
+    assert.equal(existsSync(capture), expected, name + " report");
+    assert.equal(existsSync(join(state, "sessions")), expected, name + " marker directory");
+  }
+});
+
+test('ordinary Codex hooks capture wait metadata with the relay off and ignore stale parent environment IDs',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'sessionbar-codex-auto-report-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const root='11111111-1111-4111-8111-111111111111',child='22222222-2222-4222-8222-222222222222',stale='33333333-3333-4333-8333-333333333333';
+ const home=join(dir,'home'),codex=join(home,'.codex'),sessions=join(codex,'sessions'),state=join(home,'.sessionbar');mkdirSync(sessions,{recursive:true});
+ const transcript=join(sessions,'root.jsonl');writeFileSync(transcript,JSON.stringify({type:'session_meta',payload:{id:root,cwd:dir,source:'cli'}})+'\n');
+ const event={hook_event_name:'PreToolUse',session_id:root,turn_id:stale,transcript_path:transcript,cwd:dir,tool_name:'multi_agent_v1wait_agent',tool_use_id:'exact-native-id',tool_input:{targets:[child],prompt:'PRIVATE'}};
+ const env={...process.env,HOME:home,CODEX_HOME:codex,CODEX_THREAD_ID:stale,CODEX_SESSION_ID:stale,SESSIONBAR_HOME:state,AGENTBAR_HOME:'',SESSIONBAR_CODEX_HOOK_EVENTS_DIR:'',SESSIONBAR_AGENT:'codex',SESSIONBAR_PORT:'',SESSION_BAR_PORT:''};
+ const result=execFileSync('bash',['report.sh'],{cwd:new URL('..',import.meta.url),input:JSON.stringify(event)+'\n',env,encoding:'utf8'});assert.equal(result,'');
+ const saved=readFileSync(join(state,'codex-hooks',root+'.jsonl'),'utf8');assert.match(saved,/exact-native-id/);assert.doesNotMatch(saved,/PRIVATE/);assert.equal(existsSync(join(state,'sessions')),false);
+ const bin=join(dir,'bin'),capture=join(dir,'posted');mkdirSync(bin);writeFileSync(join(bin,'curl'),'#!/bin/sh\ntouch "$SESSIONBAR_CAPTURE"\n',{mode:0o755});
+ execFileSync('bash',['report.sh','working','Probe','8989'],{cwd:new URL('..',import.meta.url),input:JSON.stringify({...event,agent_id:child})+'\n',env:{...env,PATH:bin+':'+process.env.PATH,SESSIONBAR_CAPTURE:capture}});assert.equal(existsSync(capture),false,'child payload identity suppresses root status even when inherited env is stale');
+});
 
 test("report.sh maps canonical usage env fields into the status payload", () => {
   const root = mkdtempSync(join(tmpdir(), "sessionbar-report-"));
@@ -219,8 +259,8 @@ test("report.sh reuses the hook session id when hook invocations have different 
     SESSIONBAR_PROJECT_DIR: project,
     SESSIONBAR_SERVER_PORT: "1",
   };
-  const hookInput = `${JSON.stringify({ session_id: "00000000-0000-4000-8000-000000000002" })}\n`;
-  const args = ["-c", 'sleep 0.2 & cat | bash "$1" working probe 1', "report-hook", fileURLToPath(new URL("../report.sh", import.meta.url))];
+  const hookInput = `${JSON.stringify({ session_id: "22222222-2222-4222-8222-222222222222" })}\n`;
+  const args = ["-c", 'sleep 0.2 & cat | bash "$1" working probe 1', "report-test", fileURLToPath(new URL("../report.sh", import.meta.url))];
 
   execFileSync("bash", args, { cwd: new URL("..", import.meta.url), env, input: hookInput });
   execFileSync("bash", args, { cwd: new URL("..", import.meta.url), env, input: hookInput });
@@ -228,5 +268,43 @@ test("report.sh reuses the hook session id when hook invocations have different 
   const markerDir = join(home, ".sessionbar", "sessions");
   const markers = readdirSync(markerDir).filter(file => file.startsWith("sessionbar-id-"));
   assert.equal(markers.length, 1);
-  assert.equal(readFileSync(join(markerDir, markers[0]), "utf8"), "00000000-0000-4000-8000-000000000002__atlas\n");
+  assert.equal(readFileSync(join(markerDir, markers[0]), "utf8"), "22222222-2222-4222-8222-222222222222__atlas\n");
+});
+
+test("report.sh maps Cursor conversation and Grok model metadata", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-report-cursor-"));
+  const bin = join(root, "bin");
+  const home = join(root, "home");
+  const project = join(root, "project");
+  const capture = join(root, "payload.json");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(home, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(bin, "curl"), `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then shift; printf '%s' "$1" > "$SESSIONBAR_CAPTURE"; exit 0; fi
+  shift
+done
+exit 1
+`);
+  execFileSync("chmod", ["755", join(bin, "curl")]);
+
+  execFileSync("bash", ["report.sh", "working", "Working", "8989"], {
+    cwd: new URL("..", import.meta.url),
+    env: {
+      ...process.env,
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: home,
+      SESSIONBAR_CAPTURE: capture,
+      SESSIONBAR_HOME: join(home, ".sessionbar"),
+      SESSIONBAR_AGENT: "cursor",
+      SESSIONBAR_SESSION_TYPE: "Cursor",
+      SESSIONBAR_PROJECT_DIR: project,
+    },
+    input: `${JSON.stringify({ conversation_id: "cursor-conversation-1", model: "grok-4.7" })}\n`,
+  });
+
+  const payload = JSON.parse(readFileSync(capture, "utf8"));
+  assert.match(payload.session_id, /^cursor-conversation-1__/);
+  assert.equal(payload.model_provider, "grok");
 });

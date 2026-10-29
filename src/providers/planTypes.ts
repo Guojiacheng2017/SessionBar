@@ -42,4 +42,5 @@ export interface PlanRow {
   /** Last successful upstream observation. Retained rows are explicitly stale. */
   lastSeenAt?: number;
   stale?: boolean;
+  collectionError?: string;
 }

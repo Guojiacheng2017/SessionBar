@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import type { ProviderConfig } from "./providerAdapters.js";
+import { execProviderFile } from "./providerProcess.js";
 
-const execFileAsync = promisify(execFile);
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai";
 const DEEPSEEK_PROVIDER_QUERY = `
@@ -115,8 +113,9 @@ async function readCCSwitchConfig(
   const dbPath = join(home, ".cc-switch", "cc-switch.db");
   if (!existsSync(dbPath)) return null;
   try {
-    const result = await execFileAsync("sqlite3", ["-json", dbPath, query], {
+    const result = await execProviderFile("sqlite3", ["-json", dbPath, query], {
       maxBuffer: 64 * 1024,
+      network: false,
     });
     return parser(String(result.stdout));
   } catch {

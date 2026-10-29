@@ -7,6 +7,7 @@ import {
   parseMiniMaxTokenPlan,
   parseOpenAIUsage,
   parseXaiPrepaidBalance,
+  parseXaiUsage,
   pollProvider,
   providerConfigsFromEnv,
 } from "../dist/providers/providerAdapters.js";
@@ -147,6 +148,42 @@ test("xAI prepaid balance converts USD cents to a balance signal", () => {
     status: "ok",
     label: "xAI API",
   }]);
+});
+
+test("xAI billing usage becomes an exact USD usage signal", () => {
+  const signals = parseXaiUsage({
+    timeSeries: [
+      { dataPoints: [{ values: [0.25] }, { values: [0.5] }] },
+      { dataPoints: [{ values: [1.125] }] },
+    ],
+  });
+  assert.deepEqual(signals, [{
+    signal: "xai.usage.today",
+    kind: "usage",
+    source: "provider_api",
+    scope: "account",
+    used: 1.875,
+    unit: "USD",
+    status: "ok",
+    label: "xAI API today",
+  }]);
+});
+
+test("xAI polling reads both prepaid balance and current-day billing usage", async () => {
+  const calls = [];
+  const config = providerConfigsFromEnv({ XAI_MANAGEMENT_API_KEY: "xai-secret", XAI_TEAM_ID: "team-1" })[0];
+  const result = await pollProvider(config, async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (init.method === "GET") return jsonResponse({ total: { val: "12345" } });
+    return jsonResponse({ timeSeries: [{ dataPoints: [{ values: [2.75] }] }] });
+  }, Date.parse("2026-10-26T12:00:00Z"));
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, "https://management-api.x.ai/v1/billing/teams/team-1/prepaid/balance");
+  assert.equal(calls[1].url, "https://management-api.x.ai/v1/billing/teams/team-1/usage");
+  assert.equal(calls[1].init.method, "POST");
+  assert.equal(calls[1].init.headers.Authorization, "Bearer xai-secret");
+  assert.deepEqual(result.signals.map(signal => signal.signal), ["xai.balance", "xai.usage.today"]);
 });
 
 test("OpenAI and Anthropic admin reports become usage signals, not balances", () => {

@@ -8,8 +8,9 @@ export interface ClaudeDesktopDiscoveryOptions {
   configRoot?: string;
   now?: number;
   activeMs?: number;
-  windowMs?: number;
+  windowMs: number;
   maxFiles?: number;
+  paths?: readonly string[];
 }
 
 function modelProvider(model: string): string | undefined {
@@ -45,7 +46,7 @@ function parseSession(value: unknown, file: string, now: number, activeMs: numbe
   return {
     session_id: `claude-desktop-${id}__${project}`,
     session_type: "Claude Desktop",
-    source: "native_registry",
+    source: "filesystem_snapshot",
     status: working ? "working" : "idle",
     task_name: typeof item.title === "string" && item.title.trim() ? item.title.trim() : working ? "Active Claude Desktop session" : "Ready",
     timestamp,
@@ -96,7 +97,7 @@ function jsonFiles(root: string, windowMs: number, now: number, depth = 0): Arra
   return files.sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
-export function discoverClaudeDesktopSessions(options: ClaudeDesktopDiscoveryOptions = {}): SessionPayload[] {
+export function discoverClaudeDesktopSessions(options: ClaudeDesktopDiscoveryOptions): SessionPayload[] {
   const now = options.now ?? Date.now();
   const roots = options.root ? (Array.isArray(options.root) ? options.root : [options.root]) : [
     join(homedir(), "Library", "Application Support", "Claude-3p", "local-agent-mode-sessions"),
@@ -104,11 +105,18 @@ export function discoverClaudeDesktopSessions(options: ClaudeDesktopDiscoveryOpt
   ];
   const configRoot = options.configRoot ?? join(homedir(), "Library", "Application Support", "Claude-3p", "configLibrary");
   const modelAliases = readModelAliases(configRoot);
-  const windowMs = options.windowMs ?? 24 * 60 * 60 * 1000;
+  const windowMs = options.windowMs;
   const activeMs = options.activeMs ?? 10 * 60 * 1000;
   const maxFiles = options.maxFiles ?? 80;
   const result: SessionPayload[] = [];
-  const files = roots.flatMap(root => jsonFiles(root, windowMs, now)).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const files = options.paths
+    ? options.paths.flatMap(path => {
+      try {
+        const mtimeMs = statSync(path).mtimeMs;
+        return now - mtimeMs <= windowMs ? [{ path, mtimeMs }] : [];
+      } catch { return []; }
+    })
+    : roots.flatMap(root => jsonFiles(root, windowMs, now)).sort((a, b) => b.mtimeMs - a.mtimeMs);
   for (const file of files.slice(0, maxFiles)) {
     try {
       const parsed = parseSession(JSON.parse(readFileSync(file.path, "utf8")), file.path, now, activeMs, roots[0], modelAliases);

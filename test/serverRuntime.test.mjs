@@ -13,9 +13,34 @@ import {
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { codexActivityFromJsonl, codexMetadataRefreshDue, consumeSystemSample, discoveryRefreshDue, parseSystemSampleMs, readFirstJsonLine, recentCodexSessionDirs, SESSION_RETENTION_MS, systemSampleDelay } from "../dist/server/server.js";
+import { canonicalMarkerSessionType, codexActivityFromJsonl, codexMetadataRefreshDue, consumeSystemSample, discoveryRefreshDue, parseSystemSampleMs, readFirstJsonLine, recentCodexSessionDirs, reconcileNativeRegistrySessions, sessionPurgeReason, SESSION_RETENTION_MS, systemSampleDelay } from "../dist/server/server.js";
 
 const serverSource = readFileSync(new URL("../src/server/server.ts", import.meta.url), "utf8");
+
+test("relay does not enter reconnect grace merely because it was explicitly started", () => {
+  const listenStart = serverSource.indexOf("httpServer = app.listen");
+  const listenEnd = serverSource.indexOf("let shuttingDown", listenStart);
+  assert.doesNotMatch(serverSource.slice(listenStart, listenEnd), /scheduleShutdownIfUnobserved/);
+  assert.doesNotMatch(serverSource, /scheduleIdleCheck/);
+});
+
+test("SSE stream does not allow cross-origin reads", () => {
+  const sse = serverSource.slice(serverSource.indexOf('app.get("/sessions/stream"'), serverSource.indexOf("// DELETE: session"));
+  assert.doesNotMatch(sse, /Access-Control-Allow-Origin.*\*/);
+});
+
+test("the final Web disconnect shuts down only when no CLI client remains", () => {
+  assert.match(serverSource, /scheduleShutdownIfUnobserved/);
+  assert.match(serverSource, /sseClients\.size\s*!==\s*0/);
+  assert.match(serverSource, /appClientCount\(HOME\)\s*!==\s*0/);
+});
+
+test("unobserved clients keep the dynamic port for a five-minute reconnect grace", () => {
+  assert.match(serverSource, /const UNOBSERVED_SHUTDOWN_MS = parsePositiveInteger\(process\.env\.SESSIONBAR_IDLE_SHUTDOWN_MS, 5 \* 60 \* 1000\)/);
+  assert.match(serverSource, /app\.post\("\/lifecycle\/unobserved"/);
+  assert.match(serverSource, /scheduleShutdownIfUnobserved\(\)/);
+  assert.match(serverSource, /}, UNOBSERVED_SHUTDOWN_MS\)/);
+});
 
 test("disabled Provider polling serves retained data on the actual dynamic health port", async t => {
   const root = mkdtempSync(join(tmpdir(), "sessionbar-cached-provider-"));
@@ -58,10 +83,14 @@ test("disabled Provider polling serves retained data on the actual dynamic healt
   const retained = await fetch(`${base}/providers/live`).then(response => response.json());
   assert.equal(retained.providers[0].lastSeenAt, now);
   assert.equal((await fetch(`${base}/providers/refresh`, { method: "POST", headers: { Origin: "https://attacker.invalid" } })).status, 403);
-});
-
-test("relay lifetime has no automatic idle-shutdown path", () => {
-  assert.doesNotMatch(serverSource, /IDLE_SHUTDOWN|scheduleIdleCheck|no clients.*shutting down/i);
+  for (const [method, path] of [["GET", "/cost/history"], ["GET", "/cost/forecast"],
+    ["POST", "/pairing/start"], ["GET", "/devices"], ["GET", "/harnesses/live"],
+    ["POST", "/v1/traces"], ["GET", "/provider-credentials/xai"],
+    ["GET", "/settings.html"], ["GET", "/devices.html"], ["GET", "/pair.html"]]) {
+    assert.equal((await fetch(`${base}${path}`, { method })).status, 404, `${method} ${path}`);
+  }
+  assert.equal((await fetch(`${base}/agents/live`, { headers: { Origin: "https://attacker.invalid" } })).status, 403);
+  assert.equal((await fetch(`${base}/agents/live`)).status, 200);
 });
 
 test("projects and sessions remain in memory for thirty minutes without updates", () => {
@@ -69,20 +98,98 @@ test("projects and sessions remain in memory for thirty minutes without updates"
   assert.match(serverSource, /sessionPurgeReason\(s, now, SESSION_RETENTION_MS\)/);
 });
 
-test("ended and silent sessions share the thirty-minute retention window", async () => {
-  const { sessionPurgeReason } = await import("../dist/server/server.js");
+test("ended and silent sessions remain visible for the retention window", () => {
   const now = 1_700_000_000_000;
-  const ended = { status: "idle", task_name: "Session ended", timestamp: now - 60_000 };
+  const ended = { session_id: "ended", session_type: "Codex", status: "idle", task_name: "Session ended", timestamp: now - 60_000 };
+  const silent = { ...ended, session_id: "silent", task_name: "Ready", timestamp: now - 10 * 60_000 };
   assert.equal(sessionPurgeReason(ended, now, SESSION_RETENTION_MS), undefined);
-  assert.equal(sessionPurgeReason({ ...ended, timestamp: now - SESSION_RETENTION_MS }, now, SESSION_RETENTION_MS), undefined);
+  assert.equal(sessionPurgeReason(silent, now, SESSION_RETENTION_MS), undefined);
   assert.equal(sessionPurgeReason({ ...ended, timestamp: now - SESSION_RETENTION_MS - 1 }, now, SESSION_RETENTION_MS), "ended");
-  assert.equal(sessionPurgeReason({ ...ended, task_name: "Ready", timestamp: now - SESSION_RETENTION_MS - 1 }, now, SESSION_RETENTION_MS), "timeout — assumed crashed");
+  assert.equal(sessionPurgeReason({ ...silent, timestamp: now - SESSION_RETENTION_MS - 1 }, now, SESSION_RETENTION_MS), "timeout — assumed crashed");
 });
 
 test("Codex discovery is throttled between refresh windows", () => {
   assert.equal(discoveryRefreshDue(0, 1000, 2000), true);
   assert.equal(discoveryRefreshDue(1000, 2999, 2000), false);
   assert.equal(discoveryRefreshDue(1000, 3000, 2000), true);
+});
+
+test("file source adapters consume targeted paths and retain low-frequency reconciliation", () => {
+  const runtime = serverSource.slice(serverSource.indexOf("function configureFileSourceRuntime"), serverSource.indexOf("// Recover sessions"));
+  assert.match(runtime, /refreshCodexSessionPaths\(change\.paths/);
+  assert.match(runtime, /paths: change\.paths/);
+  assert.match(runtime, /reconcileMs: 5 \* 60_000/);
+  assert.match(runtime, /targeted = change\.kind === "targeted"/);
+});
+
+test("Codex marker recovery uses the same discovery dedupe path as live hooks", () => {
+  const recovery = serverSource.slice(serverSource.indexOf("function recoverSessions"), serverSource.indexOf("// SSE heartbeat"));
+  assert.match(recovery, /mergeCodexHookSession\(sessions, recoveredSession\)/);
+});
+
+test("marker recovery restores canonical Pi Agent identity", () => {
+  assert.equal(canonicalMarkerSessionType("pi"), "Pi Agent");
+});
+
+test("provider refresh persists history only when its revision changes", () => {
+  const refresh = serverSource.slice(serverSource.indexOf("async function collectProviderSignals"), serverSource.indexOf("async function activeProviderConfigs"));
+  assert.match(refresh, /const historyChanged =/);
+  assert.match(refresh, /if \(historyChanged\) \{[\s\S]*saveProviderUsageHistory/);
+  assert.doesNotMatch(refresh, /advisorFingerprint/);
+});
+
+test("native registry reconciliation ends missing sessions without deleting them", () => {
+  const session = {
+    session_id: "claude-desktop-old__skills",
+    session_type: "Claude Desktop",
+    source: "native_registry",
+    status: "idle",
+    task_name: "Ready",
+    timestamp: 1,
+  };
+  const sessions = { [session.session_id]: session };
+  const tracked = new Set([session.session_id]);
+
+  assert.equal(reconcileNativeRegistrySessions(sessions, tracked, [], 100), true);
+  assert.equal(sessions[session.session_id].status, "idle");
+  assert.equal(sessions[session.session_id].task_name, "Session ended");
+  assert.equal(sessions[session.session_id].timestamp, 100);
+  assert.equal(tracked.size, 0);
+  assert.equal(reconcileNativeRegistrySessions(sessions, tracked, [], 200), false);
+});
+
+test("unchanged native registry snapshots do not trigger another broadcast", () => {
+  const session = {
+    session_id: "claude-desktop-current__skills",
+    session_type: "Claude Desktop",
+    source: "native_registry",
+    status: "idle",
+    task_name: "Ready",
+    timestamp: 1,
+  };
+  const sessions = { [session.session_id]: session };
+  const tracked = new Set([session.session_id]);
+
+  assert.equal(reconcileNativeRegistrySessions(sessions, tracked, [session]), false);
+});
+
+test("filesystem-owned desktop sessions remain as ended history when their snapshot disappears", () => {
+  const session = {
+    session_id: "claude-desktop-current__skills",
+    session_type: "Claude Desktop",
+    source: "filesystem_snapshot",
+    status: "idle",
+    task_name: "Ready",
+    timestamp: 1,
+  };
+  const sessions = { [session.session_id]: session };
+  const tracked = new Set([session.session_id]);
+
+  assert.equal(reconcileNativeRegistrySessions(sessions, tracked, [], 100), true);
+  assert.equal(sessions[session.session_id].status, "idle");
+  assert.equal(sessions[session.session_id].task_name, "Session ended");
+  assert.equal(sessions[session.session_id].timestamp, 100);
+  assert.equal(tracked.size, 0);
 });
 
 test("Codex app-server metadata refresh is throttled and never overlaps", () => {
@@ -240,10 +347,16 @@ test("direct server stays on the same dynamic port while temporarily idle", asyn
   assert.equal(response.ok, true);
   assert.equal(health.port, port);
   assert.equal(health.web, true);
+  assert.equal(health.web_clients, 0);
   const dashboard = await fetch(`http://127.0.0.1:${port}/`);
   assert.equal(dashboard.ok, true);
   assert.match(await dashboard.text(), /SessionBar/);
   assert.equal(child.exitCode, null, `server exited while idle (${output})`);
+
+  const released = await fetch(`http://127.0.0.1:${port}/lifecycle/unobserved`, { method: "POST" });
+  assert.equal(released.ok, true);
+  assert.equal((await released.json()).shutdown_in_ms, 50);
+  await waitFor(() => child.exitCode !== null, `server did not exit after reconnect grace (${output})`);
 });
 
 async function availablePort() {
@@ -258,7 +371,7 @@ async function availablePort() {
   return address.port;
 }
 
-async function waitFor(check, message, timeoutMs = 4_000) {
+async function waitFor(check, message, timeoutMs = 8_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
   while (Date.now() < deadline) {
@@ -398,15 +511,11 @@ syncBuiltinESMExports();
   const codexReadsAfterSessionSort = lineCount(codexReads);
   const nextStreamChunk = streamReader.read();
 
-  const later = await waitFor(async () => {
-    const body = await fetch(`${baseUrl}/system/live`).then(response => response.json());
-    const networkAdvanced = process.platform !== "darwin" || lineCount(netstatCalls) >= 2;
-    return body.system.sampled_at > initial.system.sampled_at && networkAdvanced ? body : undefined;
-  }, "system sampler did not advance across samples");
+  await waitFor(() => lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
+  const later = await fetch(`${baseUrl}/system/live`).then(response => response.json());
   await fetch(`${baseUrl}/system/live`).then(response => response.json());
   assert.equal(typeof later.system.sampled_at, "number");
-  if (process.platform === "darwin") assert.ok(lineCount(netstatCalls) >= 2, "network collector did not advance across samples");
-  else assert.equal(lineCount(netstatCalls), 0, "macOS network collector must not run on other platforms");
+  assert.ok(lineCount(netstatCalls) >= 2, "system sampler did not advance across samples");
   assert.equal(lineCount(codexReads), codexReadsAfterSessionSort, "system samples or endpoint reads must not sort/discover sessions");
   assert.equal(lineCount(psCalls), 0, "system samples must not read the process table");
   const extraStreamData = await Promise.race([

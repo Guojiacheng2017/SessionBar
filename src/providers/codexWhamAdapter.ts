@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import type { ResetCard } from "./quota-engine/types.js";
+import { providerFetch } from "../runtime/networkRuntime.js";
 
 interface WhamAdapterOptions {
   authJsonPath?: string;
@@ -36,7 +37,7 @@ export async function fetchResetCards(opts: WhamAdapterOptions = {}): Promise<Re
     const accountId = auth?.account_id;
     if (!token) return [];
 
-    const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    const fetchImpl = opts.fetchImpl ?? providerFetch;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {

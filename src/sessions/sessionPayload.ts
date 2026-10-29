@@ -1,6 +1,7 @@
 import { SessionAgentSignalInput, SessionPayload, SessionStatus } from "../shared/types.js";
 import { sessionSnapshotToHookEvents } from "../hooks/hookEvents.js";
 import { reduceSessionEvents } from "./sessionReducer.js";
+import { observeHarness, validHarnessObservation } from "../harness/harnessObservation.js";
 
 export type SessionReportPayload = Omit<SessionPayload, "source" | "timestamp" | "agent_signals"> & {
   source?: SessionPayload["source"];
@@ -24,8 +25,10 @@ const PERCENT_FIELDS = ["context_percent", "quota_percent"] as const;
 export function validateSessionPayload(body: unknown): body is SessionReportPayload {
   if (!body || typeof body !== "object") return false;
   const payload = body as Record<string, unknown>;
-  if (typeof payload.session_id !== "string" || !payload.session_id) return false;
-  if (typeof payload.session_type !== "string" || !payload.session_type) return false;
+  if (payload.observation !== undefined && !validHarnessObservation(payload.observation)) return false;
+  if (payload.observation_cursors !== undefined) return false;
+  if (!isShortNonEmptyString(payload.session_id, 256)) return false;
+  if (!isShortNonEmptyString(payload.session_type, 128)) return false;
   if (typeof payload.status !== "string" || !STATUSES.includes(payload.status as SessionStatus)) return false;
   if (typeof payload.task_name !== "string" || payload.task_name.length > 500) return false;
   if (payload.progress !== undefined && !isNumberInRange(payload.progress, 0, 1)) return false;
@@ -38,13 +41,17 @@ export function validateSessionPayload(body: unknown): body is SessionReportPayl
   if (payload.quota_reset !== undefined && (typeof payload.quota_reset !== "string" || payload.quota_reset.length > 64)) return false;
   if (payload.hook_event !== undefined && !isShortNonEmptyString(payload.hook_event, 128)) return false;
   if (payload.session_name !== undefined && !isShortNonEmptyString(payload.session_name, 128)) return false;
+  if (payload.session_source !== undefined && !isShortNonEmptyString(payload.session_source, 256)) return false;
+  if (payload.session_kind !== undefined && (typeof payload.session_kind !== "string" || !["user", "background", "unknown"].includes(payload.session_kind))) return false;
+  if (payload.session_service !== undefined && !isShortNonEmptyString(payload.session_service, 128)) return false;
+  if (payload.model_provider !== undefined && !isShortNonEmptyString(payload.model_provider, 128)) return false;
   if (payload.activity_tail !== undefined && (
     !Array.isArray(payload.activity_tail) ||
     payload.activity_tail.length > 8 ||
     payload.activity_tail.some((line: unknown) => typeof line !== "string" || line.length > 240)
   )) return false;
-  if (payload.project !== undefined && typeof payload.project !== "string") return false;
-  if (payload.project_path !== undefined && typeof payload.project_path !== "string") return false;
+  if (payload.project !== undefined && (typeof payload.project !== "string" || payload.project.length > 256)) return false;
+  if (payload.project_path !== undefined && (typeof payload.project_path !== "string" || payload.project_path.length > 2048)) return false;
   if (payload.runtime !== undefined && !isValidRuntimeSnapshot(payload.runtime)) return false;
   if (payload.agent_signals !== undefined && (
     !Array.isArray(payload.agent_signals) ||
@@ -59,13 +66,32 @@ export function mergeSessionPayload(
   data: SessionReportPayload,
   now: number,
 ): SessionPayload {
-  const reduced = reduceSessionEvents(prev, sessionSnapshotToHookEvents(data, now));
+  const observation = data.observation;
+  const decision = observation ? observeHarness(prev?.observation_cursors ?? [], observation) : undefined;
+  if (decision?.duplicate && prev) return prev;
+  const events = sessionSnapshotToHookEvents(data, now);
+  if (decision?.late && prev) {
+    const historical = events.filter(event => event.type === "workflow_event" || event.type === "unknown")
+      .map(event => ({ ...event, timestamp: observation?.occurred_at ?? now }));
+    const history = reduceSessionEvents(prev, historical);
+    return { ...history, timestamp: prev.timestamp, observation_cursors: decision.cursors };
+  }
+  const reduced = reduceSessionEvents(prev, events);
   const legacyReduced = reduced as SessionPayload & { process_pid?: unknown };
   const { process_pid: _retiredProcessPid, ...session } = legacyReduced;
+  const hookPromotesFallback = data.source === "hook"
+    && ["filesystem_snapshot", "filesystem_registry", "native_registry"].includes(prev?.source ?? "");
   return {
     ...session,
+    ...(hookPromotesFallback ? { source: "hook" as const, session_type: data.session_type } : {}),
+    session_source: data.session_source ?? prev?.session_source,
+    session_kind: data.session_kind ?? prev?.session_kind,
+    session_service: data.session_service ?? prev?.session_service,
+    observation: observation ? { ...observation, capabilities: observation.capabilities ? { ...observation.capabilities } : undefined } : prev?.observation,
+    observation_cursors: decision?.cursors ?? prev?.observation_cursors,
     quota_percent: data.quota_percent ?? prev?.quota_percent,
     quota_reset: data.quota_reset ?? prev?.quota_reset,
+    model_provider: data.model_provider ?? prev?.model_provider,
     runtime: data.runtime,
   };
 }

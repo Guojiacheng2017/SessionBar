@@ -42,6 +42,14 @@ export function providerUsageTrendForMode(
   row: PlanRow,
   mode: ProviderUsageMode,
 ): ProviderUsageTrend | undefined {
+  // Copilot is a monthly cumulative series, not a daily-consumption histogram.
+  // A daily percentage derivative must not replace its native cycle history.
+  if (row.provider.toLocaleLowerCase() === "github" || /copilot/i.test(row.label)) {
+    const monthly = [row.usageTrends?.[mode], row.usageTrend,
+      row.usageTrends?.percentage, row.usageTrends?.token, row.usageTrends?.cash]
+      .find(trend => trend?.kind === "line");
+    if (monthly) return monthly;
+  }
   if (mode === "percentage") {
     return row.usageTrends?.cash
       ?? row.usageTrends?.percentage

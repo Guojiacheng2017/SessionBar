@@ -16,7 +16,7 @@ const snapshot = {
   turns: 34,
   context_percent: 72,
   project: "atlas",
-  project_path: "/demo/projects/atlas",
+  project_path: "/projects/atlas",
 };
 
 test("snapshot payload normalizes into status, activity, and usage hook events", () => {
@@ -96,6 +96,19 @@ test("native payload mapping accepts SessionBar agent aliases", () => {
   assert.equal(workflow.agent_type, "Codex");
   assert.equal(workflow.raw_event, "PreToolUse");
   assert.equal(workflow.canonical_stage_id, "tool.execute.before");
+});
+
+test("Pi tool execution payload becomes visible canonical workflow data", () => {
+  const events = nativePayloadToHookEvents({ event: "tool_execution_start", toolName: "bash" }, {
+    agent_type: "Pi Agent",
+    session_id: "pi-demo__atlas",
+    project: "atlas",
+    timestamp: 1_700_000_000_000,
+    source: "hook",
+  });
+
+  assert.equal(events.find(event => event.type === "session_status")?.task_name, "running: bash");
+  assert.equal(events.find(event => event.type === "workflow_event")?.canonical_stage_id, "tool.execute.before");
 });
 
 test("native payload adapter emits status, activity, and usage hook events", () => {

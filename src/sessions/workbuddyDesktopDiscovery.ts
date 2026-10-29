@@ -1,5 +1,6 @@
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync } from "fs";
-import { basename, join } from "path";
+import { execFileSync } from "node:child_process";
+import { basename, dirname, join, win32 } from "path";
 import { homedir } from "os";
 import type { SessionPayload } from "../shared/types.js";
 
@@ -9,6 +10,8 @@ export interface WorkBuddyDesktopDiscoveryOptions {
   activeMs?: number;
   retentionMs?: number;
   maxFiles?: number;
+  paths?: readonly string[];
+  sqlitePath?: string;
 }
 
 interface RegistryEntry {
@@ -29,13 +32,23 @@ interface DesktopSessionEntry {
   resumedAt?: unknown;
 }
 
+interface DatabaseSessionEntry {
+  id?: unknown;
+  cwd?: unknown;
+  title?: unknown;
+  status?: unknown;
+  timestamp?: unknown;
+  updated_at?: unknown;
+}
+
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function displayProject(cwd: string): string {
-  const name = basename(cwd) || "WorkBuddy";
-  return /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$/.test(name) && cwd.includes("/WorkBuddy/") ? "WorkBuddy" : name;
+  const normalized = cwd.replace(/\\/g, "/");
+  const name = basename(normalized) || "WorkBuddy";
+  return /^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$/.test(name) && normalized.includes("/WorkBuddy/") ? "WorkBuddy" : name;
 }
 
 function sessionTitle(root: string, sessionId: string, cwd: string): string | undefined {
@@ -73,7 +86,8 @@ function parseRegistryEntry(value: unknown, root: string, now: number, activeMs:
   return {
     session_id: `workbuddy-${entry.sessionId}__${project}`,
     session_type: "WorkBuddy Desktop",
-    source: "native_registry",
+    session_kind: "user",
+    source: "filesystem_registry",
     session_name: title,
     status: working ? "working" : "idle",
     task_name: title,
@@ -103,7 +117,7 @@ function parseDesktopSession(value: unknown, root: string, now: number, retentio
     session_id: `workbuddy-${entry.conversationId}__${project}`,
     session_type: "WorkBuddy Desktop",
     session_name: title,
-    source: "native_registry",
+    source: "filesystem_registry",
     status: "idle",
     task_name: title,
     timestamp,
@@ -117,6 +131,56 @@ function conversationId(session: SessionPayload): string {
   return session.session_id.slice("workbuddy-".length).split("__", 1)[0];
 }
 
+function databaseSessions(root: string, sqlitePath: string, now: number, activeMs: number, retentionMs: number, limit: number): SessionPayload[] {
+  const db = join(root, "workbuddy.db");
+  if (!existsSync(db) || limit === 0 || !Number.isFinite(now) || !Number.isFinite(retentionMs)) return [];
+  try {
+    const json = execFileSync(sqlitePath, [
+      "-readonly", "-batch", "-json", "-cmd", ".timeout 50", db,
+      `PRAGMA query_only=ON;
+       SELECT id, cwd, COALESCE(NULLIF(TRIM(custom_title), ''), title) AS title,
+         status, COALESCE(last_activity_at, created_at) AS timestamp, updated_at
+       FROM sessions
+       WHERE deleted_at IS NULL AND LOWER(transport) = 'local' AND LOWER(status) != 'archived'
+         AND COALESCE(last_activity_at, created_at) BETWEEN ${Math.max(0, now - retentionMs)} AND ${now}
+       ORDER BY COALESCE(last_activity_at, created_at) DESC, id ASC LIMIT ${limit};`,
+    ], { encoding: "utf8", timeout: 1_000, maxBuffer: 512 * 1024, stdio: ["ignore", "pipe", "ignore"] });
+    const rows: unknown = JSON.parse(json);
+    if (!Array.isArray(rows)) return [];
+    const sessions: SessionPayload[] = [];
+    for (const value of rows) {
+      if (!value || typeof value !== "object") continue;
+      const entry = value as DatabaseSessionEntry;
+      if (typeof entry.id !== "string" || !entry.id.trim()) continue;
+      if (typeof entry.cwd !== "string" || entry.cwd.includes("__workbuddy_cli_host__")) continue;
+      if (!entry.cwd.startsWith("/") && !(/^(?:[a-z]:[\\/]|\\\\)/i.test(entry.cwd) && win32.isAbsolute(entry.cwd))) continue;
+      const timestamp = finiteNumber(entry.timestamp);
+      if (timestamp === undefined || timestamp > now || now - timestamp > retentionMs) continue;
+      const status = typeof entry.status === "string" ? entry.status.toLowerCase() : "";
+      const updatedAt = finiteNumber(entry.updated_at) ?? timestamp;
+      const recent = updatedAt <= now && now - updatedAt <= activeMs;
+      const project = displayProject(entry.cwd);
+      const title = typeof entry.title === "string" && entry.title.trim() ? entry.title.trim().slice(0, 160) : "WorkBuddy session";
+      sessions.push({
+        session_id: `workbuddy-${entry.id}__${project}`,
+        session_type: "WorkBuddy Desktop",
+        source: "filesystem_snapshot",
+        session_source: "desktop:sqlite",
+        session_name: title,
+        task_name: title,
+        status: status === "failed" ? "error" : recent && (status === "working" || status === "planning") ? "working" : "idle",
+        timestamp,
+        project,
+        project_path: entry.cwd,
+      });
+    }
+    return sessions;
+  } catch {
+    // A missing binary, locked DB or unrecognized schema must not break legacy discovery.
+    return [];
+  }
+}
+
 export function discoverWorkBuddyDesktopSessions(options: WorkBuddyDesktopDiscoveryOptions = {}): SessionPayload[] {
   const root = options.root ?? join(homedir(), ".workbuddy");
   const sessionsRoot = join(root, "sessions");
@@ -124,11 +188,11 @@ export function discoverWorkBuddyDesktopSessions(options: WorkBuddyDesktopDiscov
   const now = options.now ?? Date.now();
   const activeMs = options.activeMs ?? 15_000;
   const retentionMs = options.retentionMs ?? 30 * 60 * 1000;
-  const maxFiles = options.maxFiles ?? 80;
+  const maxFiles = Number.isFinite(options.maxFiles) ? Math.max(0, Math.min(80, Math.floor(options.maxFiles!))) : 80;
   const bySession = new Map<string, SessionPayload>();
 
   const desktopRegistry = join(root, "app", "sessions.json");
-  if (existsSync(desktopRegistry)) {
+  if (!options.paths && existsSync(desktopRegistry)) {
     try {
       const parsed = JSON.parse(readFileSync(desktopRegistry, "utf8")) as { sessions?: unknown };
       if (Array.isArray(parsed.sessions)) {
@@ -140,16 +204,31 @@ export function discoverWorkBuddyDesktopSessions(options: WorkBuddyDesktopDiscov
     } catch { /* optional desktop registry may be replaced during shutdown */ }
   }
 
-  if (!existsSync(sessionsRoot)) return [...bySession.values()].sort((a, b) => b.timestamp - a.timestamp);
-  for (const entry of readdirSync(sessionsRoot, { withFileTypes: true }).slice(0, maxFiles)) {
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+  const files = options.paths
+    ? options.paths.filter(path => dirname(path) === sessionsRoot && path.endsWith(".json")).slice(0, maxFiles)
+    : existsSync(sessionsRoot) ? readdirSync(sessionsRoot, { withFileTypes: true }).slice(0, maxFiles)
+      .filter(entry => entry.isFile() && entry.name.endsWith(".json"))
+      .map(entry => join(sessionsRoot, entry.name)) : [];
+  for (const file of files) {
     try {
-      const session = parseRegistryEntry(JSON.parse(readFileSync(join(sessionsRoot, entry.name), "utf8")), root, now, activeMs, retentionMs);
+      const session = parseRegistryEntry(JSON.parse(readFileSync(file, "utf8")), root, now, activeMs, retentionMs);
       if (!session) continue;
       const id = conversationId(session);
       const previous = bySession.get(id);
       if (!previous || session.status === "working" || session.timestamp > previous.timestamp) bySession.set(id, session);
     } catch { /* registry files may be replaced while WorkBuddy updates them */ }
+  }
+
+  const db = join(root, "workbuddy.db");
+  if (!options.paths || options.paths.some(path => path === db || path === `${db}-wal`)) {
+    for (const session of databaseSessions(root, options.sqlitePath ?? "sqlite3", now, activeMs, retentionMs, maxFiles)) {
+      const id = conversationId(session);
+      const previous = bySession.get(id);
+      if (!previous || session.timestamp >= previous.timestamp) {
+        session.session_kind ??= previous?.session_kind;
+        bySession.set(id, session);
+      }
+    }
   }
 
   return [...bySession.values()].sort((a, b) => b.timestamp - a.timestamp);

@@ -1,0 +1,163 @@
+{
+  "schema_version": "sessionbar.subagents.v1-draft",
+  "kind": "snapshot",
+  "stream_id": "receiver-epoch-1",
+  "revision": 10,
+  "projects": [
+    {
+      "project_id": "project-local-a",
+      "name": "atlas"
+    },
+    {
+      "project_id": "project-remote-b",
+      "name": "atlas"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "session-a1",
+      "project_id": "project-local-a",
+      "name": "Design",
+      "agents_coverage": "complete"
+    },
+    {
+      "session_id": "session-a2",
+      "project_id": "project-local-a",
+      "name": "Review",
+      "agents_coverage": "complete"
+    },
+    {
+      "session_id": "session-b1",
+      "project_id": "project-remote-b",
+      "name": "Design",
+      "agents_coverage": "complete"
+    }
+  ],
+  "agents": [
+    {
+      "agent_id": "[\"agent\",\"source-local-codex\",\"session-a1\",\"root-a1\",\"incarnation-1\"]",
+      "identity": {
+        "source_id": "source-local-codex",
+        "session_id": "session-a1",
+        "native_agent_id": "root-a1",
+        "generation": "incarnation-1"
+      },
+      "role": "primary",
+      "parent_agent_id": null,
+      "name": "Main agent A1",
+      "provider_id": "openai",
+      "avatar": {
+        "kind": "asset",
+        "asset_id": "provider-openai"
+      },
+      "status": "working",
+      "lifecycle": "active",
+      "updated_at": 1792987200000
+    },
+    {
+      "agent_id": "[\"agent\",\"source-local-codex\",\"session-a1\",\"worker-1\",\"incarnation-1\"]",
+      "identity": {
+        "source_id": "source-local-codex",
+        "session_id": "session-a1",
+        "native_agent_id": "worker-1",
+        "generation": "incarnation-1"
+      },
+      "role": "subagent",
+      "parent_agent_id": "[\"agent\",\"source-local-codex\",\"session-a1\",\"root-a1\",\"incarnation-1\"]",
+      "name": "Researcher",
+      "provider_id": "openai",
+      "avatar": null,
+      "status": "working",
+      "lifecycle": "active",
+      "updated_at": 1792987200000
+    },
+    {
+      "agent_id": "[\"agent\",\"source-local-codex\",\"session-a1\",\"worker-nested\",\"incarnation-1\"]",
+      "identity": {
+        "source_id": "source-local-codex",
+        "session_id": "session-a1",
+        "native_agent_id": "worker-nested",
+        "generation": "incarnation-1"
+      },
+      "role": "subagent",
+      "parent_agent_id": "[\"agent\",\"source-local-codex\",\"session-a1\",\"worker-1\",\"incarnation-1\"]",
+      "name": "Verifier",
+      "provider_id": "openai",
+      "avatar": {
+        "kind": "generated",
+        "seed": "fixture-verifier"
+      },
+      "status": "idle",
+      "lifecycle": "completed",
+      "updated_at": 1792987200000
+    },
+    {
+      "agent_id": "[\"agent\",\"source-local-codex\",\"session-a2\",\"root-a2\",\"incarnation-1\"]",
+      "identity": {
+        "source_id": "source-local-codex",
+        "session_id": "session-a2",
+        "native_agent_id": "root-a2",
+        "generation": "incarnation-1"
+      },
+      "role": "primary",
+      "parent_agent_id": null,
+      "name": "Main agent A2",
+      "provider_id": "openai",
+      "avatar": null,
+      "status": "working",
+      "lifecycle": "active",
+      "updated_at": 1792987200000
+    },
+    {
+      "agent_id": "[\"agent\",\"source-local-codex\",\"session-a2\",\"worker-1\",\"incarnation-1\"]",
+      "identity": {
+        "source_id": "source-local-codex",
+        "session_id": "session-a2",
+        "native_agent_id": "worker-1",
+        "generation": "incarnation-1"
+      },
+      "role": "subagent",
+      "parent_agent_id": "[\"agent\",\"source-local-codex\",\"session-a2\",\"root-a2\",\"incarnation-1\"]",
+      "name": "Researcher",
+      "provider_id": "openai",
+      "avatar": null,
+      "status": "working",
+      "lifecycle": "active",
+      "updated_at": 1792987200000
+    },
+    {
+      "agent_id": "[\"agent\",\"source-remote-codex\",\"session-b1\",\"root-b1\",\"incarnation-1\"]",
+      "identity": {
+        "source_id": "source-remote-codex",
+        "session_id": "session-b1",
+        "native_agent_id": "root-b1",
+        "generation": "incarnation-1"
+      },
+      "role": "primary",
+      "parent_agent_id": null,
+      "name": "Main agent B1",
+      "provider_id": "openai",
+      "avatar": null,
+      "status": "working",
+      "lifecycle": "active",
+      "updated_at": 1792987200000
+    },
+    {
+      "agent_id": "[\"agent\",\"source-remote-codex\",\"session-b1\",\"worker-1\",\"incarnation-1\"]",
+      "identity": {
+        "source_id": "source-remote-codex",
+        "session_id": "session-b1",
+        "native_agent_id": "worker-1",
+        "generation": "incarnation-1"
+      },
+      "role": "subagent",
+      "parent_agent_id": "[\"agent\",\"source-remote-codex\",\"session-b1\",\"root-b1\",\"incarnation-1\"]",
+      "name": "Researcher",
+      "provider_id": "openai",
+      "avatar": null,
+      "status": "working",
+      "lifecycle": "active",
+      "updated_at": 1792987200000
+    }
+  ]
+}

@@ -29,6 +29,7 @@ test("discovers Claude Desktop sessions and maps kimi model provider", () => {
   assert.equal(session.model_provider, "kimi");
   assert.equal(session.project, "project");
   assert.equal(session.status, "working");
+  assert.equal(session.source, "filesystem_snapshot");
 });
 
 test("uses the Desktop inference model label instead of its internal Claude alias", () => {
@@ -52,6 +53,15 @@ test("keeps multiple Desktop sessions independent", () => {
   const sessions = discoverClaudeDesktopSessions({ root, now: 1_005, windowMs: 10_000 });
   assert.equal(sessions.length, 2);
   assert.notEqual(sessions[0].session_id, sessions[1].session_id);
+});
+
+test("targeted discovery reads only the changed Claude Desktop file", () => {
+  const root = mkdtempSync(join(tmpdir(), "sessionbar-claude-"));
+  fixture(root, "local_one", { title: "First" });
+  fixture(root, "local_two", { title: "Second" });
+  const path = join(root, "account", "shard", "local_two.json");
+  const sessions = discoverClaudeDesktopSessions({ root, paths: [path], now: 1_005, windowMs: 10_000 });
+  assert.deepEqual(sessions.map(session => session.session_name), ["Second"]);
 });
 
 test("ignores malformed and archived registry entries", () => {

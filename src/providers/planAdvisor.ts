@@ -5,9 +5,12 @@ import { fetchKimiSubscription } from "./provider-plans/kimiAdapter.js";
 import { fetchGitHubCopilotSubscription } from "./provider-plans/githubCopilotAdapter.js";
 import { fetchWorkBuddyDesktopCredits } from "./workbuddyCreditsAdapter.js";
 import type { PlanRow } from "./planTypes.js";
+import { fetchGrokSubscription } from "./provider-plans/grokBillingAdapter.js";
 
 export interface PlanOpts {
   now?: number;
+  fetchImpl?: typeof fetch;
+  grokBillingEnabled?: boolean;
   openaiAuthPath?: string;
   autoConsumeResetCards?: boolean;
   consumptionStatePath?: string;
@@ -17,6 +20,7 @@ export interface PlanOpts {
   githubCopilotCredentialsPath?: string;
   githubCopilotToken?: string;
   workbuddyDbPath?: string;
+  workbuddyBalanceCommand?: string;
 }
 
 /**
@@ -33,23 +37,26 @@ export async function computePlanRows(opts: PlanOpts = {}): Promise<PlanRow[]> {
     ?? process.env.SESSIONBAR_KIMI_ACCESS_TOKEN
     ?? process.env.KIMI_ACCESS_TOKEN;
   const results = await Promise.allSettled([
+    opts.grokBillingEnabled === false ? null : fetchGrokSubscription(),
     fetchOpenAISubscription({
       authJsonPath: opts.openaiAuthPath,
+      fetchImpl: opts.fetchImpl,
       autoConsumeResetCards: opts.autoConsumeResetCards,
       consumptionStatePath: opts.consumptionStatePath,
       onResetCardConsume: opts.onResetCardConsume,
       now,
     }),
-    fetchAnthropicSubscription({ credentialsPath: opts.anthropicCredentialsPath, now }),
-    fetchKimiSubscription({ accessToken: kimiAccessToken, now }),
+    fetchAnthropicSubscription({ credentialsPath: opts.anthropicCredentialsPath, fetchImpl: opts.fetchImpl, now }),
+    fetchKimiSubscription({ accessToken: kimiAccessToken, fetchImpl: opts.fetchImpl, now }),
     fetchGitHubCopilotSubscription({
       credentialsPath: opts.githubCopilotCredentialsPath,
       accessToken: opts.githubCopilotToken,
+      fetchImpl: opts.fetchImpl,
       now,
     }),
     fetchWorkBuddyDesktopCredits({
       dbPath: opts.workbuddyDbPath,
-      balanceCommand: process.env.SESSIONBAR_WORKBUDDY_BALANCE_COMMAND,
+      balanceCommand: opts.workbuddyBalanceCommand ?? process.env.SESSIONBAR_WORKBUDDY_BALANCE_COMMAND,
     }),
   ]);
   const rows: PlanRow[] = [];

@@ -6,9 +6,6 @@ SERVER_PORT="${3:-${SESSIONBAR_PORT:-${SESSION_BAR_PORT:-}}}"
 if [ -z "$SERVER_PORT" ] && [ -r "$SESSIONBAR_STATE_HOME/port" ]; then
   SERVER_PORT="$(tr -cd '0-9' < "$SESSIONBAR_STATE_HOME/port")"
 fi
-if [ -z "$SERVER_PORT" ]; then
-  exit 0
-fi
 
 AGENT_SLUG="${SESSIONBAR_AGENT:-${AGENTBAR_AGENT:-claude}}"
 AGENT_SLUG=$(printf '%s' "$AGENT_SLUG" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')
@@ -21,6 +18,7 @@ case "$AGENT_SLUG" in
   codex) DEFAULT_SESSION_TYPE="Codex" ;;
   gemini) DEFAULT_SESSION_TYPE="Gemini CLI" ;;
   copilot) DEFAULT_SESSION_TYPE="Copilot" ;;
+  cursor) DEFAULT_SESSION_TYPE="Cursor" ;;
   opencode) DEFAULT_SESSION_TYPE="OpenCode" ;;
   pi) DEFAULT_SESSION_TYPE="Pi" ;;
   *) DEFAULT_SESSION_TYPE="$AGENT_SLUG" ;;
@@ -30,10 +28,9 @@ SESSION_TYPE="${SESSIONBAR_SESSION_TYPE:-${AGENTBAR_SESSION_TYPE:-$DEFAULT_SESSI
 PROJECT_DIR="${SESSIONBAR_PROJECT_DIR:-${AGENTBAR_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$(pwd)}}}"
 EXPLICIT_SESSION_ID="${SESSIONBAR_SESSION_ID:-${AGENTBAR_SESSION_ID:-}}"
 
-# Codex and Claude hook commands receive the stable agent session id as one
-# JSON object on stdin. Prefer it over the fallback scope so each hook event
-# updates the same marker even when the hook runner's parent process changes.
-read_hook_session_id() {
+# Hook commands receive native metadata as one JSON object on stdin. Read it
+# once so identity and model metadata come from the same event.
+read_hook_input() {
   local hook_input=""
   if [ -t 0 ]; then
     return
@@ -49,29 +46,74 @@ if ready:
       return
     fi
   fi
-  if [ -z "$hook_input" ]; then
+  printf '%s' "$hook_input"
+}
+
+HOOK_INPUT="$(read_hook_input)"
+
+# Existing trusted Codex hooks also capture exact wait-request metadata locally.
+# Keep child events before the top-level status guard; transcript identity wins.
+if [ "$AGENT_SLUG" = "codex" ] && [ -n "$HOOK_INPUT" ] && command -v node &>/dev/null; then
+  CODEX_EXECUTION_HELPER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dist/hooks/codexExecutionHook.js"
+  if [ -r "$CODEX_EXECUTION_HELPER" ]; then
+    printf '%s' "$HOOK_INPUT" | node "$CODEX_EXECUTION_HELPER" >/dev/null 2>&1 || true
+  fi
+fi
+if [ -z "$SERVER_PORT" ]; then
+  exit 0
+fi
+
+hook_json_field() {
+  if [ -z "$HOOK_INPUT" ]; then
     return
   fi
   if command -v python3 &>/dev/null; then
     python3 -c 'import json,sys
 try:
     payload=json.loads(sys.argv[1])
-    value=payload.get("session_id") or payload.get("sessionId") or ""
-    if isinstance(value, str): print(value)
+    for key in sys.argv[2:]:
+        value=payload.get(key)
+        if isinstance(value, str) and value:
+            print(value)
+            break
 except Exception:
-    pass' "$hook_input" 2>/dev/null
+    pass' "$HOOK_INPUT" "$@" 2>/dev/null
   elif command -v node &>/dev/null; then
-    node -e 'try { const payload=JSON.parse(process.argv[1]); const value=payload.session_id || payload.sessionId; if (typeof value === "string") process.stdout.write(value); } catch {}' "$hook_input" 2>/dev/null
+    node -e 'try { const payload=JSON.parse(process.argv[1]); for (const key of process.argv.slice(2)) { const value=payload[key]; if (typeof value === "string" && value) { process.stdout.write(value); break; } } } catch {}' "$HOOK_INPUT" "$@" 2>/dev/null
   fi
 }
 
 if [ -z "$EXPLICIT_SESSION_ID" ]; then
-  # Hook stdin is the session identity for this invocation. Only fall back to
-  # process-level Codex variables when the hook did not provide one.
-  EXPLICIT_SESSION_ID="$(read_hook_session_id)"
+  EXPLICIT_SESSION_ID="$(hook_json_field session_id sessionId conversation_id conversationId)"
 fi
-if [ -z "$EXPLICIT_SESSION_ID" ]; then
+
+# Hook commands can run from a service directory (including /). The event's
+# cwd describes the actual session; explicit integration overrides still win.
+HOOK_CWD="$(hook_json_field cwd)"
+PROJECT_DIR="${SESSIONBAR_PROJECT_DIR:-${AGENTBAR_PROJECT_DIR:-${HOOK_CWD:-${CLAUDE_PROJECT_DIR:-$(pwd)}}}}"
+if [ -z "$EXPLICIT_SESSION_ID" ] && [ "$AGENT_SLUG" = "codex" ]; then
   EXPLICIT_SESSION_ID="${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}"
+fi
+
+# Codex workers inherit the root session ID but have their own thread ID.
+# Their roster/activity comes from the subagent collector, not the session list.
+HOOK_AGENT_ID="$(hook_json_field agent_id)"
+if [ "$AGENT_SLUG" = "codex" ] && [[ "$HOOK_AGENT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}$ ]] \
+  && [ "$HOOK_AGENT_ID" != "$EXPLICIT_SESSION_ID" ]; then
+  exit 0
+fi
+if [ "$AGENT_SLUG" = "codex" ] && [ -n "${CODEX_THREAD_ID:-}" ] && [ -n "${CODEX_SESSION_ID:-}" ] \
+  && [ "$CODEX_THREAD_ID" != "$CODEX_SESSION_ID" ] && [ "$EXPLICIT_SESSION_ID" = "$CODEX_THREAD_ID" ]; then
+  exit 0
+fi
+
+HOOK_MODEL="$(hook_json_field model model_id modelId)"
+MODEL_PROVIDER="${SESSIONBAR_MODEL_PROVIDER:-${AGENTBAR_MODEL_PROVIDER:-}}"
+if [ -z "$MODEL_PROVIDER" ] && [ "$AGENT_SLUG" = "cursor" ] && [ -n "$HOOK_MODEL" ]; then
+  case "$(printf '%s' "$HOOK_MODEL" | tr '[:upper:]' '[:lower:]')" in
+    *grok*) MODEL_PROVIDER="grok" ;;
+    *) MODEL_PROVIDER="cursor" ;;
+  esac
 fi
 PROJ_NAME=$(basename "$PROJECT_DIR" | tr -d '\n')
 STATE_HOME="${SESSIONBAR_HOME:-${AGENTBAR_HOME:-${HOME}/.sessionbar}}"
@@ -173,7 +215,7 @@ if [ -z "$EXPLICIT_SESSION_ID" ]; then
   fi
 fi
 touch "$ID_FILE" 2>/dev/null || true
-PROJ_PATH="${SESSIONBAR_PROJECT_DIR:-${AGENTBAR_PROJECT_DIR:-${CLAUDE_PROJECT_DIR:-$PROJECT_DIR}}}"
+PROJ_PATH="$PROJECT_DIR"
 SESSION_NAME="${SESSIONBAR_SESSION_NAME:-${AGENTBAR_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}}"
 
 # Cleanup on session end
@@ -248,6 +290,7 @@ append_number_field "quota_percent" "${SESSIONBAR_QUOTA_PERCENT:-${AGENTBAR_QUOT
 append_string_field "quota_reset" "${SESSIONBAR_QUOTA_RESET:-${AGENTBAR_QUOTA_RESET:-}}"
 append_string_field "hook_event" "${SESSIONBAR_HOOK_EVENT:-${AGENTBAR_HOOK_EVENT:-}}"
 append_string_field "session_name" "$SESSION_NAME"
+append_string_field "model_provider" "$MODEL_PROVIDER"
 
 # Runtime samples remain accepted only as explicit integration payload fields
 # during the compatibility window. System monitoring does not consume them.
@@ -321,7 +364,12 @@ fi
 # SID_ESC / STATUS_ESC / TASK_ESC are already JSON-string-encoded by json_escape
 # (json.dumps includes surrounding quotes + escapes interior chars).
 # Embed them directly — no extra shell quoting.
-curl -s -X POST "http://localhost:${SERVER_PORT}/session/status" \
+AUTH_HEADER=""
+if [[ "${SESSIONBAR_DEVICE_TOKEN:-}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  AUTH_HEADER="Authorization: Bearer $SESSIONBAR_DEVICE_TOKEN"
+fi
+printf '%s\n' "$AUTH_HEADER" | curl -s -X POST "http://localhost:${SERVER_PORT}/session/status" \
+  -H @- \
   --connect-timeout 1 --max-time 2 \
   -H "Content-Type: application/json" \
   -d "{\"session_id\":${SID_ESC},\"session_type\":${SESSION_TYPE_ESC},\"status\":${STATUS_ESC},\"task_name\":${TASK_ESC},\"project\":${PROJ_ESC},\"project_path\":${PROJ_PATH_ESC}${EXTRA_FIELDS}${AGENT_SIGNAL_FIELDS}}" \

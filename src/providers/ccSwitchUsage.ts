@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import type { PlanRow } from "./planTypes.js";
 import { withProviderUsageTrend } from "./providerUsageMetrics.js";
-
-const execFileAsync = promisify(execFile);
+import { execProviderFile } from "./providerProcess.js";
 
 export type CcSwitchUsage = Record<string, Record<string, number>>;
 
@@ -50,7 +47,7 @@ export async function readCCSwitchUsage(home = homedir()): Promise<CcSwitchUsage
   const dbPath = join(home, ".cc-switch", "cc-switch.db");
   if (!existsSync(dbPath)) return null;
   try {
-    const result = await execFileAsync("sqlite3", ["-json", dbPath, SEVEN_DAY_USAGE_QUERY], { maxBuffer: 1024 * 1024 });
+    const result = await execProviderFile("sqlite3", ["-json", dbPath, SEVEN_DAY_USAGE_QUERY], { maxBuffer: 1024 * 1024, network: false });
     return parseCCSwitchUsageOutput(String(result.stdout || "[]"));
   } catch {
     return null;
@@ -71,17 +68,23 @@ export function decorateApiUsageFromCCSwitch(
     const totals = provider ? usage[provider] : undefined;
     if (provider === "openai" && existingTokenTrend?.source === "OpenAI API") {
       const today = days.at(-1)!;
-      const liveToday = totals?.[today];
-      if (liveToday !== undefined) {
-        const official = new Map(existingTokenTrend.labels?.map((day, index) => [day, existingTokenTrend.points[index] ?? null]) ?? []);
-        const points = days.map((day, index) => day === today
-          ? liveToday
-          : official.get(day) ?? existingTokenTrend.points[index] ?? null);
+      const official = new Map(existingTokenTrend.labels?.map((day, index) => [day, existingTokenTrend.points[index] ?? null]) ?? []);
+      let usedCCSwitch = false;
+      const points = days.map((day, index) => {
+        const officialValue = official.get(day) ?? existingTokenTrend.points[index] ?? null;
+        const localValue = totals?.[day];
+        if (localValue !== undefined && (day === today || officialValue === null)) {
+          usedCCSwitch = true;
+          return localValue;
+        }
+        return officialValue;
+      });
+      if (usedCCSwitch) {
         return withProviderUsageTrend(row, "token", {
           ...existingTokenTrend,
           points,
           labels: days,
-          source: "OpenAI API + CC Switch today",
+          source: "OpenAI API + CC Switch",
         });
       }
       return withProviderUsageTrend(row, "token", existingTokenTrend);

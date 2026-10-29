@@ -1,14 +1,19 @@
 import express from "express";
-import { writeFileSync, unlinkSync, existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, Dirent } from "fs";
+import { unlinkSync, existsSync, readdirSync, readFileSync, statSync, openSync, readSync, closeSync, Dirent } from "fs";
 import { join, dirname, basename, resolve } from "path";
 import { homedir } from "os";
+import { createHash } from "crypto";
 import { fileURLToPath } from "url";
 import { SessionPayload } from "../shared/types.js";
 import { mergeSessionPayload, validateSessionPayload } from "../sessions/sessionPayload.js";
 import { syncToICloud } from "./icloud.js";
 import { removeSessionMarkerFiles, scopedSessionId } from "../sessions/sessionMarkers.js";
-import { mergeCodexDiscovery, mergeCodexThreadMetadata } from "../sessions/codexSessionMerge.js";
-import { codexThreadMetadata, readCodexThreads, type CodexThreadMetadata } from "../sessions/codexAppServer.js";
+import { mergeCodexDiscovery, mergeCodexHookSession, mergeCodexThreadMetadata } from "../sessions/codexSessionMerge.js";
+import { recoverSessionProjects } from "../sessions/recoveredSessionProjects.js";
+import { codexSessionNativeId, visibleCodexSessions } from "../sessions/codexRecoveredSessions.js";
+import { createCodexServiceOrigins } from "../sessions/codexServiceOrigins.js";
+import { codexBackgroundService, codexHasSubagentSource, codexNativeSource } from "../shared/codexServices.js";
+import { codexThreadMetadata, readCodexThreads, recentCodexThreadPaths, type CodexThreadMetadata } from "../sessions/codexAppServer.js";
 import { pollProvider, providerConfigsFromEnv } from "../providers/providerAdapters.js";
 import { readCCSwitchDeepSeekConfig, readCCSwitchKimiConfig } from "../providers/ccSwitchAdapter.js";
 import { decorateApiUsageFromCCSwitch, readCCSwitchUsage, type CcSwitchUsage } from "../providers/ccSwitchUsage.js";
@@ -22,17 +27,29 @@ import {
   recordProviderUsage,
   saveProviderUsageHistory,
 } from "../providers/providerUsageHistory.js";
-import { RateBuffer } from "../providers/rateBuffer.js";
 import { createSystemSampler } from "../system/systemSampler.js";
 import { createTemperatureCollector } from "../system/temperatureCollector.js";
-import { acquireInstanceLock, configuredPort, releaseRuntimeState, writeRuntimeState } from "./runtimeState.js";
+import { acquireInstanceLock, appClientCount, configuredPort, releaseRuntimeState, writeRuntimeState } from "./runtimeState.js";
 import { disableAutoConsumeResetCards, readSettings } from "./settings.js";
 import { decorateProviderUsageFromSessions, loadSessionUsageState, syncSessionUsage } from "../sessions/sessionUsageImporter.js";
 import { discoverClaudeDesktopSessions } from "../sessions/claudeDesktopDiscovery.js";
 import { discoverWorkBuddyDesktopSessions } from "../sessions/workbuddyDesktopDiscovery.js";
+import { discoverKimiCodeSessions } from "../sessions/kimiCodeDiscovery.js";
+import { deepSeekHarnessCheckpointRoot, discoverDeepSeekHarnessSessions } from "../sessions/deepseekHarnessDiscovery.js";
+import { FileSourceRuntime, pathInsideRoot as pathInsideRuntimeRoot, stableFingerprint, type FileSourceAdapter, type SourceRead } from "../runtime/sourceRuntime.js";
 import { ensurePrivateDirectory } from "../shared/privateState.js";
 import { loadProviderLastGood, retainProviderLastGood, saveProviderLastGood } from "../providers/providerLastGood.js";
 import { isLoopbackHost, localRequestBoundary } from "./localRequestBoundary.js";
+import { closeProviderNetwork, providerNetworkStatus, refreshProviderNetwork } from "../runtime/networkRuntime.js";
+import { recordRelayConfig } from "../runtime/relayConfig.js";
+import { createSingleFlightTask } from "../runtime/singleFlightTask.js";
+import { AgentService } from "../agents/agentService.js";
+import { createCodexAgentCollector } from "../agents/codexAgents.js";
+import { createCodexAvatarSource } from "../agents/codexNativeAvatars.js";
+import { createCompositeAgentCollector } from "../agents/agentCollector.js";
+import { createClaudeAgentCollector } from "../agents/claudeAgents.js";
+import { createDeepSeekAgentCollector } from "../agents/deepseekAgents.js";
+import { createAgentRouter } from "./agentRoutes.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Start the HTTP server + polling loops only when run directly
@@ -43,6 +60,10 @@ const isDirectRun = process.argv[1] && resolve(process.argv[1]) === fileURLToPat
 const REQUESTED_PORT = configuredPort() ?? 0;
 const HOST = process.env.SESSIONBAR_HOST || "127.0.0.1";
 if (isDirectRun && !isLoopbackHost(HOST)) throw new Error("This release supports loopback HTTP only; LAN access is not released.");
+const BUILD_ID = (() => {
+  const stat = statSync(fileURLToPath(import.meta.url));
+  return `${stat.size}:${Math.trunc(stat.mtimeMs)}`;
+})();
 
 const app = express();
 app.disable("x-powered-by");
@@ -56,7 +77,7 @@ const publicRoot = join(projectRoot, "public");
 app.use(express.static(publicRoot));
 app.use("/dist", express.static(join(projectRoot, "dist")));
 app.get("/", (_req, res) => {
-  res.sendFile(join(publicRoot, "index.html"));
+  res.sendFile("index.html", { root: publicRoot });
 });
 
 const HOME = process.env.SESSIONBAR_HOME || process.env.AGENTBAR_HOME || join(homedir(), ".sessionbar");
@@ -69,15 +90,22 @@ const CODEX_SESSION_DIR = join(CODEX_HOME, "sessions");
 const CLAUDE_SESSION_DIR = join(homedir(), ".claude", "projects");
 const SESSION_USAGE_STATE_PATH = join(HOME, "session-usage-history.json");
 const WORKBUDDY_ROOT = process.env.WORKBUDDY_HOME || join(homedir(), ".workbuddy");
+const KIMI_CODE_ROOT = process.env.KIMI_CODE_HOME || join(homedir(), ".kimi-code");
+const DSH_ROOT = process.env.SESSIONBAR_DSH_HOME || join(homedir(), ".dsh");
+let fileSourceRuntime: FileSourceRuntime | undefined;
+export const SESSION_RETENTION_MS = 30 * 60 * 1000;
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 2_147_483_647 ? parsed : fallback;
+}
+const UNOBSERVED_SHUTDOWN_MS = parsePositiveInteger(process.env.SESSIONBAR_IDLE_SHUTDOWN_MS, 5 * 60 * 1000);
 const CODEX_DISCOVERY_WINDOW_MS = parseInt(process.env.SESSIONBAR_CODEX_DISCOVERY_MS || String(24 * 60 * 60 * 1000), 10);
 const CODEX_ACTIVE_MS = parseInt(process.env.SESSIONBAR_CODEX_ACTIVE_MS || String(10 * 60 * 1000), 10);
 const CLAUDE_DESKTOP_ROOT = process.env.SESSIONBAR_CLAUDE_DESKTOP_ROOT
   ? process.env.SESSIONBAR_CLAUDE_DESKTOP_ROOT
   : [join(homedir(), "Library", "Application Support", "Claude-3p", "local-agent-mode-sessions"), join(homedir(), "Library", "Application Support", "Claude-3p", "claude-code-sessions")];
-const CLAUDE_DESKTOP_DISCOVERY_WINDOW_MS = parseInt(process.env.SESSIONBAR_CLAUDE_DESKTOP_DISCOVERY_MS || String(24 * 60 * 60 * 1000), 10);
+const CLAUDE_DESKTOP_DISCOVERY_WINDOW_MS = parseInt(process.env.SESSIONBAR_CLAUDE_DESKTOP_DISCOVERY_MS || String(SESSION_RETENTION_MS), 10);
 const CLAUDE_DESKTOP_ACTIVE_MS = parseInt(process.env.SESSIONBAR_CLAUDE_DESKTOP_ACTIVE_MS || String(10 * 60 * 1000), 10);
-export const SESSION_RETENTION_MS = 30 * 60 * 1000;
-const CODEX_DISCOVERY_REFRESH_MS = Math.max(500, parseInt(process.env.SESSIONBAR_CODEX_REFRESH_MS || "2000", 10));
 const CODEX_APP_SERVER_ENABLED = process.env.SESSIONBAR_CODEX_APP_SERVER !== "0";
 const CODEX_METADATA_REFRESH_MS = Math.max(5_000, parseInt(process.env.SESSIONBAR_CODEX_METADATA_REFRESH_MS || "15000", 10));
 const ACTIVITY_TAIL_BYTES = parseInt(process.env.SESSIONBAR_ACTIVITY_TAIL_BYTES || String(192 * 1024), 10);
@@ -99,6 +127,9 @@ let systemSampleTimer: NodeJS.Timeout | undefined;
 let nextSystemSampleAt = 0;
 let lastSystemClientAt = 0;
 let instanceLock: number | undefined;
+let configRevision: string | undefined;
+let stopping = false;
+const providerRefresh = createSingleFlightTask(collectProviderSignals);
 
 export function parseSystemSampleMs(value: string | undefined): number {
   const parsed = Number(value);
@@ -116,51 +147,53 @@ export function systemSampleDelay(lastClientAt: number, now: number, foregroundM
 ensurePrivateDirectory(HOME);
 ensurePrivateDirectory(SESSION_ID_DIR);
 
-function cleanup() {
+async function cleanup() {
+  stopping = true;
+  const draining = providerRefresh.close();
   clearInterval(heartbeatInterval);
   clearInterval(purgeInterval);
   providerPollingActive = false;
   if (providerPollInterval) clearTimeout(providerPollInterval);
   if (systemSampleTimer) clearTimeout(systemSampleTimer);
+  if (unobservedShutdownTimer) clearTimeout(unobservedShutdownTimer);
+  fileSourceRuntime?.close();
   systemSampler.stop();
-  removeClaudeHooks();
+  for (const client of sseClients) client.end();
+  sseClients.clear();
+  httpServer?.close();
+  httpServer?.closeAllConnections();
+  await closeProviderNetwork();
+  let drainTimer: NodeJS.Timeout | undefined;
+  await Promise.race([draining, new Promise<void>(resolve => { drainTimer = setTimeout(resolve, 3000); })]);
+  if (drainTimer) clearTimeout(drainTimer);
   if (instanceLock !== undefined) {
     releaseRuntimeState(HOME, instanceLock);
     instanceLock = undefined;
   }
 }
 
-function removeClaudeHooks() {
-  const settingsPath = join(homedir(), ".claude", "settings.json");
-  let settings: any;
-  try {
-    settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-  } catch { return; }
-  if (!settings.hooks) return;
-
-  let changed = false;
-  for (const event of Object.keys(settings.hooks)) {
-    const before = settings.hooks[event].length;
-    settings.hooks[event] = settings.hooks[event].filter((d: any) => {
-      return !d.hooks?.some?.((h: any) => {
-        const cmd = h.command || "";
-        return /(^|\/)report\.sh(\s|$)/.test(cmd) && /\bSESSIONBAR_AGENT=claude\b/.test(cmd);
-      });
-    });
-    if (settings.hooks[event].length !== before) changed = true;
-    if (settings.hooks[event].length === 0) delete settings.hooks[event];
-  }
-
-  if (changed) {
-    try {
-      writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-      console.log("[cleanup] removed Claude hooks");
-    } catch { /* ignore */ }
-  }
-}
-
 const sessions: Record<string, SessionPayload> = {};
+const recoveredSessionMarkers = new Map<string, string[]>();
+const pendingCodexRecovery = new Set<string>();
+const knownCodexSubagents = new Set<string>();
+const codexServiceOrigins = createCodexServiceOrigins({
+  cachePath: join(HOME, "codex-service-origins.json"),
+  predictionCachePath: join(HOME, "codex-prediction-origins.json"),
+});
 const sseClients = new Set<express.Response>();
+let unobservedShutdownTimer: NodeJS.Timeout | undefined;
+
+function scheduleShutdownIfUnobserved(): void {
+  if (stopping) return;
+  if (unobservedShutdownTimer) clearTimeout(unobservedShutdownTimer);
+  unobservedShutdownTimer = setTimeout(() => {
+    unobservedShutdownTimer = undefined;
+    if (sseClients.size !== 0 || appClientCount(HOME) !== 0) return;
+    console.log("[shutdown] reconnect grace expired with no clients");
+    process.kill(process.pid, "SIGTERM");
+  }, UNOBSERVED_SHUTDOWN_MS);
+  unobservedShutdownTimer.unref();
+}
 
 export async function consumeSystemSample(
   sample: () => Promise<unknown>,
@@ -187,6 +220,7 @@ function scheduleSystemSample(delayMs = systemSampleDelay(
   SYSTEM_SAMPLE_MS,
   BACKGROUND_SYSTEM_SAMPLE_MS,
 )): void {
+  if (stopping) return;
   if (systemSampleTimer) clearTimeout(systemSampleTimer);
   nextSystemSampleAt = Date.now() + delayMs;
   systemSampleTimer = setTimeout(async () => {
@@ -195,8 +229,6 @@ function scheduleSystemSample(delayMs = systemSampleDelay(
     scheduleSystemSample();
   }, delayMs);
 }
-
-const rateBuffers = new Map<string, RateBuffer>();
 
 // Global subscription plan rows, refreshed on every provider poll cycle.
 // null means the first poll cycle hasn't completed yet — endpoints return
@@ -207,6 +239,35 @@ let subscriptionRows: PlanRow[] | null = providerLastGood.rows.length > 0 || !PR
   ? providerLastGood.rows.filter(row => row.form === "subscription") : null;
 export function getSubscriptionRows(): PlanRow[] | null { return subscriptionRows; }
 
+function providerRowKey(row: PlanRow): string {
+  return `${row.provider}:${row.form}:${row.label}`;
+}
+
+export function retainRecentProviderRows(
+  previousRows: readonly PlanRow[],
+  freshRows: readonly PlanRow[],
+  seenAt: Map<string, number>,
+  now: number,
+  maxAgeMs: number,
+): PlanRow[] {
+  const freshKeys = new Set<string>();
+  for (const row of freshRows) {
+    const key = providerRowKey(row);
+    freshKeys.add(key);
+    seenAt.set(key, now);
+  }
+
+  const retained = previousRows.filter(row => {
+    const key = providerRowKey(row);
+    if (freshKeys.has(key)) return false;
+    const lastSeen = seenAt.get(key);
+    if (lastSeen !== undefined && now - lastSeen <= maxAgeMs) return true;
+    seenAt.delete(key);
+    return false;
+  });
+  return [...freshRows, ...retained];
+}
+
 // Account-level API rows come directly from provider polling. They are kept
 // separate from sessions so a provider balance does not need a matching
 // session_type, and is not duplicated onto every session.
@@ -214,6 +275,9 @@ let providerApiRows: PlanRow[] = [];
 let providerUsageHistory = loadProviderUsageHistory(PROVIDER_USAGE_HISTORY_PATH);
 let sessionUsageState = loadSessionUsageState(SESSION_USAGE_STATE_PATH);
 let ccSwitchUsage: CcSwitchUsage = {};
+let sessionProviderRevision = 0;
+let providerRevision = 0;
+let providerHistoryRevision = 0;
 
 /**
  * Merge global subscription rows, account-level provider API rows, and every
@@ -257,6 +321,14 @@ export function matchesSessionProvider(row: PlanRow, session: SessionPayload): b
       return /claude|anthropic/.test(type);
     case "kimi":
       return /kimi|moonshot/.test(type) || provider === "kimi";
+    case "cursor":
+      return /cursor/.test(type) || provider === "cursor";
+    case "grok":
+      return /grok/.test(type) || provider === "grok";
+    case "three-in-one":
+    case "threeinone":
+    case "x-subscription":
+      return /cursor|grok/.test(type) || provider === "cursor" || provider === "grok";
     default:
       return false;
   }
@@ -276,23 +348,31 @@ export function sessionAdvisorRows(
   return [...apiRows, ...subscriptionRows.filter(row => matchesSessionProvider(row, session))];
 }
 
-function advisorFingerprint(): string {
-  const snapshot: Record<string, unknown> = {};
-  for (const id of Object.keys(sessions)) snapshot[id] = sessions[id].advisorRows;
-  return JSON.stringify(snapshot);
+function refreshProviderSignals(): Promise<void> {
+  return providerRefresh.run();
 }
 
-async function refreshProviderSignals() {
-  if (!PROVIDER_POLL_ENABLED) return;
+async function collectProviderSignals() {
+  if (!PROVIDER_POLL_ENABLED || stopping) return;
+  await refreshProviderNetwork();
+  if (stopping) return;
   const now = Date.now();
-  let changed = false;
+  const sessionBefore = stableFingerprint(Object.values(sessions).map(session => ({
+    id: session.session_id,
+    signals: session.agent_signals,
+    advisorRows: session.advisorRows,
+  })));
+  const providerBefore = stableFingerprint({ subscriptionRows, providerApiRows, ccSwitchUsage, sessionUsageState });
+  const historyBefore = stableFingerprint(providerUsageHistory);
   const providerConfigs = await activeProviderConfigs();
+  if (stopping) return;
   if (providerConfigs.length > 0) {
     const results = await Promise.all(providerConfigs.map(config => pollProvider(config)));
+    if (stopping) return;
     providerApiRows = results
       .flatMap(result => result.signals.map(agentSignalToApiRow))
       .filter((row): row is PlanRow => row !== undefined);
-    changed = applyProviderPollResults(sessions, results);
+    applyProviderPollResults(sessions, results);
   } else {
     providerApiRows = [];
   }
@@ -310,28 +390,30 @@ async function refreshProviderSignals() {
       console.log(`[provider] reset card ${result.outcome}; auto-consume disabled`);
     },
   });
+  if (stopping) return;
+  for (const session of Object.values(sessions)) session.advisorRows = computeAdvisorRows(session);
+  const aggregatedRows = aggregateProviders(freshSubscriptionRows, sessions, providerApiRows);
+  providerLastGood = retainProviderLastGood(providerLastGood, aggregatedRows, Date.now(), PROVIDER_LAST_GOOD_MAX_AGE_MS);
+  saveProviderLastGood(PROVIDER_LAST_GOOD_PATH, providerLastGood);
+  subscriptionRows = providerLastGood.rows.filter(row => row.form === "subscription");
   // Advisor is computed regardless of providerConfigs — subscription adapters
   // (wham/anthropic/kimi) read their own credential files, so a user with only
   // ~/.codex/auth.json still gets subscription rows even when no provider API
   // keys are configured.
-  const before = advisorFingerprint();
   for (const session of Object.values(sessions)) {
-    const apiRows = await computeAdvisorRows(session, rateBuffers, now);
-    session.advisorRows = apiRows;
+    session.advisorRows = sessionAdvisorRows(session, session.advisorRows ?? [], subscriptionRows ?? []);
   }
-  const aggregatedRows = aggregateProviders(freshSubscriptionRows, sessions, providerApiRows);
-  providerLastGood = retainProviderLastGood(providerLastGood, aggregatedRows, now, PROVIDER_LAST_GOOD_MAX_AGE_MS);
-  saveProviderLastGood(PROVIDER_LAST_GOOD_PATH, providerLastGood);
-  subscriptionRows = providerLastGood.rows.filter(row => row.form === "subscription");
-  for (const session of Object.values(sessions)) {
-    session.advisorRows = sessionAdvisorRows(session, session.advisorRows ?? [], subscriptionRows);
-  }
-  providerUsageHistory = recordProviderUsage(
+  const nextProviderUsageHistory = recordProviderUsage(
     providerUsageHistory,
     aggregatedRows,
     now,
   );
-  saveProviderUsageHistory(PROVIDER_USAGE_HISTORY_PATH, providerUsageHistory);
+  const historyChanged = stableFingerprint(nextProviderUsageHistory) !== historyBefore;
+  providerUsageHistory = nextProviderUsageHistory;
+  if (historyChanged) {
+    providerHistoryRevision += 1;
+    saveProviderUsageHistory(PROVIDER_USAGE_HISTORY_PATH, providerUsageHistory);
+  }
   sessionUsageState = syncSessionUsage({
     statePath: SESSION_USAGE_STATE_PATH,
     codexDir: CODEX_SESSION_DIR,
@@ -342,9 +424,15 @@ async function refreshProviderSignals() {
     const usage = await readCCSwitchUsage();
     if (usage !== null) ccSwitchUsage = usage;
   }
-  // Broadcast when provider signals OR advisor rows changed (card expiry / reset
-  // countdowns move even when provider signals are stable).
-  if (!changed && advisorFingerprint() === before) return;
+  const sessionChanged = stableFingerprint(Object.values(sessions).map(session => ({
+    id: session.session_id,
+    signals: session.agent_signals,
+    advisorRows: session.advisorRows,
+  }))) !== sessionBefore;
+  const providerChanged = stableFingerprint({ subscriptionRows, providerApiRows, ccSwitchUsage, sessionUsageState }) !== providerBefore;
+  if (sessionChanged) sessionProviderRevision += 1;
+  if (providerChanged) providerRevision += 1;
+  if (!sessionChanged) return;
   broadcastSSE();
   if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
 }
@@ -388,27 +476,66 @@ async function runProviderPoll(): Promise<void> {
 }
 
 function sorted(): SessionPayload[] {
-  refreshCodexSessionsIfDue();
   refreshCodexMetadataIfDue();
   mergeCodexThreadMetadata(sessions, codexMetadataCache);
+  codexServiceOrigins.classify(Object.values(sessions));
+  recoverSessionProjects(sessions, recoveredSessionMarkers);
   dedupeSessions();
-  return Object.values(sessions).sort((a, b) =>
+  for (const id of recoveredSessionMarkers.keys()) if (!sessions[id]) recoveredSessionMarkers.delete(id);
+  for (const id of pendingCodexRecovery) if (!sessions[id]) pendingCodexRecovery.delete(id);
+  const primaryIds = new Set(codexMetadataCache.filter(item => !item.isSubagent).map(item => item.threadId.toLowerCase()));
+  for (const { session } of codexDiscoveryCache.values()) {
+    const id = codexSessionNativeId(session.session_id);
+    if (id) primaryIds.add(id);
+  }
+  const subagentIds = new Set([...knownCodexSubagents, ...codexMetadataCache.filter(item => item.isSubagent).map(item => item.threadId.toLowerCase())]);
+  const visible = visibleCodexSessions(Object.values(sessions), { primaryIds, subagentIds }, pendingCodexRecovery);
+  return visible.sort((a, b) =>
     stableSessionSortKey(a).localeCompare(stableSessionSortKey(b))
   );
 }
 
-let lastCodexDiscoveryAt = 0;
 const codexDiscoveryCache = new Map<string, { mtimeMs: number; session: SessionPayload }>();
 let lastCodexMetadataAt = 0;
 let codexMetadataRefreshInFlight = false;
 let codexMetadataCache: CodexThreadMetadata[] = [];
-let lastClaudeDesktopDiscoveryAt = 0;
 const claudeDesktopDiscoveryIds = new Set<string>();
-let lastWorkBuddyDesktopDiscoveryAt = 0;
 const workBuddyDesktopDiscoveryIds = new Set<string>();
+const kimiCodeDiscoveryIds = new Set<string>();
+const deepSeekHarnessDiscoveryIds = new Set<string>();
 
 export function discoveryRefreshDue(lastRefreshAt: number, now: number, intervalMs: number): boolean {
   return lastRefreshAt <= 0 || now - lastRefreshAt >= intervalMs;
+}
+
+export function reconcileNativeRegistrySessions(
+  target: Record<string, SessionPayload>,
+  tracked: Set<string>,
+  discoveries: readonly SessionPayload[],
+  now = Date.now(),
+): boolean {
+  const live = new Set(discoveries.map(item => item.session_id));
+  let changed = false;
+  for (const id of tracked) {
+    if (live.has(id)) continue;
+    if (["native_registry", "filesystem_snapshot", "filesystem_registry"].includes(target[id]?.source ?? "")) {
+      const previous = target[id];
+      if (previous && (previous.status !== "idle" || previous.task_name !== "Session ended")) {
+        target[id] = { ...previous, status: "idle", task_name: "Session ended", timestamp: now };
+        changed = true;
+      }
+    }
+    tracked.delete(id);
+  }
+  for (const discovery of discoveries) {
+    const previous = target[discovery.session_id];
+    if (!previous || stableFingerprint(previous) !== stableFingerprint(discovery)) {
+      changed = true;
+    }
+    target[discovery.session_id] = discovery;
+    tracked.add(discovery.session_id);
+  }
+  return changed;
 }
 
 export function codexMetadataRefreshDue(
@@ -420,56 +547,6 @@ export function codexMetadataRefreshDue(
   return !inFlight && discoveryRefreshDue(lastRefreshAt, now, intervalMs);
 }
 
-function refreshCodexSessionsIfDue(now = Date.now()): void {
-  if (!discoveryRefreshDue(lastCodexDiscoveryAt, now, CODEX_DISCOVERY_REFRESH_MS)) return;
-  lastCodexDiscoveryAt = now;
-  refreshCodexSessions(now);
-  refreshClaudeDesktopSessionsIfDue(now);
-  refreshWorkBuddyDesktopSessionsIfDue(now);
-}
-
-function refreshClaudeDesktopSessionsIfDue(now = Date.now()): void {
-  if (!discoveryRefreshDue(lastClaudeDesktopDiscoveryAt, now, CODEX_DISCOVERY_REFRESH_MS)) return;
-  lastClaudeDesktopDiscoveryAt = now;
-  const discoveries = discoverClaudeDesktopSessions({
-    root: CLAUDE_DESKTOP_ROOT,
-    now,
-    activeMs: CLAUDE_DESKTOP_ACTIVE_MS,
-    windowMs: CLAUDE_DESKTOP_DISCOVERY_WINDOW_MS,
-  });
-  const live = new Set(discoveries.map(item => item.session_id));
-  for (const id of claudeDesktopDiscoveryIds) {
-    if (!live.has(id) && sessions[id]?.source === "native_registry") delete sessions[id];
-  }
-  for (const discovery of discoveries) {
-    sessions[discovery.session_id] = discovery;
-    claudeDesktopDiscoveryIds.add(discovery.session_id);
-  }
-  if (discoveries.length || live.size !== claudeDesktopDiscoveryIds.size) broadcastSSE();
-}
-
-function refreshWorkBuddyDesktopSessionsIfDue(now = Date.now()): void {
-  if (!discoveryRefreshDue(lastWorkBuddyDesktopDiscoveryAt, now, CODEX_DISCOVERY_REFRESH_MS)) return;
-  lastWorkBuddyDesktopDiscoveryAt = now;
-  const discoveries = discoverWorkBuddyDesktopSessions({ root: WORKBUDDY_ROOT, now });
-  const live = new Set(discoveries.map(item => item.session_id));
-  let changed = false;
-  for (const id of workBuddyDesktopDiscoveryIds) {
-    if (!live.has(id) && sessions[id]?.source === "native_registry") {
-      delete sessions[id];
-      workBuddyDesktopDiscoveryIds.delete(id);
-      changed = true;
-    }
-  }
-  for (const discovery of discoveries) {
-    const previous = sessions[discovery.session_id];
-    if (!previous || previous.timestamp !== discovery.timestamp || previous.status !== discovery.status) changed = true;
-    sessions[discovery.session_id] = discovery;
-    workBuddyDesktopDiscoveryIds.add(discovery.session_id);
-  }
-  if (changed) broadcastSSE();
-}
-
 function refreshCodexMetadataIfDue(now = Date.now()): void {
   if (!CODEX_APP_SERVER_ENABLED) return;
   if (!codexMetadataRefreshDue(lastCodexMetadataAt, codexMetadataRefreshInFlight, now, CODEX_METADATA_REFRESH_MS)) return;
@@ -478,6 +555,9 @@ function refreshCodexMetadataIfDue(now = Date.now()): void {
   void readCodexThreads()
     .then(threads => {
       if (!threads.length) return;
+      const resumedPaths = recentCodexThreadPaths(threads, now, SESSION_RETENTION_MS)
+        .filter(path => pathInsideRuntimeRoot(path, CODEX_SESSION_DIR));
+      if (resumedPaths.length) refreshCodexSessionPaths(resumedPaths, now);
       codexMetadataCache = threads.map(codexThreadMetadata);
       mergeCodexThreadMetadata(sessions, codexMetadataCache);
       broadcastSSE();
@@ -486,8 +566,13 @@ function refreshCodexMetadataIfDue(now = Date.now()): void {
     .finally(() => { codexMetadataRefreshInFlight = false; });
 }
 
+let lastBroadcastFingerprint: string | undefined;
 function broadcastSSE() {
-  const data = `data: ${JSON.stringify(sorted())}\n\n`;
+  const snapshot = sorted();
+  const fingerprint = stableFingerprint(snapshot);
+  if (fingerprint === lastBroadcastFingerprint) return;
+  lastBroadcastFingerprint = fingerprint;
+  const data = `data: ${JSON.stringify(snapshot)}\n\n`;
   for (const c of sseClients) {
     try { c.write(data); } catch {
       sseClients.delete(c);
@@ -664,7 +749,14 @@ function isCodexTopLevel(meta: any): boolean {
   if (typeof meta.cwd !== "string" || !meta.cwd) return false;
   if (typeof meta.id !== "string" || !meta.id) return false;
   if (!String(meta.originator || "").toLowerCase().includes("codex")) return false;
-  if (meta.thread_source === "subagent" || meta.source?.subagent) return false;
+  const nativeSource = codexNativeSource(meta.thread_source, meta.source);
+  const service = codexBackgroundService(nativeSource);
+  if (service) codexServiceOrigins.observe(meta.id, service);
+  if (codexHasSubagentSource(meta.thread_source, meta.source) || meta.source?.internal !== undefined) {
+    // Internal services enrich reports; only user workers belong in the subagent roster.
+    if (!service && codexHasSubagentSource(meta.thread_source, meta.source)) knownCodexSubagents.add(meta.id.toLowerCase());
+    return false;
+  }
   return true;
 }
 
@@ -807,7 +899,8 @@ export function codexActivityFromJsonl(path: string, isRecent: boolean): { taskN
   };
 }
 
-function refreshCodexSessions(now = Date.now()) {
+function refreshCodexSessions(now = Date.now()): boolean {
+  const before = stableFingerprint(Object.values(sessions).filter(session => session.source === "codex_jsonl"));
   const files: Array<{ path: string; mtimeMs: number }> = [];
   const all: string[] = [];
   for (const dir of recentCodexSessionDirs(CODEX_SESSION_DIR, now, CODEX_DISCOVERY_WINDOW_MS)) {
@@ -849,6 +942,7 @@ function refreshCodexSessions(now = Date.now()) {
       session_type: "Codex",
       source: "codex_jsonl",
       status: activity.working ? "working" : "idle",
+      session_source: codexNativeSource(meta.thread_source, meta.source),
       task_name: activity.taskName,
       activity_tail: activity.tail,
       timestamp: file.mtimeMs,
@@ -864,14 +958,188 @@ function refreshCodexSessions(now = Date.now()) {
   }
 
   mergeCodexDiscovery(sessions, discoveries);
+  const after = stableFingerprint(Object.values(sessions).filter(session => session.source === "codex_jsonl"));
+  return before !== after;
+}
+
+function refreshCodexSessionPaths(paths: readonly string[], now = Date.now()): boolean {
+  const before = stableFingerprint(Object.values(sessions).filter(session => session.source === "codex_jsonl"));
+  for (const path of paths) {
+    let mtimeMs: number;
+    try { mtimeMs = statSync(path).mtimeMs; }
+    catch {
+      codexDiscoveryCache.delete(path);
+      continue;
+    }
+    if (now - mtimeMs > Math.min(CODEX_DISCOVERY_WINDOW_MS, SESSION_RETENTION_MS)) {
+      codexDiscoveryCache.delete(path);
+      continue;
+    }
+    const first = readFirstJsonLine(path);
+    const meta = first?.type === "session_meta" ? first.payload : null;
+    if (!isCodexTopLevel(meta)) continue;
+    const project = basename(meta.cwd);
+    const activity = codexActivityFromJsonl(path, now - mtimeMs <= CODEX_ACTIVE_MS);
+    codexDiscoveryCache.set(path, {
+      mtimeMs,
+      session: {
+        session_id: `codex-${meta.id}__${project}`,
+        session_type: "Codex",
+        source: "codex_jsonl",
+        status: activity.working ? "working" : "idle",
+        session_source: codexNativeSource(meta.thread_source, meta.source),
+        task_name: activity.taskName,
+        activity_tail: activity.tail,
+        timestamp: mtimeMs,
+        project,
+        project_path: meta.cwd,
+      },
+    });
+  }
+  const discoveries: SessionPayload[] = [];
+  for (const [path, cached] of codexDiscoveryCache) {
+    if (now - cached.mtimeMs > Math.min(CODEX_DISCOVERY_WINDOW_MS, SESSION_RETENTION_MS)) {
+      codexDiscoveryCache.delete(path);
+      continue;
+    }
+    const active = now - cached.mtimeMs <= CODEX_ACTIVE_MS;
+    discoveries.push(active ? cached.session : {
+      ...cached.session,
+      status: "idle",
+      task_name: "Ready",
+      activity_tail: [],
+    });
+  }
+  mergeCodexDiscovery(sessions, discoveries);
+  return before !== stableFingerprint(Object.values(sessions).filter(session => session.source === "codex_jsonl"));
+}
+
+function sourceRead<T>(roots: readonly string[], read: () => T): SourceRead<T> {
+  try {
+    for (const root of roots) {
+      if (existsSync(root)) readdirSync(root, { withFileTypes: true });
+    }
+    return { ok: true, value: read() };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+function configureFileSourceRuntime(): FileSourceRuntime {
+  const claudeRoots = Array.isArray(CLAUDE_DESKTOP_ROOT) ? CLAUDE_DESKTOP_ROOT : [CLAUDE_DESKTOP_ROOT];
+  type RegistryRead = { discoveries: SessionPayload[]; targeted: boolean };
+  const mergeTargeted = (discoveries: readonly SessionPayload[], tracked: Set<string>): boolean => {
+    let changed = false;
+    for (const discovery of discoveries) {
+      const previous = sessions[discovery.session_id];
+      if (!previous || stableFingerprint(previous) !== stableFingerprint(discovery)) changed = true;
+      sessions[discovery.session_id] = discovery;
+      tracked.add(discovery.session_id);
+    }
+    return changed;
+  };
+  const adapters: FileSourceAdapter<any>[] = [
+    {
+      id: "dsh-projection-checkpoints",
+      lane: "session",
+      roots: [deepSeekHarnessCheckpointRoot(DSH_ROOT), join(DSH_ROOT, "storages", "workspace.json")],
+      accepts: path => path.endsWith(".json"),
+      read: change => sourceRead([deepSeekHarnessCheckpointRoot(DSH_ROOT)], (): RegistryRead => {
+        const checkpointRoot = deepSeekHarnessCheckpointRoot(DSH_ROOT);
+        const targeted = change.kind === "targeted" && change.paths.every(path =>
+          existsSync(path) && pathInsideRuntimeRoot(path, checkpointRoot));
+        return { targeted, discoveries: discoverDeepSeekHarnessSessions({
+          root: DSH_ROOT,
+          now: Date.now(),
+          retentionMs: SESSION_RETENTION_MS,
+          ...(targeted ? { paths: change.paths } : {}),
+        }) };
+      }),
+      apply: result => result.targeted
+        ? mergeTargeted(result.discoveries, deepSeekHarnessDiscoveryIds)
+        : reconcileNativeRegistrySessions(sessions, deepSeekHarnessDiscoveryIds, result.discoveries),
+    },
+    {
+      id: "codex-session-files",
+      lane: "session",
+      roots: [CODEX_SESSION_DIR],
+      accepts: path => path.endsWith(".jsonl"),
+      read: change => sourceRead([CODEX_SESSION_DIR], () => change.kind === "targeted"
+        ? refreshCodexSessionPaths(change.paths, Date.now())
+        : refreshCodexSessions(Date.now())),
+      apply: changed => changed,
+    },
+    {
+      id: "claude-desktop-registry",
+      lane: "session",
+      roots: claudeRoots,
+      accepts: path => basename(path).startsWith("local_") && path.endsWith(".json"),
+      read: change => sourceRead(claudeRoots, (): RegistryRead => {
+        const targeted = change.kind === "targeted" && change.paths.every(path => existsSync(path));
+        return { targeted, discoveries: discoverClaudeDesktopSessions({
+          root: CLAUDE_DESKTOP_ROOT,
+          now: Date.now(),
+          activeMs: CLAUDE_DESKTOP_ACTIVE_MS,
+          windowMs: CLAUDE_DESKTOP_DISCOVERY_WINDOW_MS,
+          ...(targeted ? { paths: change.paths } : {}),
+        }) };
+      }),
+      apply: result => result.targeted
+        ? mergeTargeted(result.discoveries, claudeDesktopDiscoveryIds)
+        : reconcileNativeRegistrySessions(sessions, claudeDesktopDiscoveryIds, result.discoveries),
+    },
+    {
+      id: "kimi-code-registry",
+      lane: "session",
+      roots: [KIMI_CODE_ROOT],
+      accepts: path => path.endsWith("session_index.jsonl") || path.endsWith("state.json"),
+      read: () => sourceRead([KIMI_CODE_ROOT], (): RegistryRead => ({
+        targeted: false,
+        discoveries: discoverKimiCodeSessions({
+          root: KIMI_CODE_ROOT,
+          now: Date.now(),
+          retentionMs: SESSION_RETENTION_MS,
+        }),
+      })),
+      apply: result => reconcileNativeRegistrySessions(sessions, kimiCodeDiscoveryIds,
+        result.discoveries.filter((discovery: SessionPayload) => sessions[discovery.session_id]?.source !== "hook")),
+    },
+    {
+      id: "workbuddy-desktop-registry",
+      lane: "session",
+      roots: [join(WORKBUDDY_ROOT, "sessions"), join(WORKBUDDY_ROOT, "app"), join(WORKBUDDY_ROOT, "projects"),
+        join(WORKBUDDY_ROOT, "workbuddy.db"), join(WORKBUDDY_ROOT, "workbuddy.db-wal")],
+      accepts: path => path.endsWith(".json") || path.endsWith(".jsonl")
+        || basename(path) === "workbuddy.db" || basename(path) === "workbuddy.db-wal",
+      read: change => sourceRead([WORKBUDDY_ROOT], (): RegistryRead => {
+        const sessionsRoot = join(WORKBUDDY_ROOT, "sessions");
+        const targeted = change.kind === "targeted"
+          && change.paths.every(path => existsSync(path) && pathInsideRuntimeRoot(path, sessionsRoot));
+        return { targeted, discoveries: discoverWorkBuddyDesktopSessions({
+          root: WORKBUDDY_ROOT,
+          now: Date.now(),
+          ...(targeted ? { paths: change.paths } : {}),
+        }) };
+      }),
+      apply: result => result.targeted
+        ? mergeTargeted(result.discoveries, workBuddyDesktopDiscoveryIds)
+        : reconcileNativeRegistrySessions(sessions, workBuddyDesktopDiscoveryIds, result.discoveries),
+    },
+  ];
+  return new FileSourceRuntime(adapters, {
+    debounceMs: 300,
+    reconcileMs: 5 * 60_000,
+    onChange: () => broadcastSSE(),
+    onError: (sourceId, error) => console.error(`[runtime] ${sourceId} refresh failed; retaining last good snapshot`, error),
+  });
 }
 
 // Recover sessions that were already running before the server started.
-// ID file existence IS the liveness signal — report.sh deletes it on SessionEnd.
+// Markers recover identities; Codex rows await native primary-session evidence.
 // (The PID embedded in session_id is the shell $$ at creation time, long dead;
 //  don't check it — the ID file alone tells us the session is open.)
 // Crash safety: if an agent dies without SessionEnd, the in-memory retention
-// window eventually removes it. A relay restart rebuilds only live markers.
+// window eventually removes it. A marker alone must not revive a Codex row.
 function recoverSessions() {
   try {
     const files = readdirSync(SESSION_ID_DIR).filter(f => f.startsWith("sessionbar-id-"));
@@ -895,21 +1163,25 @@ function recoverSessions() {
     for (const { file: f, sid } of recovered) {
       try {
         if (!hasScopeSuffix(sid) && scopedKeys.has(unscopedSessionKey(sid))) continue;
+        const markers = recoveredSessionMarkers.get(sid) ?? [];
+        if (!markers.includes(f)) markers.push(f);
+        recoveredSessionMarkers.set(sid, markers);
         if (sessions[sid]) continue;
 
         const type = markerAgent(f);
-        const typeMap: Record<string, string> = {
-          claude: "Claude Code", gemini: "Gemini CLI",
-          codex: "Codex", copilot: "Copilot",
-        };
-        sessions[sid] = {
+        const recoveredSession: SessionPayload = {
           session_id: sid,
-          session_type: typeMap[type] || type,
+          session_type: canonicalMarkerSessionType(type),
           source: "hook",
           status: "idle",
           task_name: "Ready",
           timestamp: Date.now(),
         };
+        if (type === "codex") {
+          pendingCodexRecovery.add(sid);
+          mergeCodexHookSession(sessions, recoveredSession);
+        }
+        else sessions[sid] = recoveredSession;
         console.log(`[recover] ${sid}`);
       } catch { /* corrupt ID file, skip */ }
     }
@@ -920,10 +1192,24 @@ function recoverSessions() {
   } catch { /* state dir not readable */ }
 }
 
+export function canonicalMarkerSessionType(type: string): string {
+  const typeMap: Record<string, string> = {
+    claude: "Claude Code",
+    gemini: "Gemini CLI",
+    codex: "Codex",
+    copilot: "Copilot",
+    pi: "Pi Agent",
+  };
+  return typeMap[type.toLowerCase()] || type;
+}
+
 // SSE heartbeat — detect dead connections
 let heartbeatInterval: NodeJS.Timeout | undefined;
 let purgeInterval: NodeJS.Timeout | undefined;
 if (isDirectRun) {
+  fileSourceRuntime = configureFileSourceRuntime();
+  fileSourceRuntime.start();
+  void fileSourceRuntime.reconcile();
   heartbeatInterval = setInterval(() => {
     for (const c of sseClients) {
       try { c.write(":\n"); } catch {
@@ -932,8 +1218,7 @@ if (isDirectRun) {
     }
   }, 15_000);
 
-  // Keep ended and silent rows for the same bounded history window.
-  // 已结束和静默会话采用相同的限时保留窗口。
+  // Ended and silent sessions remain visible as history for the retention window.
   purgeInterval = setInterval(() => {
     const now = Date.now();
     let changed = false;
@@ -965,6 +1250,31 @@ export function sessionPurgeReason(
     : "timeout — assumed crashed";
 }
 
+// Pairing uses a separate, temporary LAN listener. It intentionally does not
+// mount the dashboard or any authenticated SessionBar API.
+app.get("/health", (_req, res) => {
+  const address = httpServer?.address();
+  res.json({
+    service: "sessionbar",
+    pid: process.pid,
+    port: address && typeof address === "object" ? address.port : REQUESTED_PORT,
+    web: true,
+    web_clients: sseClients.size,
+    build_id: BUILD_ID,
+    config_revision: configRevision,
+    runtime: { node: process.version, network: providerNetworkStatus(), stopping },
+  });
+});
+
+app.post("/lifecycle/unobserved", (req, res) => {
+  if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket?.remoteAddress ?? "")) {
+    res.status(403).json({ ok: false, error: "loopback only" });
+    return;
+  }
+  scheduleShutdownIfUnobserved();
+  res.json({ ok: true, shutdown_in_ms: UNOBSERVED_SHUTDOWN_MS });
+});
+
 // POST: session reports its status
 app.post("/session/status", (req, res) => {
   if (!validateSessionPayload(req.body)) {
@@ -972,9 +1282,16 @@ app.post("/session/status", (req, res) => {
     return;
   }
   const data = req.body;
+  // A current native report is evidence even when no transcript was persisted.
+  for (const id of pendingCodexRecovery) {
+    if (id === data.session_id || (data.session_type.toLowerCase() === "codex"
+      && codexSessionNativeId(id) && codexSessionNativeId(id) === codexSessionNativeId(data.session_id))) pendingCodexRecovery.delete(id);
+  }
   migrateLegacyHookSessions(sessions, data);
   const prev = sessions[data.session_id];
-  sessions[data.session_id] = mergeSessionPayload(prev, data, Date.now());
+  const merged = mergeSessionPayload(prev, data, Date.now());
+  if (merged.session_type.toLowerCase() === "codex" && merged.source === "hook") mergeCodexHookSession(sessions, merged);
+  else sessions[data.session_id] = merged;
   console.log(`[session] ${data.session_id} → ${data.status}`);
   broadcastSSE();
   if (process.env.SESSIONBAR_ICLOUD) syncToICloud(sorted());
@@ -986,22 +1303,38 @@ app.get("/sessions/live", (_req, res) => {
   res.json(sorted());
 });
 
+// Optional, pull-driven agent details share the existing read authorization.
+// The session SSE payload and relay/network lifecycle remain independent.
+const codexAvatars = createCodexAvatarSource();
+app.use("/agents", createAgentRouter(new AgentService({
+  getSessions: sorted,
+  collector: createCompositeAgentCollector([
+    { sessionTypes: ["Codex"], collector: createCodexAgentCollector({
+      avatarSource: codexAvatars,
+      root: CODEX_SESSION_DIR,
+      streamRoot: process.env.SESSIONBAR_CODEX_EVENTS_DIR || join(HOME, "codex-events"),
+      hookRoot: process.env.SESSIONBAR_CODEX_HOOK_EVENTS_DIR || join(HOME, "codex-hooks"),
+      sourceId: `codex-local-${createHash("sha256").update(resolve(CODEX_HOME)).digest("hex").slice(0, 24)}`,
+      windowMs: CODEX_DISCOVERY_WINDOW_MS,
+      activeMs: CODEX_ACTIVE_MS,
+    }) },
+    { sessionTypes: ["Claude Code", "claude-code", "claude"], collector: createClaudeAgentCollector({
+      root: CLAUDE_SESSION_DIR,
+      sourceId: `claude-local-${createHash("sha256").update(resolve(CLAUDE_SESSION_DIR)).digest("hex").slice(0, 24)}`,
+    }) },
+    { sessionTypes: ["DeepSeek Harness", "dsh"], collector: createDeepSeekAgentCollector({
+      root: DSH_ROOT,
+      sourceId: `dsh-local-${createHash("sha256").update(resolve(DSH_ROOT)).digest("hex").slice(0, 24)}`,
+    }) },
+  ]),
+}), codexAvatars));
+
 app.get("/system/live", (_req, res) => {
   lastSystemClientAt = Date.now();
   if (nextSystemSampleAt === 0 || nextSystemSampleAt - lastSystemClientAt > SYSTEM_SAMPLE_MS) {
     scheduleSystemSample(SYSTEM_SAMPLE_MS);
   }
   res.json({ system: systemSampler.latest() ?? null });
-});
-
-app.get("/health", (_req, res) => {
-  const address = httpServer?.address();
-  res.json({
-    service: "sessionbar",
-    pid: process.pid,
-    port: address && typeof address === "object" ? address.port : REQUESTED_PORT,
-    web: true,
-  });
 });
 
 // GET: aggregated provider plan rows (subscription + account/session API rows)
@@ -1014,7 +1347,12 @@ app.get("/providers/live", (_req, res) => {
     providerLastGood.rows.filter(row => Date.now() - (row.lastSeenAt ?? 0) <= PROVIDER_LAST_GOOD_MAX_AGE_MS),
     providerUsageHistory,
   );
-  res.json({ providers: decorateProviderUsageFromSessions(decorateApiUsageFromCCSwitch(rows, ccSwitchUsage), sessionUsageState) });
+  res.json({
+    providers: decorateProviderUsageFromSessions(decorateApiUsageFromCCSwitch(rows, ccSwitchUsage), sessionUsageState),
+    revision: providerRevision,
+    session_revision: sessionProviderRevision,
+    history_revision: providerHistoryRevision,
+  });
 });
 
 // POST: refresh provider state after a local SessionBar setting changes.
@@ -1030,9 +1368,17 @@ app.get("/sessions/stream", (req, res) => {
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
-  res.on("error", () => { sseClients.delete(res); });
+  const disconnect = () => {
+    if (!sseClients.delete(res)) return;
+    if (sseClients.size === 0) scheduleShutdownIfUnobserved();
+  };
+  res.on("error", disconnect);
+  if (unobservedShutdownTimer) {
+    clearTimeout(unobservedShutdownTimer);
+    unobservedShutdownTimer = undefined;
+  }
   sseClients.add(res);
-  req.on("close", () => { sseClients.delete(res); });
+  req.on("close", disconnect);
   // Controlled reconnection: retry every 5s with jitter (EventSource spec)
   res.write("retry: 5000\n\n");
   res.write(`data: ${JSON.stringify(sorted())}\n\n`);
@@ -1040,7 +1386,7 @@ app.get("/sessions/stream", (req, res) => {
 
 // DELETE: session explicitly removed
 app.delete("/session/:id", (req, res) => {
-  const id = req.params.id;
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   if (sessions[id]) {
     delete sessions[id];
     removeSessionMarkerFiles(SESSION_ID_DIR, id);
@@ -1053,20 +1399,29 @@ app.delete("/session/:id", (req, res) => {
 
 let httpServer: ReturnType<typeof app.listen> | undefined;
 if (isDirectRun) {
+  if (!isLoopbackHost(HOST)) {
+    console.error("This release supports loopback HTTP only; LAN access is not released.");
+    process.exit(2);
+  }
+  ensurePrivateDirectory(HOME);
+  ensurePrivateDirectory(SESSION_ID_DIR);
   instanceLock = acquireInstanceLock(HOME);
   if (instanceLock === undefined) {
     console.error("SessionBar is already running on this machine.");
     process.exit(2);
-  } else httpServer = app.listen(REQUESTED_PORT, HOST, () => {
-    const address = httpServer?.address();
-    const port = address && typeof address === "object" ? address.port : REQUESTED_PORT;
-    writeRuntimeState(HOME, { pid: process.pid, port, started_at: Date.now() });
-    console.log(`SessionBar on http://${HOST}:${port}`);
-    console.log(`Dashboard: http://${HOST}:${port}`);
-    recoverSessions();
-    startSystemSampling();
-    startProviderPolling();
-  });
+  } else {
+    configRevision = recordRelayConfig(HOME, process.env).revision;
+    httpServer = app.listen(REQUESTED_PORT, HOST, () => {
+      const address = httpServer?.address();
+      const port = address && typeof address === "object" ? address.port : REQUESTED_PORT;
+      writeRuntimeState(HOME, { pid: process.pid, port, started_at: Date.now() });
+      console.log(`SessionBar on http://${HOST}:${port}`);
+      console.log(`Dashboard: http://${HOST}:${port}`);
+      recoverSessions();
+      startSystemSampling();
+      startProviderPolling();
+    });
+  }
 
   let shuttingDown = false;
   const shutdown = (reason: string, code: number, error?: unknown) => {
@@ -1074,8 +1429,7 @@ if (isDirectRun) {
     shuttingDown = true;
     if (error) console.error(`[shutdown] ${reason}`, error);
     else console.log(`[shutdown] ${reason}`);
-    cleanup();
-    process.exit(code);
+    void cleanup().then(() => process.exit(code), () => process.exit(code || 1));
   };
 
   httpServer?.on("error", error => shutdown("server error", 1, error));

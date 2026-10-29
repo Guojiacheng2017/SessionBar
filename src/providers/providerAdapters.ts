@@ -1,4 +1,5 @@
 import type { SessionAgentSignalInput } from "../shared/types.js";
+import { providerFetch } from "../runtime/networkRuntime.js";
 
 export type ProviderId = "deepseek" | "minimax" | "kimi" | "xai" | "openai" | "anthropic";
 
@@ -51,7 +52,7 @@ export function providerConfigsFromEnv(env: Env): ProviderConfig[] {
 
 export async function pollProvider(
   config: ProviderConfig,
-  fetchImpl: FetchLike = globalThis.fetch,
+  fetchImpl: FetchLike = providerFetch,
   now = Date.now(),
 ): Promise<ProviderPollResult> {
   try {
@@ -74,11 +75,7 @@ export async function pollProvider(
         );
         break;
       case "xai":
-        signals = parseXaiPrepaidBalance(await getJson(
-          fetchImpl,
-          `${urlFor(config, "")}/v1/billing/teams/${encodeURIComponent(config.team_id || "")}/prepaid/balance`,
-          bearerHeaders(config),
-        ));
+        signals = await pollXaiBilling(config, fetchImpl, now);
         break;
       case "openai":
         signals = parseOpenAIUsage(await getJson(
@@ -193,6 +190,37 @@ export function parseXaiPrepaidBalance(body: unknown, label = DEFAULTS.xai.label
   }];
 }
 
+export function parseXaiUsage(body: unknown, label = "xAI API today"): SessionAgentSignalInput[] {
+  const series = Array.isArray(asRecord(body)?.timeSeries) ? asRecord(body)?.timeSeries as unknown[] : [];
+  let used = 0;
+  let found = false;
+  for (const item of series) {
+    const points = asRecord(item)?.dataPoints;
+    if (!Array.isArray(points)) continue;
+    for (const point of points) {
+      const values = asRecord(point)?.values;
+      if (!Array.isArray(values)) continue;
+      for (const value of values) {
+        const amount = nonNegativeNumber(value);
+        if (amount === undefined) continue;
+        used += amount;
+        found = true;
+      }
+    }
+  }
+  if (!found && series.length > 0) return [healthSignalForLabel("xai", label, "empty")];
+  return [{
+    signal: "xai.usage.today",
+    kind: "usage",
+    source: "provider_api",
+    scope: "account",
+    used,
+    unit: "USD",
+    status: "ok",
+    label,
+  }];
+}
+
 export function parseOpenAIUsage(body: unknown, label = "OpenAI API today"): SessionAgentSignalInput[] {
   const usage = aggregateTokenUsage(body);
   return [{
@@ -255,6 +283,52 @@ async function getJson(fetchImpl: FetchLike, url: string, headers: HeadersInit):
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function postJson(fetchImpl: FetchLike, url: string, headers: HeadersInit, body: unknown): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new ProviderRequestError(response.status);
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function pollXaiBilling(config: ProviderConfig, fetchImpl: FetchLike, now: number): Promise<SessionAgentSignalInput[]> {
+  const team = encodeURIComponent(config.team_id || "");
+  const root = `${urlFor(config, "")}/v1/billing/teams/${team}`;
+  const headers = bearerHeaders(config);
+  const day = new Date(now).toISOString().slice(0, 10);
+  const requests = await Promise.allSettled([
+    getJson(fetchImpl, `${root}/prepaid/balance`, headers),
+    postJson(fetchImpl, `${root}/usage`, headers, {
+      analyticsRequest: {
+        timeRange: {
+          startTime: `${day} 00:00:00`,
+          endTime: `${day} 23:59:59`,
+          timezone: "UTC",
+        },
+        timeUnit: "TIME_UNIT_DAY",
+        values: [{ name: "usd", aggregation: "AGGREGATION_SUM" }],
+        groupBy: [],
+        filters: [],
+      },
+    }),
+  ]);
+  const signals: SessionAgentSignalInput[] = [];
+  if (requests[0].status === "fulfilled") signals.push(...parseXaiPrepaidBalance(requests[0].value, config.label));
+  if (requests[1].status === "fulfilled") signals.push(...parseXaiUsage(requests[1].value));
+  if (signals.length > 0) return signals;
+  throw requests[0].status === "rejected" ? requests[0].reason : (requests[1] as PromiseRejectedResult).reason;
 }
 
 function urlFor(config: ProviderConfig, path: string): string {

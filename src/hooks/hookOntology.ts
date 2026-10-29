@@ -1,4 +1,4 @@
-export const HOOK_ONTOLOGY_VERSION = "2026-06-26";
+export const HOOK_ONTOLOGY_VERSION = "2026-08-19";
 
 export type HookMappingType =
   | "same_concept"
@@ -55,6 +55,7 @@ export const canonicalHookStages: Record<string, CanonicalHookStage> = {
   "notification.emit": stage("notification", "status", "Agent emitted a notification."),
   "permission.denied": stage("permission", "after", "Permission request was denied."),
   "permission.request": stage("permission", "before", "Permission is being requested."),
+  "permission.result": stage("permission", "after", "Permission approval completed; the explicit decision determines the result."),
   "prompt.expand": stage("prompt", "after", "Prompt expansion completed."),
   "prompt.submit": stage("prompt", "before", "User prompt has been submitted."),
   "session.end": stage("session", "after", "Session ended."),
@@ -139,8 +140,11 @@ const agentEvents: Record<string, readonly string[]> = {
   "Kimi Code CLI": [
     "Interrupt",
     "Notification",
+    "PermissionRequest",
+    "PermissionResult",
     "PostToolUse",
     "PostToolUseFailure",
+    "PostCompact",
     "PreCompact",
     "PreToolUse",
     "SessionEnd",
@@ -149,8 +153,10 @@ const agentEvents: Record<string, readonly string[]> = {
     "StopFailure",
     "SubagentStart",
     "SubagentStop",
+    "TurnStarted",
     "UserPromptSubmit",
   ],
+  "ZCode": ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "PostToolUseFailure", "Stop"],
   "Gemini CLI": [
     "AfterAgent",
     "AfterModel",
@@ -202,6 +208,9 @@ const agentEvents: Record<string, readonly string[]> = {
     "tool.execute.before",
   ],
   Pi: [
+    "agent_end",
+    "agent_settled",
+    "agent_start",
     "before_agent_start",
     "before_provider_payload",
     "before_provider_request",
@@ -209,7 +218,12 @@ const agentEvents: Record<string, readonly string[]> = {
     "message_end",
     "session_before_compact",
     "session_before_tree",
+    "session_compact",
+    "session_shutdown",
+    "session_start",
     "tool_call",
+    "tool_execution_end",
+    "tool_execution_start",
     "tool_result",
   ],
   Antigravity: [],
@@ -220,7 +234,8 @@ const sourceCaches: Record<string, string> = {
   "Codex CLI": "/tmp/sessionbar-codex-hooks.html",
   "Codex App": "/tmp/sessionbar-codex-hooks.html",
   "Factory Droid": "/tmp/sessionbar-factory-reference-hooks.md; /tmp/sessionbar-factory-hooks-guide.md; /tmp/sessionbar-factory-hooks-format.md",
-  "Kimi Code CLI": "/tmp/sessionbar-kimi-hooks.md",
+  "Kimi Code CLI": "https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html",
+  ZCode: "https://zcode.z.ai/en/docs/hooks",
   "Gemini CLI": "/tmp/sessionbar-gemini-hooks-index.md",
   "GitHub Copilot": "/tmp/sessionbar-copilot-hooks.html",
   Cursor: "/tmp/sessionbar-cursor-hooks.html",
@@ -237,6 +252,8 @@ const agentAliases: Record<string, string> = {
   Gemini: "Gemini CLI",
   Copilot: "GitHub Copilot",
   "Pi Agent": "Pi",
+  "Kimi CLI": "Kimi Code CLI",
+  "Kimi Code": "Kimi Code CLI",
   Workbuddy: "Workbuddy",
   Minimax: "Minimax",
 };
@@ -302,9 +319,11 @@ function mappingRule(rawEvent: string): {
   switch (rawEvent) {
     case "SessionStart":
     case "sessionStart":
+    case "session_start":
       return same("session.start");
     case "SessionEnd":
     case "sessionEnd":
+    case "session_shutdown":
       return same("session.end");
     case "Setup":
       return same("session.setup");
@@ -328,6 +347,7 @@ function mappingRule(rawEvent: string): {
     case "BeforeTool":
     case "tool.execute.before":
     case "tool_call":
+    case "tool_execution_start":
       return same("tool.execute.before");
     case "beforeShellExecution":
       return subtype("tool.execute.before", "Tool subtype: shell execution.");
@@ -338,6 +358,7 @@ function mappingRule(rawEvent: string): {
     case "AfterTool":
     case "tool.execute.after":
     case "tool_result":
+    case "tool_execution_end":
       return same("tool.execute.after");
     case "afterShellExecution":
       return subtype("tool.execute.after", "Tool subtype: shell execution.");
@@ -355,12 +376,15 @@ function mappingRule(rawEvent: string): {
       return same("permission.request");
     case "PermissionDenied":
       return same("permission.denied");
+    case "PermissionResult":
+      return same("permission.result");
     case "PreCompact":
     case "preCompact":
     case "PreCompress":
     case "session_before_compact":
       return same("context.compact.before", "Different expression for the same context compaction/compression boundary.");
     case "PostCompact":
+    case "session_compact":
       return same("context.compact.after");
     case "session_before_tree":
       return weak("context.tree.before", "Pi-specific tree/session boundary; keep separate until payload semantics are clearer.");
@@ -386,8 +410,14 @@ function mappingRule(rawEvent: string): {
     case "FileChanged":
       return same("file.changed");
     case "BeforeAgent":
+    case "TurnStarted":
     case "before_agent_start":
+    case "agent_start":
       return same("agent.loop.before");
+    case "agent_end":
+      return same("agent.loop.after");
+    case "agent_settled":
+      return same("session.idle");
     case "AfterAgent":
       return same("agent.loop.after");
     case "BeforeModel":

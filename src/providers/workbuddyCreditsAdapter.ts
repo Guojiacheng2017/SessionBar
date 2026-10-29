@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import type { PlanRow } from "./planTypes.js";
+import { execProviderFile } from "./providerProcess.js";
 
-const execFileAsync = promisify(execFile);
 const execSqlite = "sqlite3";
 
 export interface WorkBuddyCreditsOpts {
@@ -15,12 +13,11 @@ export interface WorkBuddyCreditsOpts {
 }
 
 interface UsageRow {
-  used?: unknown;
-  size?: unknown;
   credit_json?: unknown;
+  updated_at?: unknown;
 }
 
-/** Read WorkBuddy Desktop's account-wide local credit snapshot without scanning traces. */
+/** Sum recorded Desktop session credit consumption; this is not an account balance. */
 export async function fetchWorkBuddyDesktopCredits(opts: WorkBuddyCreditsOpts = {}): Promise<PlanRow | null> {
   const balanceCommand = opts.balanceCommand ?? process.env.SESSIONBAR_WORKBUDDY_BALANCE_COMMAND;
   if (balanceCommand) {
@@ -30,11 +27,14 @@ export async function fetchWorkBuddyDesktopCredits(opts: WorkBuddyCreditsOpts = 
   const dbPath = opts.dbPath ?? join(homedir(), ".workbuddy", "workbuddy.db");
   if (!existsSync(dbPath)) return null;
   try {
-    const result = await execFileAsync(opts.sqlitePath ?? execSqlite, [
+    const result = await execProviderFile(opts.sqlitePath ?? execSqlite, [
+      "-readonly",
+      "-batch",
       "-json",
+      "-cmd", ".timeout 50",
       dbPath,
-      "SELECT used, size, credit_json FROM session_usage ORDER BY updated_at DESC;",
-    ], { maxBuffer: 256 * 1024 });
+      "PRAGMA query_only=ON; SELECT credit_json, updated_at FROM session_usage WHERE credit_json IS NOT NULL;",
+    ], { maxBuffer: 256 * 1024, timeout: 1_000, network: false });
     return parseWorkBuddyCredits(String(result.stdout));
   } catch {
     // Desktop data is optional. A missing sqlite binary or locked DB must not
@@ -45,7 +45,7 @@ export async function fetchWorkBuddyDesktopCredits(opts: WorkBuddyCreditsOpts = 
 
 async function fetchWorkBuddyBalanceCommand(command: string): Promise<PlanRow | null> {
   try {
-    const result = await execFileAsync("/bin/sh", ["-c", command], { maxBuffer: 64 * 1024, timeout: 10_000 });
+    const result = await execProviderFile("/bin/sh", ["-c", command], { maxBuffer: 64 * 1024, timeout: 10_000 });
     return parseWorkBuddyBalance(String(result.stdout));
   } catch {
     return null;
@@ -84,16 +84,22 @@ export function parseWorkBuddyCredits(json: string): PlanRow | null {
   let parsed: unknown;
   try { parsed = JSON.parse(json); } catch { return null; }
   if (!Array.isArray(parsed)) return null;
-  const rows = parsed.filter((row): row is UsageRow => !!row && typeof row === "object");
+  const rows = parsed.filter((row): row is UsageRow => !!row && typeof row === "object" && !Array.isArray(row));
   if (rows.length === 0) return null;
 
-  const used = rows.reduce((sum, row) => sum + finiteNonNegative(row.used), 0);
-  const size = rows.reduce((sum, row) => sum + finiteNonNegative(row.size), 0);
-  const credits = rows.reduce((sum, row) => sum + creditTotal(row.credit_json), 0);
-  const hasCredits = rows.some(row => creditTotal(row.credit_json) > 0);
-  const totalUsed = hasCredits ? credits : used;
-  const totalLimit = hasCredits ? undefined : size > 0 ? size : undefined;
-  if (totalUsed <= 0 && totalLimit === undefined) return null;
+  let totalUsed = 0;
+  let hasCredits = false;
+  let lastSeenAt: number | undefined;
+  for (const row of rows) {
+    // ACP used/size describe context occupancy, not a credit allowance.
+    const credits = creditTotal(row.credit_json);
+    if (credits === undefined) continue;
+    hasCredits = true;
+    totalUsed += credits;
+    const timestamp = finiteOptional(row.updated_at);
+    if (timestamp !== undefined) lastSeenAt = Math.max(lastSeenAt ?? 0, timestamp);
+  }
+  if (!hasCredits || !Number.isFinite(totalUsed)) return null;
 
   return {
     form: "api",
@@ -107,27 +113,25 @@ export function parseWorkBuddyCredits(json: string): PlanRow | null {
     actualVsSustainable: 0,
     projectedCapHitAt: null,
     used: totalUsed,
-    ...(totalLimit !== undefined ? { limit: totalLimit } : {}),
+    ...(lastSeenAt !== undefined ? { lastSeenAt } : {}),
     unit: "credits",
   };
 }
 
-function creditTotal(value: unknown): number {
-  if (!value || typeof value !== "string") return 0;
+function creditTotal(value: unknown): number | undefined {
+  if (!value || typeof value !== "string") return undefined;
   try {
-    const parsed = JSON.parse(value);
-    if (!parsed || typeof parsed !== "object") return 0;
-    return Object.values(parsed as Record<string, unknown>)
-      .reduce<number>((sum, item) => sum + finiteNonNegative(item), 0);
-  } catch { return 0; }
-}
-
-function finiteNonNegative(value: unknown): number {
-  const number = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(number) && number >= 0 ? number : 0;
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const amounts = Object.values(parsed).map(finiteOptional).filter((value): value is number => value !== undefined);
+    if (amounts.length === 0) return undefined;
+    const total = amounts.reduce((sum, amount) => sum + amount, 0);
+    return Number.isFinite(total) ? total : undefined;
+  } catch { return undefined; }
 }
 
 function finiteOptional(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return undefined;
   const number = typeof value === "number" ? value : Number(value);
   return Number.isFinite(number) && number >= 0 ? number : undefined;
 }

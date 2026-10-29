@@ -1,28 +1,26 @@
 // Hook injection and teardown for Claude Code, Codex, Gemini CLI, and Copilot.
 // Extracted from cli.ts to keep the CLI entry point focused on command dispatch.
 
-import { accessSync, constants, readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { accessSync, constants, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
+import { setupKimiCodeHooks, teardownKimiCodeHooks, setupZCodeHooks, teardownZCodeHooks } from "./kimiZcodeHooks.js";
+export { setupKimiCodeHooks, teardownKimiCodeHooks, setupZCodeHooks, teardownZCodeHooks };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export type SetupResult = { name: string; path: string; added: number };
-export type HarnessScope = "local" | "remote";
+export type SetupResult = { name: string; path: string; added: number; skipped?: string };
 export type HarnessRegistryEntry = {
   id: string;
   name: string;
-  scope: HarnessScope;
   supported: boolean;
   available: boolean;
-  configurable: boolean;
   kind: string;
   commands: string[];
   commandFound?: string;
   configPath?: string;
   configExists?: boolean;
-  configKeys?: string[];
 };
 
 type HarnessDefinition = {
@@ -30,52 +28,100 @@ type HarnessDefinition = {
   name: string;
   commands: string[];
   localConfigPaths: () => string[];
-  remoteConfigKeys: string[];
   availability?: () => { available: boolean; configPath?: string; configExists?: boolean; commandFound?: string };
 };
 
 export const MAINSTREAM_HARNESSES: HarnessDefinition[] = [
   {
+    id: "kimi-code",
+    name: "Kimi Code CLI / Desktop",
+    commands: ["kimi"],
+    localConfigPaths: () => [join(process.env.KIMI_CODE_HOME || join(homedir(), ".kimi-code"), "config.toml")],
+  },
+  {
+    id: "zcode",
+    name: "ZCode",
+    commands: ["zcode"],
+    localConfigPaths: () => [join(process.env.SESSIONBAR_ZCODE_HOME || join(homedir(), ".zcode"), "cli", "config.json")],
+    availability: () => {
+      const app = "/Applications/ZCode.app";
+      const configPath = join(process.env.SESSIONBAR_ZCODE_HOME || join(homedir(), ".zcode"), "cli", "config.json");
+      return { available: existsSync(app) || existsSync(configPath), configPath,
+        configExists: existsSync(configPath), commandFound: existsSync(app) ? app : undefined };
+    },
+  },
+  {
+    id: "dsh",
+    name: "DeepSeek Harness",
+    commands: ["dsh", "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"],
+    localConfigPaths: () => [process.env.SESSIONBAR_DSH_HOME || join(homedir(), ".dsh")],
+    availability: () => {
+      const app = "/Applications/DeepSeek Harness.app";
+      const data = process.env.SESSIONBAR_DSH_HOME || join(homedir(), ".dsh");
+      return { available: existsSync(app) || existsSync(data), configPath: data,
+        configExists: existsSync(data), commandFound: existsSync(app) ? app : undefined };
+    },
+  },
+  {
     id: "claude",
     name: "Claude Code",
     commands: ["claude"],
     localConfigPaths: () => [join(process.cwd(), ".claude", "settings.json"), join(homedir(), ".claude", "settings.json")],
-    remoteConfigKeys: ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "SESSIONBAR_CLAUDE_REMOTE_URL", "HARNESS_CLAUDE_REMOTE_URL"],
   },
   {
     id: "codex",
     name: "Codex",
     commands: ["codex"],
     localConfigPaths: () => [join(process.cwd(), ".codex", "hooks.json"), join(homedir(), ".codex", "hooks.json")],
-    remoteConfigKeys: ["OPENAI_API_KEY", "SESSIONBAR_CODEX_REMOTE_URL", "HARNESS_CODEX_REMOTE_URL"],
   },
   {
     id: "gemini",
     name: "Gemini CLI",
     commands: ["gemini"],
     localConfigPaths: () => [join(process.cwd(), ".gemini", "settings.json"), join(homedir(), ".gemini", "settings.json")],
-    remoteConfigKeys: ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "SESSIONBAR_GEMINI_REMOTE_URL", "HARNESS_GEMINI_REMOTE_URL"],
   },
   {
     id: "copilot",
     name: "GitHub Copilot CLI",
     commands: ["copilot", "gh"],
     localConfigPaths: () => [join(process.cwd(), ".github", "hooks", "agentbar.json"), join(homedir(), ".copilot", "hooks", "agentbar.json")],
-    remoteConfigKeys: ["GITHUB_TOKEN", "GH_TOKEN", "SESSIONBAR_COPILOT_REMOTE_URL", "HARNESS_COPILOT_REMOTE_URL"],
+  },
+  {
+    id: "cursor",
+    name: "Cursor",
+    commands: ["cursor"],
+    localConfigPaths: () => [join(process.cwd(), ".cursor", "hooks.json"), join(homedir(), ".cursor", "hooks.json")],
+    availability: () => {
+      const app = "/Applications/Cursor.app";
+      const projectConfig = join(process.cwd(), ".cursor", "hooks.json");
+      const globalConfig = join(homedir(), ".cursor", "hooks.json");
+      const configPath = [projectConfig, globalConfig].find(existsSync) || projectConfig;
+      const appExists = existsSync(app);
+      return {
+        available: appExists || existsSync(configPath) || executableOnPath("cursor"),
+        configPath,
+        configExists: existsSync(configPath),
+        commandFound: appExists ? app : undefined,
+      };
+    },
+  },
+  {
+    id: "pi",
+    name: "Pi Agent",
+    commands: ["pi"],
+    localConfigPaths: () => [join(process.cwd(), ".pi", "extensions", "sessionbar.ts"), join(homedir(), ".pi", "agent", "extensions", "sessionbar.ts")],
   },
   {
     id: "codebuddy-cli",
     name: "CodeBuddy CLI",
     commands: ["codebuddy"],
     localConfigPaths: () => [join(process.cwd(), ".codebuddy", "settings.json"), join(homedir(), ".codebuddy", "settings.json")],
-    remoteConfigKeys: ["CODEBUDDY_API_KEY", "WORKBUDDY_API_KEY", "SESSIONBAR_WORKBUDDY_REMOTE_URL", "HARNESS_WORKBUDDY_REMOTE_URL"],
   },
   {
     id: "workbuddy-desktop",
     name: "WorkBuddy Desktop",
     commands: ["/Applications/WorkBuddy.app/Contents/MacOS/WorkBuddy"],
     localConfigPaths: () => [join(homedir(), ".workbuddy")],
-    remoteConfigKeys: ["SESSIONBAR_WORKBUDDY_REMOTE_URL", "HARNESS_WORKBUDDY_REMOTE_URL"],
     availability: () => {
       const app = "/Applications/WorkBuddy.app";
       const data = join(homedir(), ".workbuddy");
@@ -106,21 +152,8 @@ function executableOnPath(command: string): boolean {
   });
 }
 
-export function detectHarnessAvailability(scope: HarnessScope): HarnessRegistryEntry[] {
+export function detectHarnessAvailability(): HarnessRegistryEntry[] {
   return MAINSTREAM_HARNESSES.map(harness => {
-    if (scope === "remote") {
-      return {
-        id: harness.id,
-        name: harness.name,
-        scope,
-        supported: true,
-        available: false,
-        configurable: true,
-        kind: "cloud/self-hosted",
-        commands: harness.commands,
-        configKeys: harness.remoteConfigKeys,
-      };
-    }
     const localConfigPaths = harness.localConfigPaths();
     const custom = harness.availability?.();
     const configPath = custom?.configPath || localConfigPaths.find(existsSync) || localConfigPaths[0];
@@ -129,10 +162,8 @@ export function detectHarnessAvailability(scope: HarnessScope): HarnessRegistryE
     return {
       id: harness.id,
       name: harness.name,
-      scope,
       supported: true,
       available: configExists || !!commandFound,
-      configurable: false,
       kind: "installed",
       configPath,
       configExists,
@@ -186,7 +217,7 @@ export function dedupeSessionbarHooks(config: any, agent: string): number {
   return removed;
 }
 
-/** Remove only owned legacy hooks / 仅清理本工具脚本的旧 Hook，不按同名文件猜测归属。 */
+/** Remove pre-agent-marker SessionBar hooks without touching unrelated commands. */
 export function removeLegacyClaudeSessionbarHooks(hooks: any, reportPath = join(__dirname, "..", "..", "report.sh")): number {
   if (!hooks || typeof hooks !== "object") return 0;
   const invocations = [reportPath, shellEscape(reportPath)];
@@ -281,6 +312,7 @@ export function setupCodexHooks(global: boolean, reportPath: string): SetupResul
     PreToolUse: [{ matcher: "", hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "working", "\"${CODEX_TOOL_NAME:-Working}\"", "PreToolUse") }] }],
     PermissionRequest: [{ matcher: "", hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "blocked", "'Waiting for permission'", "PermissionRequest") }] }],
     Stop: [{ hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "idle", "'Ready'", "Stop") }] }],
+    SessionEnd: [{ hooks: [{ type: "command", command: commandFor("codex", "Codex", reportPath, "idle", "'Session ended'", "SessionEnd") }] }],
   };
 
   let added = 0;
@@ -361,6 +393,36 @@ export function setupCopilotHooks(global: boolean, reportPath: string): SetupRes
   return { name: "Copilot", path: hooksPath, added };
 }
 
+export function setupCursorHooks(global: boolean, reportPath: string): SetupResult {
+  const hooksPath = global
+    ? join(homedir(), ".cursor", "hooks.json")
+    : join(process.cwd(), ".cursor", "hooks.json");
+  const config = readJsonFile(hooksPath);
+  migrateStaticPortCommands(config);
+  config.version = 1;
+  if (!config.hooks) config.hooks = {};
+
+  const hookDefs: Record<string, { command: string }[]> = {
+    sessionStart: [{ command: commandFor("cursor", "Cursor", reportPath, "working", "'Working'", "sessionStart") }],
+    preToolUse: [{ command: commandFor("cursor", "Cursor", reportPath, "working", "'Using tool'", "preToolUse") }],
+    postToolUse: [{ command: commandFor("cursor", "Cursor", reportPath, "working", "'Analyzing tool results'", "postToolUse") }],
+    stop: [{ command: commandFor("cursor", "Cursor", reportPath, "idle", "'Ready'", "stop") }],
+    sessionEnd: [{ command: commandFor("cursor", "Cursor", reportPath, "idle", "'Session ended'", "sessionEnd") }],
+  };
+
+  let added = 0;
+  for (const [event, defs] of Object.entries(hookDefs)) {
+    if (!config.hooks[event]) config.hooks[event] = [];
+    if (!config.hooks[event].some((hook: any) => isSessionbarCommandFor(hook.command || "", "cursor"))) {
+      config.hooks[event].push(...defs);
+      added += defs.length;
+    }
+  }
+
+  writeJsonFile(hooksPath, config);
+  return { name: "Cursor", path: hooksPath, added };
+}
+
 export function teardownClaudeHooks(global: boolean): number {
   const settingsPath = global
     ? join(homedir(), ".claude", "settings.json")
@@ -437,6 +499,94 @@ export function teardownCopilotHooks(global: boolean): number {
   return removed;
 }
 
+export function teardownCursorHooks(global: boolean): number {
+  const hooksPath = global
+    ? join(homedir(), ".cursor", "hooks.json")
+    : join(process.cwd(), ".cursor", "hooks.json");
+  const config = readJsonFile(hooksPath);
+  if (!config.hooks) return 0;
+  let removed = 0;
+  for (const event of Object.keys(config.hooks)) {
+    const before = config.hooks[event].length;
+    config.hooks[event] = config.hooks[event].filter((hook: any) =>
+      !isSessionbarCommandFor(hook.command || "", "cursor")
+    );
+    removed += before - config.hooks[event].length;
+    if (config.hooks[event].length === 0) delete config.hooks[event];
+  }
+  if (removed > 0) writeJsonFile(hooksPath, config);
+  return removed;
+}
+
+const PI_EXTENSION_MARKER = "// Generated by SessionBar. Do not edit; run sessionbar setup to refresh.";
+
+export function piExtensionSource(reportPath: string): string {
+  return `${PI_EXTENSION_MARKER}
+import { spawn } from "node:child_process";
+import { basename } from "node:path";
+
+const reportPath = ${JSON.stringify(reportPath)};
+
+function sessionId(ctx: any): string {
+  const file = ctx.sessionManager.getSessionFile?.();
+  return file ? basename(file, ".jsonl") : \`pi-\${process.pid}\`;
+}
+
+function report(event: string, status: string, task: string, ctx: any): void {
+  const usage = ctx.getContextUsage?.();
+  const name = ctx.sessionManager.getSessionName?.();
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    SESSIONBAR_AGENT: "pi",
+    SESSIONBAR_SESSION_TYPE: "Pi Agent",
+    SESSIONBAR_SESSION_ID: sessionId(ctx),
+    SESSIONBAR_PROJECT_DIR: ctx.cwd,
+    SESSIONBAR_HOOK_EVENT: event,
+  };
+  if (name) env.SESSIONBAR_SESSION_NAME = name;
+  if (usage?.tokens != null) env.SESSIONBAR_TOKENS = String(usage.tokens);
+  if (usage?.percent != null) env.SESSIONBAR_CONTEXT_PERCENT = String(usage.percent);
+  const child = spawn(reportPath, [status, task], { env, stdio: "ignore", detached: true });
+  child.unref();
+}
+
+export default function sessionbarPiExtension(pi: any): void {
+  pi.on("session_start", (_event: any, ctx: any) => report("session_start", "idle", "Ready", ctx));
+  pi.on("before_agent_start", (_event: any, ctx: any) => report("before_agent_start", "working", "Handling prompt", ctx));
+  pi.on("agent_start", (_event: any, ctx: any) => report("agent_start", "working", "Agent running", ctx));
+  pi.on("tool_execution_start", (event: any, ctx: any) => report("tool_execution_start", "working", \`running: \${event.toolName || "tool"}\`, ctx));
+  pi.on("tool_execution_end", (event: any, ctx: any) => report("tool_execution_end", event.isError ? "error" : "working", event.isError ? \`failed: \${event.toolName || "tool"}\` : \`done: \${event.toolName || "tool"}\`, ctx));
+  pi.on("session_before_compact", (_event: any, ctx: any) => report("session_before_compact", "working", "Compacting context", ctx));
+  pi.on("session_compact", (_event: any, ctx: any) => report("session_compact", "working", "Context compacted", ctx));
+  pi.on("agent_end", (_event: any, ctx: any) => report("agent_end", "idle", "Ready", ctx));
+  pi.on("agent_settled", (_event: any, ctx: any) => report("agent_settled", "idle", "Ready", ctx));
+  pi.on("session_shutdown", (_event: any, ctx: any) => report("session_shutdown", "idle", "Session ended", ctx));
+}
+`;
+}
+
+function piExtensionPath(global: boolean): string {
+  return global
+    ? join(homedir(), ".pi", "agent", "extensions", "sessionbar.ts")
+    : join(process.cwd(), ".pi", "extensions", "sessionbar.ts");
+}
+
+export function setupPiHooks(global: boolean, reportPath: string): SetupResult {
+  const path = piExtensionPath(global);
+  const source = piExtensionSource(reportPath);
+  if (existsSync(path) && readFileSync(path, "utf8") === source) return { name: "Pi Agent", path, added: 0 };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, source);
+  return { name: "Pi Agent", path, added: 1 };
+}
+
+export function teardownPiHooks(global: boolean): number {
+  const path = piExtensionPath(global);
+  if (!existsSync(path) || !readFileSync(path, "utf8").startsWith(PI_EXTENSION_MARKER)) return 0;
+  unlinkSync(path);
+  return 1;
+}
+
 // ── WorkBuddy (CodeBuddy) ──
 
 export function setupCodeBuddyHooks(global: boolean, reportPath: string): SetupResult {
@@ -497,7 +647,7 @@ export function teardownCodeBuddyHooks(global: boolean): number {
 export const teardownWorkbuddyHooks = teardownCodeBuddyHooks;
 
 export function teardownHooks(global: boolean, quiet = false) {
-  const removed = teardownClaudeHooks(global) + teardownCodexHooks(global) + teardownGeminiHooks(global) + teardownCopilotHooks(global) + teardownCodeBuddyHooks(global);
+  const removed = teardownClaudeHooks(global) + teardownCodexHooks(global) + teardownGeminiHooks(global) + teardownCopilotHooks(global) + teardownCursorHooks(global) + teardownPiHooks(global) + teardownCodeBuddyHooks(global) + teardownKimiCodeHooks(global) + teardownZCodeHooks(global);
   if (removed > 0 && !quiet) console.log(`Removed ${removed} hook${removed === 1 ? "" : "s"}.`);
 }
 
@@ -508,7 +658,12 @@ export function injectHooksOnServerReady(global: boolean) {
   setupCodexHooks(global, reportPath);
   setupGeminiHooks(global, reportPath);
   setupCopilotHooks(global, reportPath);
+  setupCursorHooks(global, reportPath);
+  setupPiHooks(global, reportPath);
   setupCodeBuddyHooks(global, reportPath);
+  const available = detectHarnessAvailability();
+  if (available.some(row => row.id === "kimi-code" && row.available)) setupKimiCodeHooks(global, reportPath);
+  if (available.some(row => row.id === "zcode" && row.available)) setupZCodeHooks(global, reportPath);
 }
 
 export async function setupHooks(global: boolean) {
@@ -518,9 +673,13 @@ export async function setupHooks(global: boolean) {
     setupCodexHooks(global, reportPath),
     setupGeminiHooks(global, reportPath),
     setupCopilotHooks(global, reportPath),
+    setupCursorHooks(global, reportPath),
+    setupPiHooks(global, reportPath),
     setupCodeBuddyHooks(global, reportPath),
+    setupKimiCodeHooks(global, reportPath),
+    setupZCodeHooks(global, reportPath),
   ];
   for (const target of targets) {
-    console.log(`${target.added > 0 ? "Installed" : "Already configured"} ${target.name} → ${target.path}`);
+    console.log(target.skipped ? `Skipped ${target.name}: ${target.skipped}` : `${target.added > 0 ? "Installed" : "Already configured"} ${target.name} → ${target.path}`);
   }
 }

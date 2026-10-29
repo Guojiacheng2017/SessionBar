@@ -1,6 +1,6 @@
 {
   "name": "sessionbar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Terminal dashboard for AI CLI agent sessions — Claude Code, Gemini CLI, Codex, Copilot",
   "type": "module",
   "bin": {
@@ -12,6 +12,8 @@
     "docs/images/",
     "docs/licenses/",
     "docs/THIRD_PARTY_NOTICES.md",
+    "docs/harness-input-adapters.md",
+    "docs/relay-runtime.md",
     "README.md",
     "README.zh-CN.md",
     "LICENSE",
@@ -24,12 +26,14 @@
     "prestart": "npm run build",
     "start": "node dist/cli/cli.js",
     "prepack": "npm run build",
-    "test": "npm run build && node --test test/*.test.mjs"
+    "test": "npm run build && node --import ./test/isolateEnvironment.mjs --test test/*.test.mjs"
   },
   "dependencies": {
     "@opentui/core": "^0.4.1",
     "cors": "^2.8.5",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "smol-toml": "^1.9.1",
+    "undici": "^7.30.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

@@ -2,6 +2,7 @@ import { computeAdvice } from "../quota-engine/quotaEngine.js";
 import type { QuotaState } from "../quota-engine/types.js";
 import type { PlanRow } from "../planTypes.js";
 import { num, parseTs, sub } from "./adapterUtils.js";
+import { providerFetch } from "../../runtime/networkRuntime.js";
 
 const USAGE_URL = "https://api.kimi.com/coding/v1/usages";
 const FETCH_TIMEOUT_MS = 10_000;
@@ -20,7 +21,7 @@ export async function fetchKimiSubscription(opts: KimiOpts = {}): Promise<PlanRo
   const now = opts.now ?? Date.now();
   if (!opts.accessToken) return [];
   try {
-    const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    const fetchImpl = opts.fetchImpl ?? providerFetch;
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     let body: unknown;

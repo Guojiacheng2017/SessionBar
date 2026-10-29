@@ -1,5 +1,6 @@
 // Shared display utilities — used by cli.ts (menu/status), openTuiMonitor.ts (TUI),
 // and sessionInspector.ts (detail panels). Keep these pure and allocation-light.
+import { codexBackgroundService, CODEX_SERVICE_LABELS } from "../shared/codexServices.js";
 
 /** Human-readable age string for a timestamp relative to now. */
 export function age(timestamp: number, now: number = Date.now()): string {
@@ -43,25 +44,34 @@ export function agentName(type: string): string {
 
 export interface SessionDisplayNameInput {
   session_name?: string;
+  session_service?: string;
   project?: string;
   project_path?: string;
   session_id?: string;
 }
 
-/** Prefer a reported session name, then the project name, then the raw session id. */
+export function sessionServiceLabel(service: string | undefined): string | undefined {
+  const known = codexBackgroundService(service);
+  return known ? CODEX_SERVICE_LABELS[known] : undefined;
+}
+
+/** Keep the session identity distinct from its project, even when unnamed. */
 export function sessionDisplayName(session: SessionDisplayNameInput): string {
   const name = session.session_name?.trim();
   if (name) return name;
 
-  const projectName = sessionProjectName(session);
-  if (projectName !== "?") return projectName;
-  return session.session_id?.trim() || "?";
+  const service = sessionServiceLabel(session.session_service);
+  if (service) return service;
+  const rawId = session.session_id?.trim().split("__")[0] || "";
+  const nativeId = rawId.match(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i)?.[0];
+  const shortId = nativeId ? nativeId.slice(-8) : rawId.slice(-16);
+  return shortId ? `Unnamed session · ${shortId}` : "Unnamed session";
 }
 
 /** Project label independent from agent type, for the secondary session-list column. */
 export function sessionProjectName(session: SessionDisplayNameInput): string {
   const project = session.project?.trim();
-  if (project) return project;
+  if (project && !/^[\\/]+$/.test(project)) return project;
 
   const projectPath = session.project_path?.trim().replace(/[\\/]+$/, "");
   if (projectPath) {
@@ -70,7 +80,7 @@ export function sessionProjectName(session: SessionDisplayNameInput): string {
   }
 
   const encodedProject = session.session_id?.split("__")[1]?.trim();
-  if (encodedProject) return encodedProject;
+  if (encodedProject && !/^[\\/]+$/.test(encodedProject)) return encodedProject;
 
   return "?";
 }

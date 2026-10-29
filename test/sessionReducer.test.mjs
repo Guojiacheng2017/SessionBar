@@ -6,7 +6,7 @@ const base = {
   agent_type: "Codex",
   session_id: "codex-demo__atlas",
   project: "atlas",
-  project_path: "/demo/projects/atlas",
+  project_path: "/projects/atlas",
   source: "hook",
 };
 

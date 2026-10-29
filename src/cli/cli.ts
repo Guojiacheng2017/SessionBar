@@ -1283,39 +1283,31 @@ async function setup() {
 
 function renderHarnessAvailability(rows: HarnessRegistryEntry[]) {
   const widths = {
-    scope: Math.max(5, ...rows.map(row => row.scope.length)),
     name: Math.max(7, ...rows.map(row => row.name.length)),
     status: 9,
     kind: Math.max(4, ...rows.map(row => row.kind.length)),
     signal: Math.max(6, ...rows.map(row => harnessSignal(row).length)),
   };
-  const line = (scope: string, name: string, status: string, kind: string, signal: string, detail: string) =>
-    `${pad(scope, widths.scope)}  ${pad(name, widths.name)}  ${pad(status, widths.status)}  ${pad(kind, widths.kind)}  ${pad(signal, widths.signal)}  ${detail}`;
+  const line = (name: string, status: string, kind: string, signal: string, detail: string) =>
+    `${pad(name, widths.name)}  ${pad(status, widths.status)}  ${pad(kind, widths.kind)}  ${pad(signal, widths.signal)}  ${detail}`;
 
-  console.log(line("Scope", "Harness", "Status", "Kind", "Signal", "Detail"));
-  console.log(line("-".repeat(widths.scope), "-".repeat(widths.name), "-".repeat(widths.status), "-".repeat(widths.kind), "-".repeat(widths.signal), "------"));
+  console.log(line("Harness", "Status", "Kind", "Signal", "Detail"));
+  console.log(line("-".repeat(widths.name), "-".repeat(widths.status), "-".repeat(widths.kind), "-".repeat(widths.signal), "------"));
   for (const row of rows) {
-    const status = row.configurable ? "config" : row.available ? "yes" : "no";
-    console.log(line(row.scope, row.name, status, row.kind, harnessSignal(row), harnessDetail(row)));
+    console.log(line(row.name, row.available ? "yes" : "no", row.kind, harnessSignal(row), harnessDetail(row)));
   }
 }
 
 function harnessSignal(row: HarnessRegistryEntry): string {
-  if (row.scope === "remote") return row.configKeys?.join(", ") || "--";
   return row.commandFound || row.commands.join(", ");
 }
 
 function harnessDetail(row: HarnessRegistryEntry): string {
-  if (row.scope === "remote") {
-    return "configure official cloud credential or self-hosted URL";
-  }
   return `${row.configPath || ""}${row.configExists ? "" : " (missing)"}`;
 }
 
 function harnesses() {
-  const localRows = detectHarnessAvailability("local");
-  const remoteRows = detectHarnessAvailability("remote");
-  renderHarnessAvailability([...localRows, ...remoteRows]);
+  renderHarnessAvailability(detectHarnessAvailability());
 }
 
 // ---- Terminal UI theme wrappers (bind cli.ts ANSI constants) ----

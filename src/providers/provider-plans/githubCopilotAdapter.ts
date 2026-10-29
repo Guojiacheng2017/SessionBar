@@ -5,6 +5,7 @@ import { computeAdvice } from "../quota-engine/quotaEngine.js";
 import type { QuotaState } from "../quota-engine/types.js";
 import type { PlanRow } from "../planTypes.js";
 import { num, parseTs } from "./adapterUtils.js";
+import { providerFetch } from "../../runtime/networkRuntime.js";
 
 const USER_URL = "https://api.github.com/copilot_internal/user";
 const FETCH_TIMEOUT_MS = 10_000;
@@ -23,7 +24,7 @@ export async function fetchGitHubCopilotSubscription(opts: GitHubCopilotOpts = {
   if (!token) return [];
 
   try {
-    const body = await fetchJson(opts.fetchImpl ?? globalThis.fetch, opts.endpoint ?? USER_URL, token);
+    const body = await fetchJson(opts.fetchImpl ?? providerFetch, opts.endpoint ?? USER_URL, token);
     const row = parseGitHubCopilotUser(body, opts.now ?? Date.now());
     return row ? [row] : [];
   } catch {
@@ -79,11 +80,14 @@ function selectCreditSnapshot(raw: unknown): Record<string, unknown> | undefined
   if (!raw || typeof raw !== "object") return undefined;
   const snapshots = raw as Record<string, unknown>;
   const preferred = snapshots.premium_interactions;
-  if (preferred && typeof preferred === "object") return preferred as Record<string, unknown>;
+  if (preferred && typeof preferred === "object") {
+    const snapshot = preferred as Record<string, unknown>;
+    if (snapshot.has_quota !== false && snapshot.unlimited !== true && (num(snapshot.entitlement) ?? 0) > 0) return snapshot;
+  }
   return Object.values(snapshots).find(value => {
     if (!value || typeof value !== "object") return false;
     const snapshot = value as Record<string, unknown>;
-    return snapshot.unlimited !== true && (num(snapshot.entitlement) ?? 0) > 0;
+    return snapshot.has_quota !== false && snapshot.unlimited !== true && (num(snapshot.entitlement) ?? 0) > 0;
   }) as Record<string, unknown> | undefined;
 }
 

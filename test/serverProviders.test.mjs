@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { aggregateProviders, matchesSessionProvider, migrateLegacyHookSessions, sessionAdvisorRows } from "../dist/server/server.js";
+import { aggregateProviders, matchesSessionProvider, migrateLegacyHookSessions, retainRecentProviderRows, sessionAdvisorRows } from "../dist/server/server.js";
 
 function planRow(overrides = {}) {
   return {
@@ -39,29 +39,29 @@ test("migrateLegacyHookSessions removes only the old fallback for a stable sessi
       task_name: "running",
       timestamp: 1_700_000_000_000,
       project: "atlas",
-      project_path: "/demo/projects/atlas",
+      project_path: "/projects/atlas",
     },
     otherStable: {
-      session_id: "00000000-0000-4000-8000-000000000001__atlas",
+      session_id: "11111111-1111-4111-8111-111111111111__atlas",
       session_type: "Codex",
       source: "hook",
       status: "working",
       task_name: "running",
       timestamp: 1_700_000_001_000,
       project: "atlas",
-      project_path: "/demo/projects/atlas",
+      project_path: "/projects/atlas",
     },
   };
 
   const removed = migrateLegacyHookSessions(sessions, {
-    session_id: "00000000-0000-4000-8000-000000000002__atlas",
+    session_id: "22222222-2222-4222-8222-222222222222__atlas",
     session_type: "Codex",
     source: "hook",
     status: "working",
     task_name: "running",
     timestamp: 1_700_000_002_000,
     project: "atlas",
-    project_path: "/demo/projects/atlas",
+    project_path: "/projects/atlas",
   });
 
   assert.deepEqual(removed, ["codex-atlas-f75de08f__atlas"]);
@@ -155,6 +155,34 @@ test("aggregateProviders: includes global provider api rows without a matching s
   assert.deepEqual(result[0], globalApiRows[0]);
 });
 
+test("retainRecentProviderRows keeps last-good provider data through a transient empty poll", () => {
+  const now = 1_700_000_000_000;
+  const seenAt = new Map();
+  const openai = planRow({ provider: "openai", label: "OpenAI Subscription" });
+
+  const initial = retainRecentProviderRows([], [openai], seenAt, now, 30 * 60_000);
+  const retained = retainRecentProviderRows(initial, [], seenAt, now + 5 * 60_000, 30 * 60_000);
+
+  assert.deepEqual(retained, [openai]);
+});
+
+test("retainRecentProviderRows expires stale provider data and accepts a later refresh", () => {
+  const now = 1_700_000_000_000;
+  const seenAt = new Map();
+  const oldRow = planRow({ provider: "openai", label: "OpenAI Subscription", remaining: 80 });
+  const newRow = planRow({ provider: "openai", label: "OpenAI Subscription", remaining: 70 });
+
+  const initial = retainRecentProviderRows([], [oldRow], seenAt, now, 30 * 60_000);
+  assert.deepEqual(
+    retainRecentProviderRows(initial, [], seenAt, now + 31 * 60_000, 30 * 60_000),
+    [],
+  );
+  assert.deepEqual(
+    retainRecentProviderRows([], [newRow], seenAt, now + 32 * 60_000, 30 * 60_000),
+    [newRow],
+  );
+});
+
 // --- sessionAdvisorRows (session detail advisor tab: api + matching subscriptions) ---
 
 function apiRow(overrides = {}) {
@@ -218,4 +246,18 @@ test("matchesSessionProvider: session_type maps to the right subscription provid
   assert.equal(matchesSessionProvider(planRow({ provider: "anthropic" }), codex), false);
   assert.equal(matchesSessionProvider(planRow({ provider: "kimi" }), kimi), true);
   assert.equal(matchesSessionProvider(planRow({ provider: "kimi" }), gemini), false);
+});
+
+test("Cursor, Grok, and Three in One remain distinct provider identities", () => {
+  const cursor = { ...session("cursor-1"), session_type: "Cursor", model_provider: "grok" };
+  const rows = [
+    planRow({ provider: "cursor", label: "Cursor" }),
+    planRow({ provider: "grok", label: "Grok" }),
+    planRow({ provider: "three-in-one", label: "Three in One" }),
+  ];
+
+  assert.deepEqual(aggregateProviders(rows, {}).map(row => row.provider), [
+    "cursor", "grok", "three-in-one",
+  ]);
+  assert.ok(rows.every(row => matchesSessionProvider(row, cursor)));
 });

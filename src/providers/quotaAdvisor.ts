@@ -1,5 +1,4 @@
 import type { SessionAgentSignalInput, SessionPayload } from "../shared/types.js";
-import { RateBuffer } from "./rateBuffer.js";
 import type { PlanRow } from "./planTypes.js";
 
 const API_KINDS = new Set(["usage", "quota", "balance"]);
@@ -10,11 +9,7 @@ const API_KINDS = new Set(["usage", "quota", "balance"]);
  * only show numbers. Subscription rows are handled globally in server.ts
  * (computePlanRows), not per session. Returns [] when there are no signals.
  */
-export async function computeAdvisorRows(
-  session: SessionPayload,
-  _buffers: Map<string, RateBuffer>,
-  _now: number,
-): Promise<PlanRow[]> {
+export function computeAdvisorRows(session: SessionPayload): PlanRow[] {
   return (session.agent_signals ?? [])
     .filter(isApiSignal)
     .map(signalToApiRow);

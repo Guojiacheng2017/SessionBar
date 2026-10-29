@@ -1,0 +1,75 @@
+{
+  "schema_version": "sessionbar.subagents.v1-draft",
+  "kind": "agent_detail",
+  "stream_id": "receiver-epoch-1",
+  "revision": 10,
+  "agent_id": "[\"agent\",\"source-local-codex\",\"session-a1\",\"worker-1\",\"incarnation-1\"]",
+  "conversation": {
+    "availability": "available",
+    "items": [
+      {
+        "message_id": "msg-1",
+        "sequence": 1,
+        "role": "user",
+        "text": "Inspect the synthetic contract.",
+        "content_state": "complete",
+        "occurred_at": 1792987200000
+      },
+      {
+        "message_id": "msg-2",
+        "sequence": 2,
+        "role": "assistant",
+        "text": "Checking parent and session references.",
+        "content_state": "complete",
+        "occurred_at": 1792987201000
+      }
+    ],
+    "next_cursor": null,
+    "truncated_before": false
+  },
+  "workflow": {
+    "availability": "available",
+    "items": [
+      {
+        "event_id": "event-1",
+        "sequence": 1,
+        "stage": "agent.start",
+        "label": "Started contract review",
+        "occurred_at": 1792987200000
+      },
+      {
+        "event_id": "event-2",
+        "sequence": 2,
+        "stage": "tool.execute",
+        "label": "Validated synthetic references",
+        "occurred_at": 1792987201000
+      }
+    ],
+    "next_cursor": null,
+    "truncated_before": false
+  },
+  "workflow_graph": {
+    "availability": "available",
+    "graph": {
+      "nodes": [
+        {
+          "node_id": "inspect",
+          "label": "Inspect contract",
+          "status": "completed"
+        },
+        {
+          "node_id": "verify",
+          "label": "Verify references",
+          "status": "working"
+        }
+      ],
+      "edges": [
+        {
+          "from": "inspect",
+          "to": "verify",
+          "label": "then"
+        }
+      ]
+    }
+  }
+}

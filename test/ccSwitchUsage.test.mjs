@@ -64,7 +64,7 @@ test("CC Switch keeps monetary and token histories available together", () => {
   assert.equal(decorated.usageTrends.token.points.at(-1), 300);
 });
 
-test("official OpenAI history uses CC Switch only for today's live total", () => {
+test("official OpenAI history keeps official totals and fills delayed days from CC Switch", () => {
   const official = {
     kind: "bars",
     days: 7,
@@ -81,11 +81,11 @@ test("official OpenAI history uses CC Switch only for today's live total", () =>
   };
 
   const [decorated] = decorateApiUsageFromCCSwitch([row], {
-    openai: { "2026-08-13": 400, "2026-08-14": 500 },
+    openai: { "2026-08-12": 300, "2026-08-13": 400, "2026-08-14": 500 },
   }, now);
 
-  assert.deepEqual(decorated.usageTrend.points.slice(-2), [700, 500]);
-  assert.equal(decorated.usageTrend.source, "OpenAI API + CC Switch today");
+  assert.deepEqual(decorated.usageTrend.points.slice(-3), [300, 700, 500]);
+  assert.equal(decorated.usageTrend.source, "OpenAI API + CC Switch");
   assert.deepEqual(decorated.usageTrends.token, decorated.usageTrend);
 });
 

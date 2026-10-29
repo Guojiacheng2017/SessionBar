@@ -5,6 +5,7 @@ import { computeAdvice } from "../quota-engine/quotaEngine.js";
 import type { QuotaState } from "../quota-engine/types.js";
 import type { PlanRow } from "../planTypes.js";
 import { num, parseTs } from "./adapterUtils.js";
+import { providerFetch } from "../../runtime/networkRuntime.js";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const FETCH_TIMEOUT_MS = 10_000;
@@ -24,7 +25,7 @@ export async function fetchAnthropicSubscription(opts: AnthropicOpts = {}): Prom
     const token = extractAccessToken(cred);
     if (!token) return [];
 
-    const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    const fetchImpl = opts.fetchImpl ?? providerFetch;
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     let body: unknown;

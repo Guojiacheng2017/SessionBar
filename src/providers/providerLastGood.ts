@@ -17,12 +17,18 @@ export function retainProviderLastGood(
   now: number,
   maxAgeMs: number,
 ): ProviderLastGoodState {
-  const fresh = new Map(freshRows.map(row => [providerLastGoodKey(row), row]));
+  const failures = new Map(freshRows.filter(row => row.collectionError).map(row => [providerLastGoodKey(row), row]));
+  const successful = freshRows.filter(row => !row.collectionError);
+  const fresh = new Map(successful.map(row => [providerLastGoodKey(row), row]));
   const seenAt = { ...previous.seenAt };
-  const rows: PlanRow[] = freshRows.map(row => {
+  const rows: PlanRow[] = successful.map(row => {
     const key = providerLastGoodKey(row);
-    seenAt[key] = now;
-    return { ...row, stale: false, lastSeenAt: now };
+    // Re-aggregating an observation must not make its upstream data younger.
+    const lastSeenAt = Number.isFinite(row.lastSeenAt) && row.lastSeenAt! >= 0
+      ? Math.min(row.lastSeenAt!, now)
+      : now;
+    seenAt[key] = lastSeenAt;
+    return { ...row, stale: false, lastSeenAt };
   });
   for (const row of previous.rows) {
     const key = providerLastGoodKey(row);
@@ -32,7 +38,10 @@ export function retainProviderLastGood(
       delete seenAt[key];
       continue;
     }
-    rows.push({ ...row, stale: true, lastSeenAt: Number(lastSeenAt) });
+    rows.push({ ...row, stale: true, lastSeenAt: Number(lastSeenAt), collectionError: failures.get(key)?.collectionError });
+  }
+  for (const [key, failure] of failures) {
+    if (!rows.some(row => providerLastGoodKey(row) === key)) rows.push({ ...failure, stale: true, lastSeenAt: undefined });
   }
   return { rows, seenAt };
 }

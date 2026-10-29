@@ -13,7 +13,7 @@ import {
 } from "../dist/sessions/sessionInspector.js";
 
 const baseSession = {
-  session_id: "codex-019ed3a2-a7ab-7a90-a6da-c1535a35afd0__atlas",
+  session_id: "codex-33333333-3333-4333-8333-33333333abcd__atlas",
   session_type: "Codex",
   status: "working",
   task_name: "running: npm run build",
@@ -23,11 +23,11 @@ const baseSession = {
   turns: 34,
   timestamp: 1_700_000_000_000,
   project: "atlas",
-  project_path: "/demo/projects/atlas",
+  project_path: "/projects/atlas",
 };
 
 test("session handles are compact and stable for sidebar use", () => {
-  assert.equal(sessionHandle(baseSession, 18), "019ed3a2-a7...afd0");
+  assert.equal(sessionHandle(baseSession, 18), "33333333-33...abcd");
   assert.equal(sessionHandle({ ...baseSession, session_id: "claude-demo-abc123__atlas" }, 12), "demo-abc123");
 });
 
@@ -69,8 +69,9 @@ test("session sidebar line is a compact monitor summary, not a repeated table ro
     width: 42,
     now: baseSession.timestamp + 37_000,
   });
-  assert.equal(line, "> WORK atlas 37s");
-  assert.doesNotMatch(line, /019ed3a2|Codex|running:|Project|Agent|Status/);
+  assert.equal(line, "> WORK Unnamed session · 3333abcd 37s");
+  assert.doesNotMatch(line, /atlas/);
+  assert.doesNotMatch(line, /33333333|Codex|running:|Project|Agent|Status/);
   assert.ok(line.length <= 42);
 });
 
@@ -439,10 +440,10 @@ test("scope bar renders active tab with inverse attributes", () => {
   assert.equal((inactive.attributes ?? 0) & TextAttributes.INVERSE, 0);
 });
 
-test("raw tab includes full session id while overview keeps it compact", () => {
+test("overview exposes the session identity as in WebUI and raw keeps its full payload", () => {
   const overview = buildSessionDetailContent(baseSession, "overview", 88, baseSession.timestamp + 37_000);
   const raw = buildSessionDetailContent(baseSession, "raw", 88, baseSession.timestamp + 37_000);
-  assert.equal(overview.includes(baseSession.session_id), false);
+  assert.equal(overview.includes(baseSession.session_id), true);
   assert.equal(raw.includes(baseSession.session_id), true);
 });
 

@@ -15,8 +15,8 @@ const baseSession = {
 
 // --- computeAdvisorRows (multi-form) ---
 
-test("computeAdvisorRows: usage signal becomes api row", async () => {
-  const rows = await computeAdvisorRows(baseSession, new Map(), 1_700_000_000_000);
+test("computeAdvisorRows: usage signal becomes api row", () => {
+  const rows = computeAdvisorRows(baseSession);
   const api = rows.find(r => r.form === "api");
   assert.ok(api, "expected an api row");
   assert.equal(api.provider, "openai");
@@ -25,7 +25,7 @@ test("computeAdvisorRows: usage signal becomes api row", async () => {
   assert.equal(api.unit, "tokens");
 });
 
-test("computeAdvisorRows: balance signal on non-target session becomes api row (no TARGETS gate)", async () => {
+test("computeAdvisorRows: balance signal on non-target session becomes api row (no TARGETS gate)", () => {
   const session = {
     ...baseSession,
     session_type: "DeepSeek",
@@ -33,7 +33,7 @@ test("computeAdvisorRows: balance signal on non-target session becomes api row (
       { signal: "deepseek.balance", kind: "balance", source: "provider_api", scope: "account", remaining: 42.5, unit: "USD" },
     ],
   };
-  const rows = await computeAdvisorRows(session, new Map(), 1_700_000_000_000);
+  const rows = computeAdvisorRows(session);
   const api = rows.find(r => r.form === "api");
   assert.ok(api, "expected an api row for balance signal");
   assert.equal(api.provider, "deepseek");
@@ -41,14 +41,14 @@ test("computeAdvisorRows: balance signal on non-target session becomes api row (
   assert.equal(api.unit, "USD");
 });
 
-test("computeAdvisorRows: signal.balance maps to remaining", async () => {
+test("computeAdvisorRows: signal.balance maps to remaining", () => {
   const session = {
     ...baseSession,
     agent_signals: [
       { signal: "xai.balance", kind: "balance", source: "provider_api", scope: "account", balance: 7.25, balance_unit: "USD" },
     ],
   };
-  const rows = await computeAdvisorRows(session, new Map(), 1_700_000_000_000);
+  const rows = computeAdvisorRows(session);
   const api = rows.find(r => r.form === "api");
   assert.ok(api, "expected an api row");
   assert.equal(api.provider, "xai");
@@ -56,12 +56,12 @@ test("computeAdvisorRows: signal.balance maps to remaining", async () => {
   assert.equal(api.unit, "USD");
 });
 
-test("computeAdvisorRows: no signals and no subscription rows → []", async () => {
-  const rows = await computeAdvisorRows({ ...baseSession, agent_signals: [] }, new Map(), 1_700_000_000_000);
+test("computeAdvisorRows: no signals and no subscription rows → []", () => {
+  const rows = computeAdvisorRows({ ...baseSession, agent_signals: [] });
   assert.deepEqual(rows, []);
 });
 
-test("computeAdvisorRows: distinct api signals without labels keep distinct labels (not provider-collapsed)", async () => {
+test("computeAdvisorRows: distinct api signals without labels keep distinct labels (not provider-collapsed)", () => {
   const session = {
     ...baseSession,
     agent_signals: [
@@ -69,7 +69,7 @@ test("computeAdvisorRows: distinct api signals without labels keep distinct labe
       { signal: "openai.balance", kind: "balance", source: "provider_api", scope: "account", remaining: 42.5, unit: "USD" },
     ],
   };
-  const rows = await computeAdvisorRows(session, new Map(), 1_700_000_000_000);
+  const rows = computeAdvisorRows(session);
   assert.equal(rows.length, 2);
   assert.deepEqual(
     rows.map(r => r.label).sort(),

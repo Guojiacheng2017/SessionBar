@@ -10,8 +10,19 @@ const credentialsPath = join(tmpdir(), "sessionbar-github-copilot-apps.json");
 const missingCredentialsPath = join(tmpdir(), "sessionbar-github-copilot-missing.json");
 const now = Date.parse("2026-08-10T10:40:00.000Z");
 
+test("empty premium quota does not hide available token-billing quota", async () => {
+  const rows = await fetchGitHubCopilotSubscription({ accessToken: "test", now,
+    fetchImpl: async () => new Response(JSON.stringify({ copilot_plan: "individual", quota_reset_date_utc: "2026-09-01T00:00:00Z", quota_snapshots: {
+      premium_interactions: { has_quota: false, entitlement: 0, remaining: 0 },
+      chat: { has_quota: true, entitlement: 200, remaining: 200, credits_used: 0 },
+    } }), { status: 200 }),
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].remaining, 200);
+});
+
 const copilotUser = {
-  login: "Guojiacheng2017",
+  login: "example-user",
   copilot_plan: "individual_pro_plus",
   quota_reset_date_utc: "2026-09-01T00:00:00.000Z",
   quota_snapshots: {
@@ -88,19 +99,16 @@ test("unusable entitlement payloads do not create a misleading quota row", async
 });
 
 test("subscription aggregation keeps the Copilot row alongside other providers", async () => {
-  const originalFetch = globalThis.fetch;
-  delete process.env.SESSIONBAR_KIMI_ACCESS_TOKEN;
-  delete process.env.KIMI_ACCESS_TOKEN;
-  globalThis.fetch = async () => new Response(JSON.stringify(copilotUser), { status: 200 });
-  try {
-    const rows = await computePlanRows({
-      now,
-      openaiAuthPath: missingCredentialsPath,
-      anthropicCredentialsPath: missingCredentialsPath,
-      githubCopilotCredentialsPath: credentialsPath,
-    });
-    assert.ok(rows.some(row => row.provider === "github" && row.label === "GitHub Copilot Pro+"));
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const rows = await computePlanRows({
+    now,
+    fetchImpl: async () => new Response(JSON.stringify(copilotUser), { status: 200 }),
+    grokBillingEnabled: false,
+    kimiAccessToken: "",
+    openaiAuthPath: missingCredentialsPath,
+    anthropicCredentialsPath: missingCredentialsPath,
+    githubCopilotCredentialsPath: credentialsPath,
+    workbuddyDbPath: missingCredentialsPath,
+    workbuddyBalanceCommand: "",
+  });
+  assert.ok(rows.some(row => row.provider === "github" && row.label === "GitHub Copilot Pro+"));
 });

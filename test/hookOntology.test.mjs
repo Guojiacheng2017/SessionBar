@@ -32,11 +32,22 @@ test("tool hooks normalize by concept while preserving known subtypes", () => {
   assert.equal(mapHookEvent("Gemini CLI", "BeforeTool").canonical_stage_id, "tool.execute.before");
   assert.equal(mapHookEvent("OpenCode", "tool.execute.before").canonical_stage_id, "tool.execute.before");
   assert.equal(mapHookEvent("Pi", "tool_call").canonical_stage_id, "tool.execute.before");
+  assert.equal(mapHookEvent("Pi Agent", "tool_execution_start").canonical_stage_id, "tool.execute.before");
+  assert.equal(mapHookEvent("Pi Agent", "tool_execution_end").canonical_stage_id, "tool.execute.after");
 
   const shell = mapHookEvent("Cursor", "beforeShellExecution");
   assert.equal(shell.canonical_stage_id, "tool.execute.before");
   assert.equal(shell.mapping_type, "subtype");
   assert.equal(shell.confidence, "high");
+});
+
+test("current Pi lifecycle events map into canonical workflow stages", () => {
+  assert.equal(mapHookEvent("Pi Agent", "session_start").canonical_stage_id, "session.start");
+  assert.equal(mapHookEvent("Pi Agent", "agent_start").canonical_stage_id, "agent.loop.before");
+  assert.equal(mapHookEvent("Pi Agent", "agent_end").canonical_stage_id, "agent.loop.after");
+  assert.equal(mapHookEvent("Pi Agent", "agent_settled").canonical_stage_id, "session.idle");
+  assert.equal(mapHookEvent("Pi Agent", "session_compact").canonical_stage_id, "context.compact.after");
+  assert.equal(mapHookEvent("Pi Agent", "session_shutdown").canonical_stage_id, "session.end");
 });
 
 test("ambiguous workflow-neighborhood hooks stay explicit", () => {

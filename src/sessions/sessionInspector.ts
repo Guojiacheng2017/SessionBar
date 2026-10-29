@@ -1,6 +1,6 @@
 import { StyledText, TextAttributes, type TextChunk } from "@opentui/core";
 import type { SessionPayload } from "../shared/types.js";
-import { sessionDisplayName } from "../tui/displayUtils.js";
+import { sessionDisplayName, sessionServiceLabel } from "../tui/displayUtils.js";
 
 export type DetailTab = "overview" | "activity" | "usage" | "flow" | "raw";
 
@@ -202,6 +202,14 @@ function overviewLines(session: SessionPayload, _width: number, now: number): st
     ], _width),
     "",
     ...tableSection("PRESSURE", ["Metric", "Value"], pressureRows(session, now), _width),
+    "",
+    ...tableSection("SESSION", ["Field", "Value"], [
+      ["Created by", session.session_kind === "user" ? "User" : session.session_kind === "background" ? `${session.session_type || "Harness"} (automatic)` : ""],
+      ["Service", sessionServiceLabel(session.session_service) ?? session.session_service ?? ""],
+      ["Project", session.project_path || session.project || ""],
+      ["Task", session.task_name || ""],
+      ["Session ID", session.session_id],
+    ], _width),
     "",
     ...boxSection("ATTENTION", [attentionSummary(session)], _width),
   ];

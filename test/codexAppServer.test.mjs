@@ -2,27 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   codexThreadMetadata,
-  parseCodexUsageResponse,
   parseCodexThreadListResponse,
 } from "../dist/sessions/codexAppServer.js";
-
-test("parses official Codex daily token buckets from account usage", () => {
-  const output = [
-    JSON.stringify({ method: "account/rateLimits/updated", params: {} }),
-    JSON.stringify({ id: 2, result: {
-      summary: { lifetimeTokens: 900 },
-      dailyUsageBuckets: [
-        { startDate: "2026-08-12", tokens: 367_400_000 },
-        { startDate: "2026-08-13", tokens: 12_000_000 },
-      ],
-    } }),
-  ].join("\n");
-
-  assert.deepEqual(parseCodexUsageResponse(output), {
-    "2026-08-12": 367_400_000,
-    "2026-08-13": 12_000_000,
-  });
-});
+import * as codexAppServer from "../dist/sessions/codexAppServer.js";
 
 const thread = (id, name) => ({
   id,
@@ -47,7 +29,7 @@ const thread = (id, name) => ({
 });
 
 test("parses the thread/list response while ignoring unrelated protocol messages", () => {
-  const expected = thread("00000000-0000-4000-8000-000000000002", "Web UI polish");
+  const expected = thread("22222222-2222-4222-8222-222222222222", "Web UI polish");
   const output = [
     JSON.stringify({ id: 1, result: { userAgent: "Codex" } }),
     JSON.stringify({ method: "thread/status/changed", params: {} }),
@@ -59,9 +41,10 @@ test("parses the thread/list response while ignoring unrelated protocol messages
 
 test("maps app-server thread metadata without inventing a session name", () => {
   assert.deepEqual(
-    codexThreadMetadata(thread("00000000-0000-4000-8000-000000000002", "  Web UI polish  ")),
+    codexThreadMetadata(thread("22222222-2222-4222-8222-222222222222", "  Web UI polish  ")),
     {
-      threadId: "00000000-0000-4000-8000-000000000002",
+      threadId: "22222222-2222-4222-8222-222222222222",
+      isSubagent: false,
       sessionName: "Web UI polish",
       project: "atlas",
       projectPath: "/workspace/atlas",
@@ -71,8 +54,37 @@ test("maps app-server thread metadata without inventing a session name", () => {
       preview: "First user message",
       gitBranch: "main",
       gitSha: "abc123",
+      sessionPath: "/tmp/22222222-2222-4222-8222-222222222222.jsonl",
     },
   );
 
-  assert.equal(codexThreadMetadata(thread("00000000-0000-4000-8000-000000000002", null)).sessionName, undefined);
+  assert.equal(codexThreadMetadata(thread("22222222-2222-4222-8222-222222222222", null)).sessionName, undefined);
+});
+
+test("preserves explicit subagent identity from native metadata", () => {
+  const child = thread("22222222-2222-4222-8222-222222222222", null);
+  for (const source of ["subagent", { subagent: { thread_spawn: { parent_thread_id: "root" } } }]) {
+    assert.equal(codexThreadMetadata({ ...child, source }).isSubagent, true);
+  }
+  assert.equal(codexThreadMetadata({ ...child, threadSource: "subagent" }).isSubagent, true);
+  assert.equal(codexThreadMetadata({ ...child, thread_source: "subagent" }).isSubagent, true);
+});
+
+test("recent thread paths include resumed sessions stored in old date directories", () => {
+  const now = 1_700_000_200_000;
+  const resumed = {
+    ...thread("44444444-4444-4444-8444-444444444444", "Resumed task"),
+    path: "/sessions/2026/06/15/resumed.jsonl",
+    updatedAt: now / 1000 - 30,
+  };
+  const stale = {
+    ...thread("22222222-2222-4222-8222-222222222222", "Stale task"),
+    path: "/sessions/2026/08/24/stale.jsonl",
+    updatedAt: now / 1000 - 3_600,
+  };
+
+  assert.deepEqual(
+    codexAppServer.recentCodexThreadPaths?.([resumed, stale], now, 30 * 60_000),
+    ["/sessions/2026/06/15/resumed.jsonl"],
+  );
 });

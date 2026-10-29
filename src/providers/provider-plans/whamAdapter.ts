@@ -6,6 +6,7 @@ import { computeAdvice } from "../quota-engine/quotaEngine.js";
 import type { QuotaState, ResetCard } from "../quota-engine/types.js";
 import type { PlanRow } from "../planTypes.js";
 import { num, parseTs, sub } from "./adapterUtils.js";
+import { providerFetch } from "../../runtime/networkRuntime.js";
 
 const WHAM_USAGE = "https://chatgpt.com/backend-api/wham/usage";
 const WHAM_PROFILE = "https://chatgpt.com/backend-api/wham/profiles/me";
@@ -48,7 +49,7 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
     const auth = readWhamAuth(authPath);
     if (!auth) return null;
     const headers = auth.headers;
-    const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    const fetchImpl = opts.fetchImpl ?? providerFetch;
 
     let [usageBody, creditsBody, profileBody] = await Promise.all([
       fetchJson(fetchImpl, WHAM_USAGE, headers),
@@ -201,7 +202,7 @@ export async function consumeResetCard(opts: {
 
     const scope = `${authPath}\u0000${opts.cardId || "next"}`;
     const idempotencyKey = opts.idempotencyKey || loadRedeemKey(opts.consumptionStatePath, scope);
-    const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+    const fetchImpl = opts.fetchImpl ?? providerFetch;
     const body: Record<string, string> = { redeem_request_id: idempotencyKey };
     if (opts.cardId) body.credit_id = opts.cardId;
     const controller = new AbortController();
