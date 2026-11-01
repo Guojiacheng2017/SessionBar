@@ -8,6 +8,9 @@
 
 ## What's New
 
+- **2026-11-01 · Source fixes after v1.1.0:** Validate reset-card redemption
+  responses, bound slow response-body reads, and avoid double-counting quota
+  usage across overlapping native logs and account observations.
 - **2026-10-30 · v1.1.0 Runtime:** Shared Provider networking, explicit safe
   restart, owned-process cleanup and debounced targeted filesystem refreshes.
 - **2026-10-30 · Harnesses:** Native Kimi Code, ZCode and Cursor reporting;
@@ -16,8 +19,6 @@
   inspection, paged conversation records and native execution/Flow evidence.
 - **2026-10-30 · UI and Providers:** Terminal Agents/Providers inspectors, a safe
   built-in command box, stable Web updates and clearer cached billing/usage data.
-- **2026-10-26 · v1.0.0 fixes retained:** Codex quota-window deduplication,
-  30-minute session retention, local browser boundaries and owned-hook cleanup.
 
 > [!NOTE]
 > This section keeps the five most recent significant updates. For the full

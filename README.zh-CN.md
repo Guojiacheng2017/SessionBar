@@ -8,11 +8,11 @@
 
 ## 最新动态
 
+- **2026-11-01 · v1.1.0 后续源码修复：** 严格校验重置卡兑换结果、限制慢响应体的读取时间，并避免原生日志与账户观测重叠时重复计量配额用量。
 - **2026-10-30 · v1.1.0 运行时：** 统一 Provider 网络策略，显式安全重启、归属验证与资源回收；文件变化防抖后定向刷新。
 - **2026-10-30 · Harness：** Kimi Code、ZCode、Cursor 原生上报；WorkBuddy 数据库/WAL 发现、DeepSeek Harness 快照与 Codex 身份修复。
 - **2026-10-30 · Agent 详情：** 按需查看 Codex、Claude、DeepSeek 子 Agent，分页对话及原生执行/Flow 证据。
 - **2026-10-30 · 界面与 Provider：** TUI Agents/Providers 检查器、安全内置命令框、稳定 Web 更新，明确缓存账单和用量数据。
-- **2026-10-26 · 保留 v1.0.0 修复：** Codex 配额窗口去重、30 分钟会话保留、本地浏览器安全边界与归属明确的 Hook 清理。
 
 > [!NOTE]
 > 此处保留最近五条重要变动，完整记录及安装包见 [Releases](https://github.com/Guojiacheng2017/SessionBar/releases)。
