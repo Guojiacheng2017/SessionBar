@@ -7,6 +7,8 @@ export interface ProviderUsageTrend {
   labels?: string[];
   unit?: string;
   source?: string;
+  /** Inclusive account observation span, including sampling gaps. 包含采样间断的账户观测日期区间。 */
+  observedRange?: { start: string; end: string };
 }
 
 export type ProviderUsageMode = "token" | "cash" | "percentage";

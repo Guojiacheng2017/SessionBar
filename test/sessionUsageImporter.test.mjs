@@ -146,6 +146,94 @@ test("expiry drift across the half-hour rounding boundary keeps one window", () 
   assert.equal(codexDailyQuota({ files: { a: { offset: 0, quota } }, daily: {} }, at).at(-1), 10);
 });
 
+test("a new expiry with only a partial reading does not fabricate an unseen zero", () => {
+  const at = new Date(2026, 8, 12, 10).getTime();
+  const quota = [
+    { at, used: 6, endsAt: at + 3 * 86400000 },
+    { at: at + 60_000, used: 26, endsAt: at + 3 * 86400000 },
+    { at: at + 120_000, used: 10, endsAt: at + 7 * 86400000 },
+    { at: at + 180_000, used: 14, endsAt: at + 7 * 86400000 },
+  ];
+  assert.equal(codexDailyQuota({ files: { a: { offset: 0, quota } }, daily: {} }, at).at(-1), 24);
+});
+
+test("ambiguous native counter decreases stay unknown rather than freezing later days at zero", () => {
+  const at = new Date(2026, 9, 30, 10).getTime();
+  const day = 86400000;
+  const endsAt = at + 5 * day;
+  const quota = [
+    { at, used: 75, endsAt },
+    { at: at + 60_000, used: 81, endsAt },
+    { at: at + 120_000, used: 40, endsAt },
+    { at: at + 180_000, used: 62, endsAt },
+    { at: at + day, used: 66, endsAt },
+  ];
+  assert.deepEqual(codexDailyQuota({ files: { a: { offset: 0, quota } }, daily: {} }, at + day).slice(-2), [null, null]);
+});
+
+test("cross-file counter decreases cannot freeze a later day at a known zero", () => {
+  const at = new Date(2026, 9, 30, 10).getTime();
+  const day = 86_400_000;
+  const endsAt = at + 5 * day;
+  const state = { daily: {}, files: {
+    a: { offset: 0, quota: [
+      { at, used: 75, endsAt }, { at: at + 60_000, used: 81, endsAt },
+    ] },
+    b: { offset: 0, quota: [
+      { at: at + day, used: 40, endsAt }, { at: at + day + 60_000, used: 62, endsAt },
+    ] },
+    c: { offset: 0, quota: [
+      { at: at + 2 * day, used: 0, endsAt: endsAt + 7 * day },
+      { at: at + 2 * day + 60_000, used: 5, endsAt: endsAt + 7 * day },
+    ] },
+  } };
+  assert.deepEqual(codexDailyQuota(state, at + 2 * day).slice(-3), [6, null, 5]);
+});
+
+test("a growing counter in another file below an earlier peak is ambiguous even on the same day", () => {
+  const at = new Date(2026, 9, 30, 10).getTime();
+  const endsAt = at + 5 * 86_400_000;
+  const state = { daily: {}, files: {
+    a: { offset: 0, quota: [
+      { at, used: 75, endsAt }, { at: at + 60_000, used: 81, endsAt },
+    ] },
+    b: { offset: 0, quota: [
+      { at: at + 120_000, used: 40, endsAt }, { at: at + 180_000, used: 62, endsAt },
+    ] },
+  } };
+  assert.equal(codexDailyQuota(state, at).at(-1), null);
+});
+
+test("a restarted file remains ambiguous after reaching or exceeding another file's earlier peak", () => {
+  const at = new Date(2026, 9, 30, 10).getTime();
+  const endsAt = at + 5 * 86_400_000;
+  for (const used of [81, 90]) {
+    assert.equal(codexDailyQuota({ daily: {}, files: {
+      a: { offset: 0, quota: [
+        { at, used: 75, endsAt }, { at: at + 60_000, used: 81, endsAt },
+      ] },
+      b: { offset: 0, quota: [
+        { at: at + 120_000, used: 40, endsAt }, { at: at + 180_000, used, endsAt },
+      ] },
+    } }, at).at(-1), null);
+  }
+});
+
+test("a source seen before another file's peak cannot freeze its later growth at zero", () => {
+  const at = new Date(2026, 9, 30, 10).getTime();
+  const day = 86_400_000;
+  const endsAt = at + 5 * day;
+  const state = { daily: {}, files: {
+    b: { offset: 0, quota: [
+      { at, used: 40, endsAt }, { at: at + day, used: 62, endsAt },
+    ] },
+    a: { offset: 0, quota: [
+      { at: at + 60_000, used: 75, endsAt }, { at: at + 120_000, used: 81, endsAt },
+    ] },
+  } };
+  assert.deepEqual(codexDailyQuota(state, at + day).slice(-2), [41, null]);
+});
+
 test("ten quota windows accumulate without resetting the daily total", () => {
   const at = new Date(2026, 8, 11, 10).getTime();
   const quota = [];

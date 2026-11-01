@@ -59,20 +59,42 @@ export function decorateProviderUsageFromSessions(rows: readonly PlanRow[], stat
     return withProviderUsageTrend(row, "token", { kind: "bars", days: 7, points, labels: days, unit: "tokens" });
   });
   const quota = codexDailyQuota(state, now);
-  return decorated.map(row => row.provider === "openai" && row.form === "subscription" && row.unit === "%"
-    && quota.some(value => value !== null)
-    ? withProviderUsageTrend(row, "percentage", {
-      kind: "bars", days: 7, points: quota, labels: days, unit: "%", source: "Codex quota logs",
-    }, false) : row);
+  return decorated.map(row => {
+    if (row.provider !== "openai" || row.form !== "subscription" || row.unit !== "%"
+      || !quota.some(value => value !== null)) return row;
+    const account = row.usageTrends?.percentage;
+    const accountDays = new Map(account?.labels?.map((day, index) => [day, account.points[index]]) ?? []);
+    const observedDays = [...accountDays].filter(([, value]) => value != null).map(([day]) => day).sort();
+    const start = account?.observedRange?.start ?? days[0];
+    const end = account?.observedRange?.end ?? observedDays.at(-1);
+    const coverage = end === undefined ? undefined : { start, end };
+    const fallback = coverage ? dailyCodexQuota(state, now, coverage) : quota;
+    const points = days.map((day, index) => accountDays.get(day) ?? fallback[index]);
+    const hasAccount = days.some(day => accountDays.get(day) != null);
+    const hasFallback = days.some((day, index) => accountDays.get(day) == null && fallback[index] !== null);
+    return withProviderUsageTrend(row, "percentage", {
+      kind: "bars", days: 7, points, labels: days, unit: "%",
+      source: hasAccount ? `${account!.source || "Account observations"}${hasFallback ? " + Codex quota logs" : ""}` : "Codex quota logs",
+    }, false);
+  });
 }
 
 export function codexDailyQuota(state: SessionUsageState, now = Date.now()): Array<number | null> {
-  const events = Object.values(state.files).flatMap(file => file.quota ?? [])
+  return dailyCodexQuota(state, now);
+}
+
+function dailyCodexQuota(state: SessionUsageState, now: number, coverage?: { start: string; end: string }): Array<number | null> {
+  const events = Object.entries(state.files).flatMap(([source, file]) =>
+    (file.quota ?? []).map(event => ({ ...event, source })))
     .filter(event => Number.isFinite(event.at) && Number.isFinite(event.used)
       && event.used >= 0 && event.used <= 100 && Number.isFinite(event.endsAt) && event.endsAt > 0)
     .sort((a, b) => a.at - b.at);
   const totals = new Map<string, number>();
-  const windows: Array<{ endsAt: number; used: number }> = [];
+  const incompleteDays = new Set<string>();
+  const windows: Array<{
+    endsAt: number; used: number; at: number; uncertain: boolean;
+    sources: Map<string, { used: number; behind?: number }>;
+  }> = [];
   for (const event of events) {
     const day = localDayKey(event.at);
     totals.set(day, totals.get(day) ?? 0);
@@ -80,13 +102,37 @@ export function codexDailyQuota(state: SessionUsageState, now = Date.now()): Arr
     // 匹配相近的重置时间，避免跨越固定时间桶边界时重复计量。
     let window = windows.find(item => Math.abs(item.endsAt - event.endsAt) <= HOUR_MS);
     if (!window) {
-      window = { endsAt: event.endsAt, used: windows.length ? 0 : event.used };
+      window = { endsAt: event.endsAt, used: event.used, at: event.at, uncertain: false, sources: new Map() };
       windows.push(window);
     }
-    totals.set(day, totals.get(day)! + Math.max(0, event.used - window.used));
-    window.used = Math.max(window.used, event.used);
+    const previous = window.sources.get(event.source);
+    // A lagging source that resumes below a known peak may be reset or cached replay.
+    // 落后来源恢复增长时若仍低于已有峰值，无法区分真实重置和缓存回放。
+    if ((previous !== undefined && previous.used - event.used > 1)
+      || (localDayKey(window.at) !== day && window.used - event.used > 1)
+      || (previous !== undefined && event.used - previous.used > 1 && event.used < window.used)
+      || (previous?.behind !== undefined && event.used - previous.behind > 1)) {
+      window.uncertain = true;
+    }
+    window.sources.set(event.source, {
+      used: event.used,
+      behind: previous?.behind ?? (previous === undefined && window.used - event.used > 1 ? event.used : undefined),
+    });
+    if (window.uncertain) incompleteDays.add(day);
+    const consumed = Math.max(0, event.used - window.used);
+    // Cross-day catch-up may include account usage already counted on an earlier day.
+    // 跨日补报可能覆盖已计入账户历史的用量，无法拆分时保留未知。
+    if (consumed > 0 && coverage && localDayKey(window.at) <= coverage.end && day >= coverage.start) {
+      incompleteDays.add(day);
+    }
+    totals.set(day, totals.get(day)! + consumed);
+    if (event.used > window.used) {
+      window.used = event.used;
+      window.at = event.at;
+    }
   }
-  return recentDayKeys(now, 7).map(day => totals.get(day) ?? null);
+  return recentDayKeys(now, 7).map(day => (coverage && day >= coverage.start && day <= coverage.end)
+    || incompleteDays.has(day) ? null : totals.get(day) ?? null);
 }
 
 function parseQuota(line: string): QuotaObservation | undefined {

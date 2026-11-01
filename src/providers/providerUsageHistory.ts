@@ -121,13 +121,14 @@ export function decorateProviderUsage(
     const line = isCopilot(row);
     const days = line ? 30 : 7;
     const entry = history[providerUsageKey(row)];
+    const quotaConsumption = tracksQuotaChanges(row) && entry ? recordedQuotaConsumption(entry) : undefined;
     const samples = new Map(entry?.samples.map(sample => [sample.day, sample]) ?? []);
     const labels = recentDayKeys(now, days);
     const points = labels.map(day => {
       const sample = samples.get(day);
       if (!sample || !entry) return null;
       if (line) return entry.metric === "used" ? sample.latest : null;
-      return sample.consumed
+      return quotaConsumption?.get(day) ?? sample.consumed
         ?? consumptionDelta(entry.metric, sample.first, sample.latest);
     });
     let decorated: PlanRow;
@@ -145,7 +146,7 @@ export function decorateProviderUsage(
       decorated = mode ? withProviderUsageTrend(row, mode, usageTrend) : { ...row, usageTrend };
     }
 
-    const percentage = percentageTrend(row, entry, labels);
+    const percentage = percentageTrend(row, entry, labels, quotaConsumption);
     return percentage
       ? withProviderUsageTrend(decorated, "percentage", percentage, false)
       : decorated;
@@ -156,6 +157,7 @@ function percentageTrend(
   row: PlanRow,
   entry: ProviderHistoryEntry | undefined,
   labels: string[],
+  quotaConsumption?: ReadonlyMap<string, number>,
 ): ProviderUsageTrend | undefined {
   const current = currentUsagePercent(row);
   if (current === undefined) return undefined;
@@ -163,14 +165,44 @@ function percentageTrend(
   const points: Array<number | null> = labels.map(day => {
     const sample = samples.get(day);
     if (!sample || !entry) return null;
-    const consumed = sample.consumed
+    const consumed = quotaConsumption?.get(day) ?? sample.consumed
       ?? consumptionDelta(entry.metric, sample.first, sample.latest);
     return percentOfLimit(row, consumed);
   });
   const hasPercentageSample: boolean = points.some(point => point !== null);
-  if (!hasPercentageSample) points[points.length - 1] = current;
+  if (!hasPercentageSample && !tracksQuotaChanges(row)) points[points.length - 1] = current;
   const source = percentageSource(row);
-  return { kind: "bars", days: 7, points, labels, unit: "%", ...(source ? { source } : {}) };
+  const observedDays = tracksQuotaChanges(row) && entry
+    ? entry.samples.map(sample => sample.day).sort() : [];
+  const observedRange = observedDays.length > 0
+    ? { start: observedDays[0], end: observedDays[observedDays.length - 1] } : undefined;
+  return { kind: "bars", days: 7, points, labels, unit: "%", ...(source ? { source } : {}), ...(observedRange ? { observedRange } : {}) };
+}
+
+function recordedQuotaConsumption(entry: ProviderHistoryEntry): Map<string, number> {
+  const totals = new Map<string, number>();
+  let previous: DailySample | undefined;
+  for (const sample of [...entry.samples].sort((a, b) => a.day.localeCompare(b.day))) {
+    const changes = sample.changes?.filter(point => Number.isFinite(point.at) && Number.isFinite(point.value)
+      && !point.excludedFromUsage && (!(point.inferred || point.restoration) || point.observed))
+      .sort((a, b) => a.at - b.at);
+    const complete = changes?.length && changes[0].observed === true
+      && changes[0].value === sample.first && changes.at(-1)!.value === sample.latest;
+    let consumed = sampleConsumption(entry.metric, sample);
+    if (complete) {
+      // The last observation before midnight remains the predecessor of the
+      // first one after midnight. Quota increases are not negative consumption.
+      let value = previous?.latest ?? sample.first;
+      consumed = 0;
+      for (const point of changes) {
+        consumed += consumptionDelta(entry.metric, value, point.value);
+        value = point.value;
+      }
+    }
+    totals.set(sample.day, consumed);
+    previous = sample;
+  }
+  return totals;
 }
 
 function percentageSource(row: PlanRow): string | undefined {
@@ -196,7 +228,7 @@ function currentUsagePercent(row: PlanRow): number | undefined {
 function percentOfLimit(row: PlanRow, value: number): number | null {
   const limit = Number(row.limit);
   if (!Number.isFinite(limit) || limit <= 0) return null;
-  return Math.max(0, value / limit * 100);
+  return Math.max(0, value * 100 / limit);
 }
 
 function clampPercent(value: number): number {

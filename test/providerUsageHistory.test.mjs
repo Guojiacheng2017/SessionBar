@@ -9,6 +9,7 @@ import {
   providerUsageKey,
   recordProviderUsage,
 } from "../dist/providers/providerUsageHistory.js";
+import { decorateProviderUsageFromSessions } from "../dist/sessions/sessionUsageImporter.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const start = new Date(2026, 7, 1, 12).getTime();
@@ -67,6 +68,188 @@ test("usage sums observed decreases without inserting zero", () => {
     history[providerUsageKey(quota)].samples.at(-1).changes.map(change => change.value),
     [100, 60, 100, 95],
   );
+});
+
+test("account quota changes recalculate each day across a decrease and midnight", () => {
+  const at = new Date(2026, 9, 30, 0).getTime();
+  const observations = [
+    { at: at - 60_000, used: 75 },
+    { at: at + 20 * 60_000, used: 81 },
+    { at: at + 67 * 60_000, used: 40 },
+    { at: at + 70 * 60_000, used: 41 },
+    { at: at + 20 * 3600000, used: 62 },
+    { at: at + 2 * DAY - 60_000, used: 66 },
+    { at: at + 2 * DAY + 60_000, used: 67 },
+    { at: at + 2 * DAY + 13 * 3600000, used: 80 },
+  ];
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", limit: 100, unit: "%" });
+  let history = {};
+  for (const reading of observations) history = recordProviderUsage(history, [{ ...quota, remaining: 100 - reading.used }], reading.at);
+  const original = structuredClone(history);
+  const now = observations.at(-1).at;
+  const token = { kind: "bars", days: 7, unit: "tokens", source: "CC Switch", points: [null, null, null, null, 1000, 2000, 3000] };
+  const account = decorateProviderUsage([{ ...quota, remaining: 20, usageTrend: token }], history, now);
+  assert.deepEqual(account[0].usageTrends.percentage.points.slice(-3), [28, 4, 14]);
+  const native = observations.map(reading => ({ ...reading, endsAt: at + 6 * DAY }));
+  const [result] = decorateProviderUsageFromSessions(account, {
+    files: { main: { offset: 0, quota: native }, duplicate: { offset: 0, quota: structuredClone(native) } }, daily: {},
+  }, now);
+
+  assert.deepEqual(result.usageTrends.percentage.points.slice(-3), [28, 4, 14]);
+  assert.strictEqual(result.usageTrends.token, token);
+  assert.deepEqual(history, original, "derived consumption must not rewrite account readings");
+});
+
+test("complete account observations take precedence over an incorrect cached daily total", () => {
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", remaining: 85, limit: 100, unit: "%" });
+  for (const { values, want } of [
+    { values: [12, 48, 9, 15], want: 42 },
+    { values: [40, 70, 20, 65], want: 75 },
+    { values: [33, 63, 11, 13, 4, 24], want: 52 },
+    { values: [0, 100, 0, 100, 0, 100], want: 300 },
+  ]) {
+    let history = {};
+    for (const [index, used] of values.entries()) {
+      history = recordProviderUsage(history, [{ ...quota, remaining: 100 - used }], start + index * 60_000);
+    }
+    history[providerUsageKey(quota)].samples[0].consumed = 0;
+    const [result] = decorateProviderUsage([quota], history, start);
+    assert.equal(result.usageTrends.percentage.points.at(-1), want, JSON.stringify(values));
+  }
+});
+
+test("a legacy mid-day change buffer cannot erase consumption recorded before the buffer", () => {
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", remaining: 93, limit: 100, unit: "%" });
+  const history = { [providerUsageKey(quota)]: {
+    metric: "remaining", samples: [{ day: "2026-08-01", first: 94, latest: 93, consumed: 101,
+      changes: [{ at: start, value: 94 }, { at: start + 60_000, value: 93, observed: true }],
+    }],
+  } };
+  const [result] = decorateProviderUsage([quota], history, start);
+  assert.equal(result.usageTrends.percentage.points.at(-1), 101);
+});
+
+test("account daily usage is not replaced by delayed peer peaks or native cross-day catch-up", () => {
+  const at = new Date(2026, 9, 30, 23).getTime();
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", remaining: 39, limit: 100, unit: "%" });
+  let history = {};
+  for (const [minute, used] of [[0, 75], [1, 81], [3, 40], [4, 60], [61, 61]]) {
+    history = recordProviderUsage(history, [{ ...quota, remaining: 100 - used }], at + minute * 60_000);
+  }
+  const observation = (minute, used) => ({ at: at + minute * 60_000, used, endsAt: at + 5 * DAY });
+  const now = at + 61 * 60_000;
+  const account = decorateProviderUsage([quota], history, now);
+  const [result] = decorateProviderUsageFromSessions(account, { daily: {}, files: {
+    a: { offset: 0, quota: [observation(0, 75), observation(1, 81), observation(3, 40)] },
+    b: { offset: 0, quota: [observation(2, 81), observation(61, 61)] },
+  } }, now);
+  assert.deepEqual(result.usageTrends.percentage.points.slice(-2), [26, 1]);
+});
+
+test("native catch-up spanning an account day cannot count that day's consumption twice", () => {
+  const at = new Date(2026, 9, 30, 12).getTime();
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", limit: 100, unit: "%" });
+  let history = recordProviderUsage({}, [quota], at);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 80 }], at + 60_000);
+  const account = decorateProviderUsage([{ ...quota, remaining: 70 }], history, at + DAY);
+  const state = { daily: {}, files: { a: { offset: 0, quota: [
+    { at, used: 0, endsAt: at + 7 * DAY },
+    { at: at + DAY, used: 30, endsAt: at + 7 * DAY },
+  ] } } };
+  const original = structuredClone(state);
+  const [result] = decorateProviderUsageFromSessions(account, state, at + DAY);
+  assert.deepEqual(result.usageTrends.percentage.points.slice(-2), [20, null]);
+  assert.equal(result.usageTrends.percentage.source, "OpenAI API");
+  assert.deepEqual(state, original);
+});
+
+test("a duplicate native baseline cannot erase an earlier overlapping account interval", () => {
+  const at = new Date(2026, 9, 30, 12).getTime();
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", limit: 100, unit: "%" });
+  let history = recordProviderUsage({}, [quota], at);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 80 }], at + 60_000);
+  const account = decorateProviderUsage([{ ...quota, remaining: 70 }], history, at + DAY);
+  const [result] = decorateProviderUsageFromSessions(account, { daily: {}, files: {
+    a: { offset: 0, quota: [{ at, used: 0, endsAt: at + 7 * DAY }] },
+    b: { offset: 0, quota: [
+      { at: at + DAY, used: 0, endsAt: at + 7 * DAY },
+      { at: at + DAY + 60_000, used: 30, endsAt: at + 7 * DAY },
+    ] },
+  } }, at + DAY);
+  assert.deepEqual(result.usageTrends.percentage.points.slice(-2), [20, null]);
+});
+
+test("account catch-up spanning an unsampled day cannot also use native consumption for that day", () => {
+  const at = new Date(2026, 9, 29, 12).getTime();
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", limit: 100, unit: "%" });
+  let history = recordProviderUsage({}, [quota], at);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 80 }], at + 60_000);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 50 }], at + 2 * DAY);
+  const account = decorateProviderUsage([{ ...quota, remaining: 50 }], history, at + 2 * DAY);
+  const [result] = decorateProviderUsageFromSessions(account, { daily: {}, files: { a: { offset: 0, quota: [
+    { at: at + DAY, used: 20, endsAt: at + 7 * DAY },
+    { at: at + DAY + 60_000, used: 40, endsAt: at + 7 * DAY },
+  ] } } }, at + 2 * DAY);
+  assert.deepEqual(result.usageTrends.percentage.points.slice(-3), [20, null, 30]);
+});
+
+test("account coverage before the visible week also fences native fallback inside a sampling gap", () => {
+  const at = new Date(2026, 9, 20, 12).getTime();
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", limit: 100, unit: "%" });
+  let history = recordProviderUsage({}, [quota], at);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 80 }], at + 9 * DAY);
+  const account = decorateProviderUsage([{ ...quota, remaining: 80 }], history, at + 9 * DAY);
+  const [result] = decorateProviderUsageFromSessions(account, { daily: {}, files: { a: { offset: 0, quota: [
+    { at: at + 8 * DAY, used: 0, endsAt: at + 15 * DAY },
+    { at: at + 8 * DAY + 60_000, used: 10, endsAt: at + 15 * DAY },
+  ] } } }, at + 9 * DAY);
+  assert.deepEqual(result.usageTrends.percentage.points.slice(-2), [null, 20]);
+});
+
+test("rolling the visible week cannot revive native usage that overlaps an offscreen account day", () => {
+  const at = new Date(2026, 9, 25, 12).getTime();
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", limit: 100, unit: "%" });
+  let history = recordProviderUsage({}, [quota], at);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 80 }], at + 60_000);
+  const state = { daily: {}, files: { a: { offset: 0, quota: [
+    { at, used: 0, endsAt: at + 10 * DAY },
+    { at: at + DAY, used: 30, endsAt: at + 10 * DAY },
+  ] } } };
+  for (const offset of [1, 7]) {
+    const now = at + offset * DAY;
+    const account = decorateProviderUsage([{ ...quota, remaining: 70 }], history, now);
+    const [result] = decorateProviderUsageFromSessions(account, state, now);
+    const trend = result.usageTrends.percentage;
+    assert.equal(trend.points[trend.labels.indexOf("2026-10-26")], null);
+  }
+});
+
+test("native daily fallback is retained when its observation interval does not overlap account days", () => {
+  const at = new Date(2026, 9, 30, 12).getTime();
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", limit: 100, unit: "%" });
+  let history = recordProviderUsage({}, [{ ...quota, remaining: 90 }], at + DAY);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 85 }], at + DAY + 60_000);
+  const account = decorateProviderUsage([{ ...quota, remaining: 85 }], history, at + DAY);
+  const [result] = decorateProviderUsageFromSessions(account, { daily: {}, files: { a: { offset: 0, quota: [
+    { at, used: 0, endsAt: at + 7 * DAY },
+    { at: at + 60_000, used: 10, endsAt: at + 7 * DAY },
+  ] } } }, at + DAY);
+  assert.deepEqual(result.usageTrends.percentage.points.slice(-2), [10, 5]);
+  assert.equal(result.usageTrends.percentage.source, "OpenAI API + Codex quota logs");
+});
+
+test("an observed native reset starts an independent fallback interval after an account day", () => {
+  const at = new Date(2026, 9, 30, 12).getTime();
+  const quota = row({ form: "subscription", provider: "openai", label: "OpenAI Subscription", limit: 100, unit: "%" });
+  let history = recordProviderUsage({}, [quota], at);
+  history = recordProviderUsage(history, [{ ...quota, remaining: 80 }], at + 60_000);
+  const account = decorateProviderUsage([{ ...quota, remaining: 90 }], history, at + DAY);
+  const [result] = decorateProviderUsageFromSessions(account, { daily: {}, files: { a: { offset: 0, quota: [
+    { at, used: 0, endsAt: at + 3 * DAY },
+    { at: at + DAY, used: 0, endsAt: at + 7 * DAY },
+    { at: at + DAY + 60_000, used: 10, endsAt: at + 7 * DAY },
+  ] } } }, at + DAY);
+  assert.deepEqual(result.usageTrends.percentage.points.slice(-2), [20, 10]);
 });
 
 test("cross-day increases do not fabricate consumption", () => {
@@ -271,7 +454,7 @@ test("official token buckets are not replaced by quota percentage history", () =
   assert.strictEqual(decorated.usageTrend, official);
   assert.strictEqual(decorated.usageTrends.token, official);
   assert.equal(decorated.usageTrends.percentage.unit, "%");
-  assert.equal(decorated.usageTrends.percentage.points.at(-1), 25);
+  assert.equal(decorated.usageTrends.percentage.points.at(-1), null);
   assert.equal(decorated.usageTrends.percentage.source, "OpenAI API");
 });
 
