@@ -216,12 +216,14 @@ export async function consumeResetCard(opts: {
       });
       const payload = await response.json().catch(() => null);
       const parsed = consumeOutcome(payload);
-      const outcome = parsed || (response.ok ? "reset" : "error");
+      const outcome = response.ok && parsed ? parsed : "error";
       return {
         outcome,
         cardId: opts.cardId,
         idempotencyKey,
-        ...(outcome === "error" ? { reason: `HTTP ${response.status}` } : {}),
+        ...(outcome === "error" ? {
+          reason: response.ok ? "unrecognized reset-card response" : `HTTP ${response.status}`,
+        } : {}),
       };
     } finally {
       clearTimeout(timeout);
@@ -329,7 +331,7 @@ async function fetchJson(fetchImpl: typeof fetch, url: string, headers: Record<s
   try {
     const resp = await fetchImpl(url, { method: "GET", headers, signal: controller.signal });
     if (!resp.ok) return null;
-    return resp.json().catch(() => null);
+    return await resp.json().catch(() => null);
   } catch { return null; }
   finally { clearTimeout(t); }
 }

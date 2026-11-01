@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { fetchOpenAISubscription } from "../dist/providers/provider-plans/whamAdapter.js";
+import { consumeResetCard, fetchOpenAISubscription } from "../dist/providers/provider-plans/whamAdapter.js";
 
 const authJsonPath = join(tmpdir(), "wham-test-auth.json");
 const missingAuthPath = join(tmpdir(), "wham-nonexistent-auth.json");
@@ -203,4 +203,55 @@ test("does not consume an expiring reset card when the setting is disabled", asy
   });
   assert.ok(row);
   assert.equal(requests.some(request => request.url.endsWith("/consume")), false);
+});
+
+test("subscription body timeouts remain active until JSON finishes", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let aborted = false;
+  let cancelBody = () => {};
+  const pending = fetchOpenAISubscription({
+    authJsonPath,
+    fetchImpl: async (input, init) => {
+      if (!String(input).endsWith("/rate-limit-reset-credits")) return Response.json({});
+      return new Response(new ReadableStream({
+        start(controller) {
+          cancelBody = () => controller.error(new Error("fixture body cancelled"));
+          init?.signal?.addEventListener("abort", () => { aborted = true; cancelBody(); }, { once: true });
+        },
+      }));
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(10_000);
+  await new Promise(resolve => setImmediate(resolve));
+  cancelBody();
+  await pending;
+  assert.equal(aborted, true);
+});
+
+test("redemption requires a successful HTTP response and an explicit known outcome", async t => {
+  for (const fixture of [
+    { name: "empty object", http: 200, body: "{}", outcome: "error" },
+    { name: "explicit error", http: 200, body: '{"status":"error"}', outcome: "error" },
+    { name: "unknown outcome", http: 200, body: '{"outcome":"pending"}', outcome: "error" },
+    { name: "malformed JSON", http: 200, body: "not JSON", outcome: "error" },
+    { name: "empty response", http: 204, body: null, outcome: "error" },
+    { name: "HTTP failure with reset status", http: 500, body: '{"status":"reset"}', outcome: "error" },
+    { name: "HTTP failure with redeemed outcome", http: 401, body: '{"outcome":"alreadyRedeemed"}', outcome: "error" },
+    { name: "reset", http: 200, body: '{"status":"reset"}', outcome: "reset" },
+    { name: "already redeemed", http: 200, body: '{"outcome":"already_redeemed"}', outcome: "alreadyRedeemed" },
+    { name: "nothing to reset", http: 200, body: '{"status":"nothingToReset"}', outcome: "nothingToReset" },
+    { name: "no credit", http: 200, body: '{"status":"noCredit"}', outcome: "noCredit" },
+  ]) {
+    await t.test(fixture.name, async () => {
+      const result = await consumeResetCard({
+        authJsonPath,
+        cardId: "response-fixture",
+        idempotencyKey: "fixture-only-request",
+        fetchImpl: async () => new Response(fixture.body, { status: fixture.http }),
+      });
+      assert.equal(result.outcome, fixture.outcome);
+      if (fixture.outcome === "error") assert.ok(result.reason);
+    });
+  }
 });
