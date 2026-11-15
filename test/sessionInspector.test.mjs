@@ -69,8 +69,7 @@ test("session sidebar line is a compact monitor summary, not a repeated table ro
     width: 42,
     now: baseSession.timestamp + 37_000,
   });
-  assert.equal(line, "> WORK Unnamed session · 3333abcd 37s");
-  assert.doesNotMatch(line, /atlas/);
+  assert.equal(line, "> WORK atlas 37s");
   assert.doesNotMatch(line, /33333333|Codex|running:|Project|Agent|Status/);
   assert.ok(line.length <= 42);
 });

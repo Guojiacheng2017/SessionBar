@@ -55,13 +55,15 @@ export function sessionServiceLabel(service: string | undefined): string | undef
   return known ? CODEX_SERVICE_LABELS[known] : undefined;
 }
 
-/** Keep the session identity distinct from its project, even when unnamed. */
+/** Prefer native names and known services, then the project. */
 export function sessionDisplayName(session: SessionDisplayNameInput): string {
   const name = session.session_name?.trim();
   if (name) return name;
 
   const service = sessionServiceLabel(session.session_service);
   if (service) return service;
+  const project = sessionProjectName(session);
+  if (project !== "?") return project;
   const rawId = session.session_id?.trim().split("__")[0] || "";
   const nativeId = rawId.match(/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}/i)?.[0];
   const shortId = nativeId ? nativeId.slice(-8) : rawId.slice(-16);
