@@ -160,6 +160,38 @@ test("short visible model never exposes a pane that has no room", () => {
   assert.ok(drilldown.detailsWidth >= 32);
 });
 
+test("compact project windows keep every keyboard cursor within the pane capacity", () => {
+  const sessions = Array.from({ length: 8 }, (_, index) => ({
+    session_id: `fixture-${index}`, session_type: "Codex", status: "idle",
+    project: `Workspace_${index}`, timestamp: 1_000,
+  }));
+  for (const [width, height] of [[80, 24], [48, 24], [40, 20], [80, 40], [140, 40]]) {
+    const renderer = { width, height };
+    const layout = monitorWorkspaceLayout(width, height);
+    const paneHeight = typeof layout.projectHeight === "number" ? layout.projectHeight : height - 8;
+    for (let index = 0; index < sessions.length; index++) {
+      const model = monitorVisibleModel(monitorState({
+        sessions, system: undefined, filterText: "", projectCursorKey: `name:Workspace_${index}`,
+      }), renderer, 11_100);
+      const text = model.projectsContent.flat().map(chunks => chunks.map(chunk => chunk.text).join("")).join(" ");
+      assert.match(text, new RegExp(`Workspace_${index}`), `${width}x${height} cursor ${index}`);
+      assert.ok(model.projectsContent.length <= paneHeight - 4, `${width}x${height} fits header and overflow row`);
+    }
+  }
+});
+
+test("freshness scheduling reuses the compact project window", () => {
+  const now = 1_000_100;
+  const sessions = Array.from({ length: 24 }, (_, index) => ({
+    session_id: `fixture-${index}`, session_type: "Codex", status: "idle",
+    project: `Workspace_${Math.floor(index / 3)}`, timestamp: Math.floor(index / 3) === 5 ? now - 10_100 : now - 120_100,
+  }));
+  const state = monitorState({ sessions, system: undefined, filterText: "", projectCursorKey: "name:Workspace_7" });
+  const renderer = { width: 80, height: 24 };
+  assert.equal(nextVisibleFreshnessDelay(state, renderer, now), 59_900);
+  assert.equal(nextVisibleFreshnessDelay({ ...state, projectCursorKey: "name:Workspace_5" }, renderer, now), 900);
+});
+
 test("system overview renders a deterministic compact efficiency panel", () => {
   const text = systemOverviewText(systemSnapshot(), 44, 11_000);
   assert.match(text, /CPU.*37\.5%/);

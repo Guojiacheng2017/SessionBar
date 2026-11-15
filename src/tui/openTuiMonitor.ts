@@ -615,6 +615,16 @@ function visibleWindow<T>(rows: readonly T[], selectedIndex: number, slots: numb
   return rows.slice(offset, offset + slots);
 }
 
+function visibleProjectWindow(rows: readonly ProjectRow[], state: Readonly<MonitorState>, renderer: CliRenderer): readonly ProjectRow[] {
+  const workspace = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey));
+  const paneHeight = typeof workspace.projectHeight === "number" ? workspace.projectHeight : Math.max(1, renderer.height - 8);
+  // Reserve borders, vertical padding and the table header before windowing.
+  const capacity = Math.max(1, paneHeight - 5);
+  const slots = Math.max(1, Math.min(6, capacity - (rows.length > capacity ? 1 : 0)));
+  const selectedIndex = state.projectCursorKey ? rows.findIndex(row => row.key === state.projectCursorKey) : 0;
+  return visibleWindow(rows, selectedIndex, slots);
+}
+
 function projectTableContent(rows: readonly ProjectRow[], state: Readonly<MonitorState>, renderer: CliRenderer): TextTableContent {
   const sidebar = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey)).direction === "row";
   const compact = renderer.width < 100;
@@ -625,9 +635,7 @@ function projectTableContent(rows: readonly ProjectRow[], state: Readonly<Monito
     : [[header(""), header("Project"), header("Sessions"), header("Agents"), header("Status"), header("Path"), header("Age")]];
   if (rows.length === 0) return [[cell("No projects reporting yet", PALETTE.muted)]];
 
-  const selectedIndex = state.projectCursorKey ? rows.findIndex(row => row.key === state.projectCursorKey) : 0;
-  const slots = Math.max(2, Math.min(6, renderer.height - 13));
-  const visible = visibleWindow(rows, selectedIndex, slots);
+  const visible = visibleProjectWindow(rows, state, renderer);
   for (const row of visible) {
     const selected = row.key === state.projectCursorKey;
     const strong = selected ? TextAttributes.BOLD : TextAttributes.NONE;
@@ -1718,9 +1726,7 @@ function visibleSessionAgeDeadline(
   const shown = applyFilter(state.sessions, state.filterText);
   const groups = groupByProject(shown);
   const projectData = projectRows(groups, state, 0);
-  const projectIndex = state.projectCursorKey ? projectData.findIndex(row => row.key === state.projectCursorKey) : 0;
-  const projectSlots = Math.max(2, Math.min(6, renderer.height - 13));
-  const visibleProjects = new Set(visibleWindow(projectData, projectIndex, projectSlots).map(row => row.key));
+  const visibleProjects = new Set(visibleProjectWindow(projectData, state, renderer).map(row => row.key));
   let deadline: number | undefined;
   for (const [key, sessions] of groups.entries()) {
     if (visibleProjects.has(key)) deadline = earlierDeadline(deadline, nextAgeChangeAt(latestTimestamp(sessions), now), now);
