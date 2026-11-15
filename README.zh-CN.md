@@ -8,7 +8,7 @@
 
 ## 最新动态
 
-- **2026-11-01 · v1.1.0 后续源码修复：** 严格校验重置卡兑换结果、限制慢响应体的读取时间，并避免原生日志与账户观测重叠时重复计量配额用量。
+- **2026-11-15 · v1.1.0 后续源码修复（非新 Release）：** 修正 Web 统计、仅影响展示的 Provider 常用筛选、重置卡未知/零值与 Gantt 时间；改进窄终端布局和会话名称。保留兑换结果校验、慢响应读取限时及配额去重修复。
 - **2026-10-30 · v1.1.0 运行时：** 统一 Provider 网络策略，显式安全重启、归属验证与资源回收；文件变化防抖后定向刷新。
 - **2026-10-30 · Harness：** Kimi Code、ZCode、Cursor 原生上报；WorkBuddy 数据库/WAL 发现、DeepSeek Harness 快照与 Codex 身份修复。
 - **2026-10-30 · Agent 详情：** 按需查看 Codex、Claude、DeepSeek 子 Agent，分页对话及原生执行/Flow 证据。
@@ -49,7 +49,7 @@ Agent 进程。
     <td colspan="2" align="center"><img src="docs/images/tui-landing.png" width="560" alt="SessionBar TUI 首页"><br><sub><b>TUI · 首页</b></sub></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="docs/images/tui-sessions.png" alt="SessionBar TUI 项目、会话与活动详情"><br><sub><b>TUI · 会话</b></sub></td>
+    <td width="50%" align="center"><img src="docs/images/tui-sessions.png" alt="SessionBar TUI 项目、会话与系统总览"><br><sub><b>TUI · 会话</b></sub></td>
     <td width="50%" align="center"><img src="docs/images/tui-providers.png" alt="SessionBar TUI Provider 总览"><br><sub><b>TUI · Providers</b></sub></td>
   </tr>
   <tr>
@@ -58,9 +58,10 @@ Agent 进程。
   </tr>
 </table>
 
-> 截图于 2026-10-30 根据本次发布的实际 UI 生成，使用隔离的模拟项目、会话、系统指标和
+> 截图于 2026-11-15 根据当前 `main` 源码的实际 UI 生成，使用隔离的合成项目、会话、系统指标和
 > Provider 数值，不包含真实账户数据、凭据或个人路径。缺失字段仍显示为不可用；
 > 实际数据覆盖范围取决于 Harness 和 Provider Adapter。
+> 截图不代表未更新的 v1.1.0 下载包；详见[合成截图声明](docs/images/screenshots-manifest.json)。
 
 > SessionBar 使用终端自身的背景色；实际颜色和对比度会随终端主题变化。
 
@@ -94,6 +95,8 @@ sessionbar
 
 这是 GitHub 发布包，不代表已发布到 npm Registry。
 安装包与对应的校验文件应从同一个 Release 一起下载。
+2026-11-15 的源码修复仅在当前 `main` 中；既有 v1.1.0 下载包、Tag 和
+发布归档未更新，不包含这些修复。
 
 ### 从源码安装
 
@@ -134,6 +137,10 @@ Tab、方括号或 `1`–`5` 切换详情，`a` 或 Backspace 返回全部项目
 `v` 切换 Providers、`A` 切换 Agents、`r` 刷新、`/` 过滤、`w` 打开网页、`q` 退出。
 未聚焦项目时显示全部 Session。Web 中点击项目和会话，向下滚动进入 Providers。
 详情支持 `PageUp`、`PageDown`、`Home`、`End`，窄终端也可访问底部内容。
+
+Web Provider 常用筛选仅改变展示的行，不改变采集或轮询频率。
+**Current** 表示配额百分比或周期累计读数，不是今日消耗；**Today** 按所选指标
+汇总已有的当日用量，不混加不同货币或单位。
 
 退出 TUI 只释放当前客户端，不会关闭其他客户端或浏览器标签。最后一个客户端
 断开后有五分钟重连宽限；显式启动的无界面 Relay 不会仅因空闲而退出。
@@ -206,6 +213,11 @@ WorkBuddy 可配置只读 `SESSIONBAR_WORKBUDDY_BALANCE_COMMAND` 输出校验后
 ACP 接口采集；xAI Management API 需要启动环境同时包含
 `SESSIONBAR_XAI_MANAGEMENT_API_KEY` 和 `SESSIONBAR_XAI_TEAM_ID`，本次不含 Web 凭据编辑器。
 采集值保留原始来源时间。
+
+上游请求失败（包括 HTTP 403）或缺失顶层卡清单时，卡数为 **unknown（未知）**；
+成功取得的空清单表示 **zero（零张）**。本轮不提供逐条卡数据的完整校验。
+自动兑换默认关闭；在 **CLI Settings** 中开启须输入 `ENABLE`，会消耗真实重置卡。
+当前没有 Web 设置页。
 
 Provider HTTP 共用 Relay 网络策略：显式代理环境优先，否则读取 macOS 现有系统代理，
 再否则沿用正常系统路由。Loopback 始终直连，不开启代理或修改系统设置。

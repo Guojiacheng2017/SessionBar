@@ -8,9 +8,10 @@
 
 ## What's New
 
-- **2026-11-01 · Source fixes after v1.1.0:** Validate reset-card redemption
-  responses, bound slow response-body reads, and avoid double-counting quota
-  usage across overlapping native logs and account observations.
+- **2026-11-15 · Source fixes after v1.1.0 (not a new release):** Correct Web
+  statistics, display-only frequent-use Provider filters, reset-card unknown/zero
+  states and Gantt timing; improve narrow-terminal layouts and session names.
+  Retain validated redemption, bounded response reads and quota deduplication.
 - **2026-10-30 · v1.1.0 Runtime:** Shared Provider networking, explicit safe
   restart, owned-process cleanup and debounced targeted filesystem refreshes.
 - **2026-10-30 · Harnesses:** Native Kimi Code, ZCode and Cursor reporting;
@@ -57,7 +58,7 @@ of treating the project as a single agent process.
     <td colspan="2" align="center"><img src="docs/images/tui-landing.png" width="560" alt="SessionBar TUI landing screen"><br><sub><b>TUI · Landing</b></sub></td>
   </tr>
   <tr>
-    <td width="50%" align="center"><img src="docs/images/tui-sessions.png" alt="SessionBar TUI project, sessions and activity details"><br><sub><b>TUI · Sessions</b></sub></td>
+    <td width="50%" align="center"><img src="docs/images/tui-sessions.png" alt="SessionBar TUI projects, sessions and system overview"><br><sub><b>TUI · Sessions</b></sub></td>
     <td width="50%" align="center"><img src="docs/images/tui-providers.png" alt="SessionBar TUI provider overview"><br><sub><b>TUI · Providers</b></sub></td>
   </tr>
   <tr>
@@ -66,10 +67,12 @@ of treating the project as a single agent process.
   </tr>
 </table>
 
-> Captured from this release's actual UI on 2026-10-30, using isolated synthetic
+> Captured from the current `main` source's actual UI on 2026-11-15, using isolated synthetic
 > projects, sessions, system readings, and provider values. No real account data,
 > credentials, or personal paths are included. Missing fields stay unavailable;
 > actual data coverage depends on the harness and provider adapter.
+> These screenshots do not describe the unchanged v1.1.0 download archive.
+> See the [synthetic capture manifest](docs/images/screenshots-manifest.json).
 
 > SessionBar uses the terminal's background. Colors and contrast vary with the
 > active terminal theme.
@@ -107,6 +110,8 @@ sessionbar
 
 This is a GitHub release archive, not an npm registry publication. Download
 the archive and its matching checksum file from the same release.
+The 2026-11-15 source fixes are on current `main` only; the existing v1.1.0
+download, tag and release archive have not been updated to include them.
 
 ### From Source
 
@@ -150,6 +155,11 @@ projects; `v` switches Providers, `A` switches Agents; `r` refreshes, `/` filter
 and `q` exits. Without a focused project, all sessions are shown. In Web, click
 projects and sessions; scroll down for Providers.
 Use `PageUp`, `PageDown`, `Home` and `End` to reach all detail content in small terminals.
+
+Web frequent-use Provider filters change the displayed rows only; they do not
+change collection or polling frequency. **Current** identifies quota percentages
+or cycle-cumulative readings, not today's consumption. **Today** summarizes the available daily
+usage in the selected metric; different currencies and units stay separate.
 
 Exiting TUI releases that client, not other open clients or browser tabs.
 After the last client disconnects, a five-minute reconnection grace applies;
@@ -231,6 +241,12 @@ CLI billing uses its read-only ACP endpoint when installed and authenticated.
 xAI Management API queries require both `SESSIONBAR_XAI_MANAGEMENT_API_KEY` and
 `SESSIONBAR_XAI_TEAM_ID` in the startup environment; no Web credential editor
 is included. Collected values preserve their original source time.
+
+Reset-card counts remain **unknown** when the upstream request fails (including
+HTTP 403) or the top-level card inventory is missing; a fetched empty inventory
+means **zero**. This is not full validation of individual card entries.
+Automatic redemption is off by default; enabling it in **CLI Settings** requires
+typing `ENABLE` and spends real cards. There is no Web settings page.
 
 Provider HTTP uses the Relay's shared network policy: explicit proxy environment
 first, otherwise existing macOS system proxies, otherwise the normal system
