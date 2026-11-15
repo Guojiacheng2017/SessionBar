@@ -8,7 +8,7 @@
 
 ## 最新动态
 
-- **2026-11-15 · v1.1.0 后续源码修复（非新 Release）：** 修正 Web 统计、仅影响展示的 Provider 常用筛选、重置卡未知/零值与 Gantt 时间；改进窄终端布局和会话名称。保留兑换结果校验、慢响应读取限时及配额去重修复。
+- **2026-11-15 · v1.1.0 后续源码修复（非新 Release）：** 修正 Web 统计、仅影响展示的 Provider 常用筛选、重置卡未知/零值与 Gantt 时间；同步已完成的 TUI 导航、Provider 六列表格及下方全宽图表详情，并改进窄终端布局和会话名称。保留兑换结果校验、慢响应读取限时及配额去重修复。
 - **2026-10-30 · v1.1.0 运行时：** 统一 Provider 网络策略，显式安全重启、归属验证与资源回收；文件变化防抖后定向刷新。
 - **2026-10-30 · Harness：** Kimi Code、ZCode、Cursor 原生上报；WorkBuddy 数据库/WAL 发现、DeepSeek Harness 快照与 Codex 身份修复。
 - **2026-10-30 · Agent 详情：** 按需查看 Codex、Claude、DeepSeek 子 Agent，分页对话及原生执行/Flow 证据。
@@ -50,7 +50,7 @@ Agent 进程。
   </tr>
   <tr>
     <td width="50%" align="center"><img src="docs/images/tui-sessions.png" alt="SessionBar TUI 项目、会话与系统总览"><br><sub><b>TUI · 会话</b></sub></td>
-    <td width="50%" align="center"><img src="docs/images/tui-providers.png" alt="SessionBar TUI Provider 总览"><br><sub><b>TUI · Providers</b></sub></td>
+    <td width="50%" align="center"><img src="docs/images/tui-providers.png" alt="SessionBar TUI Provider 六列表格及下方全宽图表详情"><br><sub><b>TUI · Providers</b></sub></td>
   </tr>
   <tr>
     <td width="50%" align="center"><img src="docs/images/web-sessions.png" alt="SessionBar Web 会话总览"><br><sub><b>Web · 会话</b></sub></td>
@@ -62,6 +62,7 @@ Agent 进程。
 > Provider 数值，不包含真实账户数据、凭据或个人路径。缺失字段仍显示为不可用；
 > 实际数据覆盖范围取决于 Harness 和 Provider Adapter。
 > 截图不代表未更新的 v1.1.0 下载包；详见[合成截图声明](docs/images/screenshots-manifest.json)。
+> 首页标题使用应用实际输出的 Kitty 粒子图像，不使用 Braille 字符降级图。
 
 > SessionBar 使用终端自身的背景色；实际颜色和对比度会随终端主题变化。
 

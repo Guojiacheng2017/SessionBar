@@ -10,7 +10,8 @@
 
 - **2026-11-15 · Source fixes after v1.1.0 (not a new release):** Correct Web
   statistics, display-only frequent-use Provider filters, reset-card unknown/zero
-  states and Gantt timing; improve narrow-terminal layouts and session names.
+  states and Gantt timing; publish the completed TUI navigation, six-column
+  Provider table and full-width chart inspector, alongside narrow-terminal and session-name fixes.
   Retain validated redemption, bounded response reads and quota deduplication.
 - **2026-10-30 · v1.1.0 Runtime:** Shared Provider networking, explicit safe
   restart, owned-process cleanup and debounced targeted filesystem refreshes.
@@ -59,7 +60,7 @@ of treating the project as a single agent process.
   </tr>
   <tr>
     <td width="50%" align="center"><img src="docs/images/tui-sessions.png" alt="SessionBar TUI projects, sessions and system overview"><br><sub><b>TUI · Sessions</b></sub></td>
-    <td width="50%" align="center"><img src="docs/images/tui-providers.png" alt="SessionBar TUI provider overview"><br><sub><b>TUI · Providers</b></sub></td>
+    <td width="50%" align="center"><img src="docs/images/tui-providers.png" alt="SessionBar TUI six-column provider table and full-width chart details"><br><sub><b>TUI · Providers</b></sub></td>
   </tr>
   <tr>
     <td width="50%" align="center"><img src="docs/images/web-sessions.png" alt="SessionBar Web session overview"><br><sub><b>Web · Sessions</b></sub></td>
@@ -72,6 +73,7 @@ of treating the project as a single agent process.
 > credentials, or personal paths are included. Missing fields stay unavailable;
 > actual data coverage depends on the harness and provider adapter.
 > These screenshots do not describe the unchanged v1.1.0 download archive.
+> The landing wordmark uses the app's graphical Kitty output, not its Braille fallback.
 > See the [synthetic capture manifest](docs/images/screenshots-manifest.json).
 
 > SessionBar uses the terminal's background. Colors and contrast vary with the

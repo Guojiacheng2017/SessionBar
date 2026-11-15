@@ -2,32 +2,40 @@
   "capturedAt": "2026-11-15",
   "packageVersion": "1.1.0",
   "source": "Frozen current main source candidate and built UI; not the unchanged v1.1.0 release archive",
-  "sourceDigest": "7b8db4b50101409c9e10823b11ba22626546f4b011f1c56ad6f911a7aca060e7",
-  "buildDigest": "c779d9d999d0114e01b6682ae02713db43cf21f0d4269f7caed9a04222c02061",
+  "sourceDigest": "660d1e9315d60d05b722fde1fdf18e936cfb89d91792535302f03de9ff73c3c2",
+  "buildDigest": "879598c6cdcc61a03a4621a1bd4ea535804222ff1a33487472a17a304ea65559",
   "publicDigest": "b18d9fa522d41fade072c26eaf9d351f7bf9e747bdf3014fe78a76da76882bb1",
   "fixture": "Isolated synthetic Atlas/Orion projects, sessions, system readings and common Providers; not real accounts",
-  "renderer": "Actual CLI landing/wordmark and OpenTUI via PTY/xterm; actual Web app via dedicated Playwright CLI session",
-  "checks": ["Desktop 1440x900 session selection and Activity tab", "Provider frequent-use/all controls and fixed-identity preference toggle", "Token Today versus Percentage Current labels", "Mobile 390x844 filtering, empty state, provider gallery and no horizontal overflow", "All five frames visually inspected; no visible personal paths, accounts or session IDs"],
+  "renderer": "Actual CLI and OpenTUI bytes via PTY; text via xterm and real app Kitty RGBA image frames via protocol canvas; actual Web app via dedicated Playwright CLI session",
+  "graphics": "Landing capture must receive Kitty RGBA frames; Braille fallback is rejected",
+  "tuiBaseline": "Completed and tested TUI source at c315b1c; excludes unfinished development modules",
+  "checks": [
+    "Desktop 1440x900 session selection and Activity tab",
+    "Provider frequent-use/all controls and fixed-identity preference toggle",
+    "Token Today versus Percentage Current labels",
+    "Mobile 390x844 filtering, empty state, provider gallery and no horizontal overflow",
+    "All five frames visually inspected; no visible personal paths, accounts or session IDs"
+  ],
   "images": [
     {
       "file": "tui-landing.png",
-      "sha256": "4fc8de36efd1210cbf9b59d8052a2fd9cb41b00c70d005138f497f2f61db6164"
+      "sha256": "b9355bb4163a4811a8e70657def84ea67306675dc0da3c167f8a52756a28a01b"
     },
     {
       "file": "tui-sessions.png",
-      "sha256": "9e9496221531e5ed633fdb730e2bcd5b145ad8543ab8124ffe504b1859f56983"
+      "sha256": "4e32343906f5914e5780a54b1e795699f0b5f341fd0cfa6d924afe303c2f533f"
     },
     {
       "file": "tui-providers.png",
-      "sha256": "351ae3348698f4ff0ce45a366fc279d932e6211c206699b3a90472536bdad974"
+      "sha256": "4510deefe9f23ea7a52c3ca2bc6561dcb4b4662f8d191fb54117e005490f4cbb"
     },
     {
       "file": "web-sessions.png",
-      "sha256": "c51cfa510884f9aed762233dbf3711f49bb494ec749d8c1346c66d40b0927f01"
+      "sha256": "6d5fa17981fe4f97bbf18378f2589b36ea2f2a66b704d620172d8040955f9a19"
     },
     {
       "file": "web-providers.png",
-      "sha256": "866a494815fb73570119323a3b7caa62626dba3190dffe6d36b0e9ef528513ec"
+      "sha256": "8e53823eb9f86f8891bcfab1fb170852be081f79694daf2a1b52d085871165e3"
     }
   ]
 }
