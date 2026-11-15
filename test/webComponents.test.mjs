@@ -468,7 +468,7 @@ test("renders provider loading, empty, and error states", () => {
   assert.match(providerTableMarkup([], { error: "request failed" }), /data-providers-retry/);
 });
 
-test("renders one deduplicated overall daily usage line grouped by unit", () => {
+test("mixed daily and monthly usage is labeled Current and deduplicated by provider", () => {
   const today = "2026-08-17";
   const yesterday = "2026-08-16";
   const trend = (points, unit, kind = "bars") => ({ kind, days: kind === "line" ? 30 : 7, points, labels: kind === "line" ? [yesterday, today] : [today], unit });
@@ -484,7 +484,8 @@ test("renders one deduplicated overall daily usage line grouped by unit", () => 
   ];
 
   const html = providerDailyUsageMarkup(rows, "token");
-  assert.match(html, /Today/);
+  assert.match(html, /Current/);
+  assert.doesNotMatch(html, /Today/);
   assert.match(html, /1\.2M tokens/);
   assert.match(html, /125 AI credits/);
   assert.match(html, /5 credits/);
@@ -797,4 +798,38 @@ test("stopping system polling aborts in-flight work and blocks late updates", as
   assert.equal(await refresh, false);
   assert.equal(detailBody.innerHTML, "body");
   assert.equal(await monitor.refresh(), false);
+});
+
+function usageRow(row) {
+    return {
+        form: "api", level: "green", pacing: "", cardTiming: "", autoResetIn: "",
+        sustainableRate: 0, actualVsSustainable: null, projectedCapHitAt: null,
+        ...row,
+    };
+}
+test("a current percentage reading without daily history is not labeled Today", () => {
+    const row = usageRow({
+        provider: "github", label: "Copilot",
+        usageTrend: { kind: "bars", days: 7, points: [null, null, null, null, null, null, 60], unit: "%" },
+    });
+    const html = providerDailyUsageMarkup([row], "percentage");
+    assert.match(html, /Current.*Copilot 60%/);
+    assert.doesNotMatch(html, /Today/);
+});
+test("missing percentage history is unknown, not inferred from remaining quota", () => {
+    const row = {
+        ...usageRow({ provider: "openai", label: "OpenAI" }),
+        remaining: 40, limit: 100, unit: "%",
+    };
+    const html = providerDailyUsageMarkup([row], "percentage");
+    assert.match(html, /Current.*No usage data yet/);
+    assert.doesNotMatch(html, /Today|60%|40%/);
+});
+test("daily consumption bars retain Today and a measured zero is not missing", () => {
+    const html = providerDailyUsageMarkup([usageRow({
+            provider: "deepseek", label: "DeepSeek",
+            usageTrend: { kind: "bars", days: 7, points: [5, 0], unit: "CNY" },
+        })], "cash");
+    assert.match(html, /Today.*¥0\.00 CNY/);
+    assert.doesNotMatch(html, /Current|No usage data yet/);
 });

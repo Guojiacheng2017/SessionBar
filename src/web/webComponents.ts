@@ -529,6 +529,7 @@ interface DailyUsageEntry {
   unit: string;
   rank: number;
   label: string;
+  current: boolean;
 }
 
 function dailyUsageEntry(row: PlanRow, mode: ProviderUsageMode): DailyUsageEntry | undefined {
@@ -546,7 +547,9 @@ function dailyUsageEntry(row: PlanRow, mode: ProviderUsageMode): DailyUsageEntry
       : normalized === "CNY" || normalized === "USD" ? 2
         : normalized === "%" ? 3
           : 4;
-  return { value, unit: normalized, rank, label: providerMetricLabel(row) };
+  // Cycle totals and quota readings do not establish daily consumption.
+  // 周期累计和额度读数不能视为单日消耗。
+  return { value, unit: normalized, rank, label: providerMetricLabel(row), current: trend.kind === "line" || normalized === "%" };
 }
 
 function providerMetricLabel(row: PlanRow): string {
@@ -594,7 +597,8 @@ export function providerDailyUsageMarkup(rows: readonly PlanRow[], mode: Provide
   const content = values.length > 0
     ? values.join(`<span class="daily-usage-plus" aria-hidden="true">+</span>`)
     : `<span class="daily-usage-empty">No usage data yet</span>`;
-  return `<span class="daily-usage-label">${mode === "percentage" ? "Current" : "Today"}</span>${content}`;
+  const label = mode === "percentage" || selected.some(entry => entry.current) ? "Current" : "Today";
+  return `<span class="daily-usage-label">${label}</span>${content}`;
 }
 
 export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTableState = {}): string {
