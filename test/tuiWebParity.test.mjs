@@ -72,6 +72,8 @@ test("monitor exposes Agent scopes, empty unsupported content and independent pr
   assert.equal(monitor.nextViewFromMonitorKey("sessions", { name: "A", raw: "A" }), "agents");
   assert.equal(monitor.nextViewFromMonitorKey("agents", { name: "A", raw: "A" }), "sessions");
   const providerModel = monitor.monitorVisibleModel({ ...state, view: "providers", providers: [{ provider: "openai", label: "OpenAI", form: "api", unit: "USD", remaining: 7, level: "green" }], providerUsageMode: "cash" }, { width: 140, height: 36 });
-  assert.match(providerModel.detailsContent, /Remaining\s+7 USD/);
+  const providerText = typeof providerModel.detailsContent === "string"
+    ? providerModel.detailsContent : providerModel.detailsContent.chunks.map(chunk => chunk.text).join("");
+  assert.match(providerText, /Remaining\s+7\.00 USD/);
   assert.match(providerModel.detailsTitle, /Cash/);
 });

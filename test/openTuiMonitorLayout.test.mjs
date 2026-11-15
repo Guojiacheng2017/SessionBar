@@ -691,84 +691,113 @@ function apiRow(overrides = {}) {
 }
 
 test("provider summary line renders subscription rows with level/pacing/card/reset", () => {
-  const line = providerSummaryLine(subscriptionRow({ measuredRate: 0.66, unit: "%" }));
-  assert.match(line, /Subscription/);
-  assert.match(line, /level green/);
-  assert.match(line, /pacing ok/);
-  assert.match(line, /rate 0\.7%\/h avg/);
-  assert.match(line, /card reset 3d/);
-  assert.match(line, /reset 5h/);
+    const line = providerSummaryLine(subscriptionRow({ measuredRate: 0.66, unit: "%" }));
+    assert.match(line, /Subscription/);
+    assert.match(line, /level green/);
+    assert.match(line, /pacing ok/);
+    assert.match(line, /rate 0\.7%\/h avg/);
+    assert.match(line, /card reset 3d/);
+    assert.match(line, /reset 5h/);
 });
 
 test("provider summary line renders api rows with remaining/used/limit/unit", () => {
-  const line = providerSummaryLine(apiRow());
-  assert.match(line, /API/);
-  assert.match(line, /remaining 1.2M/);
-  assert.match(line, /used 800K/);
-  assert.match(line, /limit 2M/);
-  assert.match(line, /tokens/);
+    const line = providerSummaryLine(apiRow());
+    assert.match(line, /API/);
+    assert.match(line, /remaining 1.2M/);
+    assert.match(line, /used 800K/);
+    assert.match(line, /limit 2M/);
+    assert.match(line, /tokens/);
 });
 
 test("provider summary and table show usage for a subscription with a live limit", () => {
-  const row = subscriptionRow({
-    provider: "github",
-    label: "GitHub Copilot Pro+",
-    used: 2325,
-    remaining: 4674.5,
-    limit: 7000,
-    unit: "AI credits",
-  });
-  const line = providerSummaryLine(row);
-  assert.match(line, /used 2.3K\/7K AI credits/);
-  const content = providerTableContent([row], { width: 120, height: 40 });
-  assert.equal(content[1][1][0].text, "2.3K\/7K AI credits used");
+    const row = subscriptionRow({
+        provider: "github",
+        label: "GitHub Copilot Pro+",
+        used: 2325,
+        remaining: 4674.5,
+        limit: 7000,
+        unit: "AI credits",
+    });
+    const line = providerSummaryLine(row);
+    assert.match(line, /used 2.3K\/7K AI credits/);
+    const content = providerTableContent([row], monitorRenderer(120, 40));
+    assert.equal(tableCellText(content, 1, 1).split("\n")[0], "2.3K\/7K AI credits used");
 });
 
 test("provider table shows No quota data when there are no rows", () => {
-  const renderer = { width: 120, height: 40 };
-  const content = providerTableContent([], renderer);
-  assert.equal(content.length, 1);
-  assert.equal(content[0][0][0].text, "No quota data");
+    const renderer = monitorRenderer(120, 40);
+    const content = providerTableContent([], renderer);
+    assert.equal(content.length, 1);
+    assert.equal(tableCellText(content, 0, 0), "No quota data");
 });
 
 test("provider table shows the fetch error instead of No quota data when providersError is set", () => {
-  const renderer = { width: 120, height: 40 };
-  const content = providerTableContent([], renderer, "HTTP 500");
-  assert.equal(content.length, 1);
-  assert.equal(content[0][0][0].text, "HTTP 500");
+    const renderer = monitorRenderer(120, 40);
+    const content = providerTableContent([], renderer, "HTTP 500");
+    assert.equal(content.length, 1);
+    assert.equal(tableCellText(content, 0, 0), "HTTP 500");
 });
 
 test("provider table renders a header plus one row per PlanRow with columns", () => {
-  const renderer = { width: 120, height: 40 };
-  const rows = [subscriptionRow(), apiRow()];
-  const content = providerTableContent(rows, renderer);
-  assert.equal(content.length, 3); // header + 2 rows
-  assert.equal(content[0][0][0].text, "Provider");
-  assert.equal(content[0][1][0].text, "Left");
-  assert.equal(content[0][2][0].text, "Level");
-  assert.equal(content[0][3][0].text, "Reset");
-  assert.equal(content[0][4][0].text, "Card");
-  assert.match(content[1][0][0].text, /Anthropic Subscription/);
-  assert.equal(content[1][1][0].text, "—"); // subscription row has no numeric remaining
-  assert.equal(content[2][0][0].text, "OpenAI");
-  assert.equal(content[2][1][0].text, "1.2M tokens left");
+    const renderer = monitorRenderer(120, 40);
+    const rows = [subscriptionRow(), apiRow()];
+    const content = providerTableContent(rows, renderer);
+    assert.equal(content.length, 3); // header + 2 rows
+    assert.equal(tableCellText(content, 0, 0), "Provider");
+    assert.equal(tableCellText(content, 0, 1), "Quota / Usage");
+    assert.equal(tableCellText(content, 0, 2), "Level");
+    assert.equal(tableCellText(content, 0, 3), "Usage");
+    assert.equal(tableCellText(content, 0, 4), "Reset");
+    assert.equal(tableCellText(content, 0, 5), "Card");
+    assert.match(tableCellText(content, 1, 0), /Anthropic Subscription/);
+    assert.equal(tableCellText(content, 1, 1).trim(), "—"); // subscription row has no numeric remaining
+    assert.equal(tableCellText(content, 2, 0).split("\n")[0], "OpenAI");
+    assert.equal(tableCellText(content, 2, 1).split("\n")[0], "1200000 tokens left");
 });
 
 test("provider displays keep currency in values instead of names", () => {
-  const row = apiRow({ provider: "deepseek", label: "DeepSeek API CNY", unit: "CNY", remaining: 231.63 });
-  assert.match(providerSummaryLine(row), /^DeepSeek API API \|/);
-  const content = providerTableContent([row], { width: 120, height: 40 });
-  assert.equal(content[1][0][0].text, "DeepSeek API");
-  assert.equal(content[1][1][0].text, "231.6 CNY left");
+    const row = apiRow({ provider: "deepseek", label: "DeepSeek API CNY", unit: "CNY", remaining: 231.63 });
+    assert.match(providerSummaryLine(row), /^DeepSeek API API \|/);
+    const content = providerTableContent([row], monitorRenderer(120, 40));
+    assert.equal(tableCellText(content, 1, 0).split("\n")[0], "DeepSeek API");
+    assert.equal(tableCellText(content, 1, 1).split("\n")[0], "231.63 CNY left");
 });
 
-test("provider table uses compact 3-column layout on narrow terminals", () => {
-  const renderer = { width: 80, height: 40 };
-  const content = providerTableContent([subscriptionRow()], renderer);
-  assert.equal(content.length, 2); // header + 1 row
-  assert.equal(content[0].length, 3);
-  assert.equal(content[0][0][0].text, "Provider");
-  assert.equal(content[0][1][0].text, "Left");
-  assert.equal(content[0][2][0].text, "Reset");
-  assert.equal(content[1].length, 3);
+test("provider table retains quota, level and history before secondary fields on narrow terminals", () => {
+    const renderer = monitorRenderer(80, 40);
+    const content = providerTableContent([subscriptionRow()], renderer);
+    assert.equal(content.length, 2); // header + 1 row
+    assert.equal(content[0].length, 4);
+    assert.equal(tableCellText(content, 0, 0), "Provider");
+    assert.equal(tableCellText(content, 0, 1), "Quota / Usage");
+    assert.equal(tableCellText(content, 0, 2), "Level");
+    assert.equal(tableCellText(content, 0, 3), "Usage");
+    assert.equal(content[1].length, 4);
+});
+
+function monitorRenderer(width, height) {
+    const dimensions = { width, height };
+    // Pure layout tests only read dimensions. / 纯布局测试仅使用尺寸，不创建原生终端。
+    return dimensions;
+}
+
+function tableCellText(content, row, column) {
+    const cells = content[row];
+    assert.ok(cells);
+    const chunks = cells[column];
+    assert.ok(chunks);
+    const first = chunks[0];
+    assert.ok(first);
+    return first.text;
+}
+
+test("provider entries reserve three terminal lines with a blank separator", () => {
+    for (const width of [40, 80, 120]) {
+        const content = providerTableContent([subscriptionRow(), apiRow()], monitorRenderer(width, 40));
+        for (let row = 1; row < content.length; row++) {
+            const lines = content[row].map(cell => (cell ?? []).map(chunk => chunk.text).join("").split("\n"));
+            assert.equal(Math.max(...lines.map(cell => cell.length)), 3, `three lines at ${width} columns`);
+            assert.ok(lines.every(cell => !(cell[2] ?? "").trim()), "third line stays blank across all columns");
+        }
+    }
 });

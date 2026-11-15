@@ -61,3 +61,14 @@ export function providerUsageTrendForMode(
     ?? row.usageTrends?.[mode === "token" ? "cash" : "token"]
     ?? row.usageTrends?.percentage;
 }
+
+/** Daily charts show the latest week; cumulative charts retain the whole cycle. */
+export function providerUsageDisplayTrend(row: PlanRow, mode: ProviderUsageMode): ProviderUsageTrend | undefined {
+  const trend = providerUsageTrendForMode(row, mode);
+  return trend?.kind === "bars" ? {
+    ...trend,
+    days: 7,
+    points: trend.points.slice(-7),
+    labels: trend.labels?.slice(-7),
+  } : trend;
+}

@@ -10,11 +10,13 @@ import {
   parseColor,
   type CliRenderer,
   type KeyEvent,
+  type MouseEvent,
   type TextChunk,
   type TextTableContent,
 } from "@opentui/core";
 import type { PlanRow, ProviderUsageMode } from "../providers/planTypes.js";
-import { providerDisplayLabel } from "../providers/providerUsageMetrics.js";
+import { providerDisplayLabel, providerUsageDisplayTrend } from "../providers/providerUsageMetrics.js";
+import { providerCardText, providerLeftText, providerLevelLabel, providerPresentationTone, providerResetText } from "../providers/providerPresentation.js";
 import type { SessionPayload, SystemEfficiencySnapshot } from "../shared/types.js";
 import {
   buildSessionDetailChunks,
@@ -43,10 +45,39 @@ import { TERMINAL_COLORS } from "./terminalTheme.js";
 import { AgentClient, type AgentSelection } from "../web/agentClient.js";
 import type { Snapshot } from "../shared/agentContract.js";
 import { AGENT_DETAIL_TABS, agentDetailText, agentList, type AgentDetailTab } from "./agentInspector.js";
-import { PROVIDER_USAGE_MODES, providerDetailText } from "./providerInspector.js";
+import { PROVIDER_USAGE_MODES, buildProviderDetailChunks, providerQuotaColor, providerTableColumns, providerUsageMeterChunks, providerUsageSparkline, providerWorkspaceLayout } from "./providerInspector.js";
 import { terminalText } from "./terminalText.js";
 
 export type MonitorView = "sessions" | "providers" | "agents";
+type MonitorList = "projects" | "sessions" | "providers" | "agents";
+export type MonitorAction =
+  | { type: "view"; view: MonitorView }
+  | { type: "back" }
+  | { type: "project"; key: string }
+  | { type: "session"; id: string }
+  | { type: "provider"; key: string }
+  | { type: "mode"; mode: ProviderUsageMode }
+  | { type: "agent"; id: string }
+  | { type: "step"; list: MonitorList; delta: number; pageSize?: number };
+
+interface InteractiveTable {
+  content: TextTableContent;
+  actions: Array<MonitorAction | null>;
+}
+
+interface MonitorButton {
+  box: BoxRenderable;
+  label: TextRenderable;
+  active: boolean;
+  hovered: boolean;
+}
+
+interface MonitorTableHover {
+  content: TextTableContent;
+  column: number;
+  row?: number;
+  actionKey?: string;
+}
 
 type Session = SessionPayload;
 export interface SessionFetchResult {
@@ -96,6 +127,7 @@ interface MonitorState {
   projectCursorKey: string | null;
   projectFocusKey: string | null;
   selectedIdx: number;
+  sessionScrollOffset?: number;
   selectedId: string | null;
   detailId: string | null;
   detailTab: DetailTab;
@@ -138,11 +170,18 @@ interface MonitorRefs {
   title: TextRenderable;
   online: TextRenderable;
   activity: TextRenderable;
+  viewButtons: Map<MonitorView, MonitorButton>;
+  viewNavigation: BoxRenderable;
+  backButton: MonitorButton;
+  providerModes: BoxRenderable;
+  providerModeButtons: Map<ProviderUsageMode, MonitorButton>;
+  model?: MonitorVisibleModel;
   projectsBox: BoxRenderable;
   projectsTable: TextTableRenderable;
   sessionsBox: BoxRenderable;
   sessionsTable: TextTableRenderable;
   providersTable: TextTableRenderable;
+  tableHovers: Map<TextTableRenderable, MonitorTableHover>;
   detailsBox: BoxRenderable;
   detailsScroll: ScrollBoxRenderable;
   detailsText: TextRenderable;
@@ -181,12 +220,17 @@ export interface MonitorVisibleModel {
   projectsVisible: boolean;
   projectsTitle: string;
   projectsContent: TextTableContent;
+  projectActions?: Array<MonitorAction | null>;
   sessionsWidth: number;
   sessionsTitle: string;
   sessionsVisible: boolean;
   sessionsContent: TextTableContent;
+  sessionActions?: Array<MonitorAction | null>;
   providersVisible: boolean;
   providersContent: TextTableContent;
+  providerActions?: Array<MonitorAction | null>;
+  providersHeight?: number;
+  providerUsageMode?: ProviderUsageMode;
   detailsVisible: boolean;
   detailsWidth: number;
   detailsTitle: string;
@@ -209,6 +253,7 @@ const PALETTE = {
   yellow: TERMINAL_COLORS.blocked,
   red: TERMINAL_COLORS.error,
   cyan: TERMINAL_COLORS.cyan,
+  selectionFg: "#111319",
 } as const;
 
 const COLOR_CACHE = new Map<string, ReturnType<typeof parseColor>>();
@@ -480,6 +525,57 @@ function clearProjectFocus(state: Readonly<MonitorState>): MonitorState {
   });
 }
 
+function providerSelectionKey(row: PlanRow): string {
+  return JSON.stringify([row.provider, row.form, row.label, row.unit]);
+}
+
+export function applyMonitorAction(state: Readonly<MonitorState>, action: MonitorAction): MonitorState {
+  if (action.type === "view") return clampState({ ...state, view: action.view, filterText: "", filterActive: false });
+  if (action.type === "back") return state.view === "sessions" ? clearProjectFocus(state) : { ...state };
+  if (action.type === "mode") return state.view === "providers" ? { ...state, providerUsageMode: action.mode, filterActive: false } : { ...state };
+  if (action.type === "provider" && state.view === "providers") {
+    const index = providerRowsForState(state).findIndex(row => providerSelectionKey(row) === action.key);
+    return index < 0 ? { ...state } : { ...state, providerIndex: index, filterActive: false };
+  }
+  if (action.type === "project" && state.view === "sessions") {
+    const groups = groupByProject(applyFilter(state.sessions, state.filterText));
+    return groups.has(action.key) ? focusProject({ ...state, projectCursorKey: action.key, filterActive: false }) : { ...state };
+  }
+  if (action.type === "session" && state.view === "sessions") {
+    const groups = groupByProject(applyFilter(state.sessions, state.filterText));
+    for (const [key, sessions] of groups) {
+      const index = sessions.findIndex(session => session.session_id === action.id);
+      if (index >= 0) return clampState({ ...state, projectCursorKey: key, projectFocusKey: key,
+        selectedIdx: index, selectedId: action.id, detailId: action.id, filterActive: false });
+    }
+  }
+  if (action.type === "agent" && state.view === "agents" && agentsForState(state).some(agent => agent.agent_id === action.id)) {
+    return { ...state, agentCursorId: action.id, filterActive: false };
+  }
+  if (action.type === "step") {
+    if (action.list === "projects" && state.view === "sessions") return moveProject(state, action.delta);
+    if (action.list === "sessions" && state.view === "sessions") {
+      if (state.projectFocusKey) return moveSession(state, action.delta);
+      const count = applyFilter(state.sessions, state.filterText).length;
+      const maximum = Math.max(0, count - Math.max(1, action.pageSize ?? 1));
+      const current = Math.max(0, Math.min(maximum, state.sessionScrollOffset ?? 0));
+      return { ...state, sessionScrollOffset: Math.max(0, Math.min(maximum, current + action.delta)) };
+    }
+    if (action.list === "providers" && state.view === "providers") {
+      const count = providerRowsForState(state).length;
+      const current = Math.max(0, Math.min(Math.max(0, count - 1), state.providerIndex ?? 0));
+      return { ...state, providerIndex: Math.max(0, Math.min(Math.max(0, count - 1), current + action.delta)) };
+    }
+    if (action.list === "agents" && state.view === "agents") {
+      const rows = agentsForState(state);
+      const current = Math.max(0, rows.findIndex(agent => agent.agent_id === state.agentCursorId));
+      const selected = rows[Math.max(0, Math.min(rows.length - 1, current + action.delta))];
+      if (selected) return { ...state, agentCursorId: selected.agent_id };
+    }
+  }
+  return { ...state };
+}
+
 function contextPercent(s: Session): number | undefined {
   const raw = firstFiniteNumber(s.context_percent, (s as any).context_pct, (s as any).context);
   if (raw === undefined) return undefined;
@@ -505,12 +601,17 @@ export function monitorBodyLayout(rendererWidth: number): MonitorBodyLayout {
     sidebarPanelWidth,
     detailPanelWidth,
     sidebarLineWidth: Math.max(1, sidebarPanelWidth - 4),
-    detailContentWidth: Math.max(1, detailPanelWidth - 4),
+    detailContentWidth: detailTextWidth(detailPanelWidth),
   };
 }
 
 function compactHeight(rendererHeight: number): boolean {
   return Number.isFinite(rendererHeight) && rendererHeight <= 30;
+}
+
+function detailTextWidth(panelWidth: number): number {
+  // Keep a scrollbar column reserved so appearing scrollbars cannot change wrapping.
+  return Math.max(1, panelWidth - 5);
 }
 
 export function monitorWorkspaceLayout(rendererWidth: number, rendererHeight = 40, drilldown = false): MonitorWorkspaceLayout {
@@ -534,7 +635,7 @@ export function monitorWorkspaceLayout(rendererWidth: number, rendererHeight = 4
         projectWidth: "100%",
         projectHeight: drilldown ? "100%" : 7,
         sessionsWidth: "100%",
-        sessionsHeight: drilldown ? 7 : "auto",
+        sessionsHeight: drilldown ? rendererHeight <= 24 ? 5 : 7 : "auto",
         detailsWidth: "100%",
         detailsHeight: "auto",
       };
@@ -619,13 +720,28 @@ function visibleProjectWindow(rows: readonly ProjectRow[], state: Readonly<Monit
   const workspace = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey));
   const paneHeight = typeof workspace.projectHeight === "number" ? workspace.projectHeight : Math.max(1, renderer.height - 8);
   // Reserve borders, vertical padding and the table header before windowing.
+  // 先扣除边框、垂直内边距和表头，再计算可见行数。
   const capacity = Math.max(1, paneHeight - 5);
   const slots = Math.max(1, Math.min(6, capacity - (rows.length > capacity ? 1 : 0)));
   const selectedIndex = state.projectCursorKey ? rows.findIndex(row => row.key === state.projectCursorKey) : 0;
   return visibleWindow(rows, selectedIndex, slots);
 }
 
-function projectTableContent(rows: readonly ProjectRow[], state: Readonly<MonitorState>, renderer: CliRenderer): TextTableContent {
+function visibleSessionWindow<T>(rows: readonly T[], state: Readonly<MonitorState>, renderer: CliRenderer): readonly T[] {
+  const selectedIndex = state.projectFocusKey ? Math.max(0, state.selectedIdx) : 0;
+  const workspace = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey));
+  const bodyHeight = Math.max(1, renderer.height - 8);
+  const paneHeight = typeof workspace.sessionsHeight === "number" ? workspace.sessionsHeight
+    : workspace.direction === "row" ? bodyHeight
+      : bodyHeight - (typeof workspace.projectHeight === "number" ? workspace.projectHeight : 0) - 1;
+  const verticalChrome = renderer.width < 70 && compactHeight(renderer.height) ? 2 : 4;
+  const capacity = Math.max(1, paneHeight - verticalChrome);
+  const slots = Math.max(1, capacity - (rows.length > capacity ? 1 : 0));
+  const offset = Math.max(0, Math.min(state.sessionScrollOffset ?? 0, rows.length - slots));
+  return state.projectFocusKey ? visibleWindow(rows, selectedIndex, slots) : rows.slice(offset, offset + slots);
+}
+
+function projectTableModel(rows: readonly ProjectRow[], state: Readonly<MonitorState>, renderer: CliRenderer): InteractiveTable {
   const sidebar = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey)).direction === "row";
   const compact = renderer.width < 100;
   const content: TextTableContent = sidebar
@@ -633,10 +749,12 @@ function projectTableContent(rows: readonly ProjectRow[], state: Readonly<Monito
     : compact
     ? [[header(""), header("Project"), header("Sessions"), header("Agents"), header("Status")]]
     : [[header(""), header("Project"), header("Sessions"), header("Agents"), header("Status"), header("Path"), header("Age")]];
-  if (rows.length === 0) return [[cell("No projects reporting yet", PALETTE.muted)]];
+  const actions: Array<MonitorAction | null> = [null];
+  if (rows.length === 0) return { content: [[cell("No projects reporting yet", PALETTE.muted)]], actions };
 
   const visible = visibleProjectWindow(rows, state, renderer);
   for (const row of visible) {
+    actions.push({ type: "project", key: row.key });
     const selected = row.key === state.projectCursorKey;
     const strong = selected ? TextAttributes.BOLD : TextAttributes.NONE;
     const base = [
@@ -654,20 +772,21 @@ function projectTableContent(rows: readonly ProjectRow[], state: Readonly<Monito
   }
   if (visible.length < rows.length) {
     content.push([cell(`... ${rows.length - visible.length} more project${rows.length - visible.length === 1 ? "" : "s"}`, PALETTE.muted)]);
+    actions.push(null);
   }
-  return content;
+  return { content, actions };
 }
 
-function sessionTableContent(rows: readonly SessionRow[], state: Readonly<MonitorState>, renderer: CliRenderer, now = Date.now()): TextTableContent {
+function sessionTableModel(rows: readonly SessionRow[], state: Readonly<MonitorState>, renderer: CliRenderer, now = Date.now()): InteractiveTable {
   const content: TextTableContent = [];
-  if (rows.length === 0) return [[cell(state.filterText ? "No sessions match the current filter" : "No sessions reporting yet", PALETTE.muted)]];
+  const actions: Array<MonitorAction | null> = [];
+  if (rows.length === 0) return { content: [[cell(state.filterText ? "No sessions match the current filter" : "No sessions reporting yet", PALETTE.muted)]], actions: [null] };
 
-  const selectedIndex = state.projectFocusKey ? Math.max(0, state.selectedIdx) : 0;
-  const slots = Math.max(4, renderer.height - 17);
-  const visible = visibleWindow(rows, selectedIndex, slots);
   const workspace = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey));
+  const visible = visibleSessionWindow(rows, state, renderer);
   const lineWidth = Math.max(1, (typeof workspace.sessionsWidth === "number" ? workspace.sessionsWidth : renderer.width - 2) - 4);
   for (const row of visible) {
+    actions.push({ type: "session", id: row.key });
     const selected = state.projectFocusKey && row.key === state.selectedId;
     const attrs = selected || row.unread ? TextAttributes.BOLD : TextAttributes.NONE;
     const fg = row.unread && !selected ? PALETTE.yellow : selected ? PALETTE.fg : statusColor(row.statusKind);
@@ -680,8 +799,9 @@ function sessionTableContent(rows: readonly SessionRow[], state: Readonly<Monito
   }
   if (visible.length < rows.length) {
     content.push([cell(`... ${rows.length - visible.length} more session${rows.length - visible.length === 1 ? "" : "s"}`, PALETTE.muted)]);
+    actions.push(null);
   }
-  return content;
+  return { content, actions };
 }
 
 export function providerSummaryLine(row: PlanRow): string {
@@ -717,54 +837,43 @@ function providerFormLabel(row: PlanRow): string {
   return row.form === "api" ? "API" : "Subscription";
 }
 
-function providerLeftText(row: PlanRow): string {
-  if (row.form === "api") {
-    const unit = row.unit ? ` ${row.unit}` : "";
-    if (row.remaining !== undefined) return `${compactNumber(row.remaining)}${unit} left`;
-    if (row.used !== undefined && row.limit !== undefined) return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit} used`;
-    if (row.used !== undefined) return `${compactNumber(row.used)} used`;
-    if (row.limit !== undefined) return `${compactNumber(row.limit)} limit`;
-    return "—";
-  }
-  const unit = row.unit ? ` ${row.unit}` : "";
-  if (row.used !== undefined && row.limit !== undefined) {
-    return `${compactNumber(row.used)}/${compactNumber(row.limit)}${unit} used`;
-  }
-  return row.remaining !== undefined ? `${compactNumber(row.remaining)}${unit || "%"} left` : "—";
+export function providerTableContent(rows: readonly PlanRow[], renderer: CliRenderer, error?: string, selectedIndex?: number, mode: ProviderUsageMode = "token"): TextTableContent {
+  return providerTableModel(rows, renderer, error, selectedIndex, mode).content;
 }
 
-function levelColor(level: string): string {
-  if (level === "red") return PALETTE.red;
-  if (level === "yellow") return PALETTE.yellow;
-  return PALETTE.green;
-}
-
-export function providerTableContent(rows: readonly PlanRow[], renderer: CliRenderer, error?: string, selectedIndex?: number): TextTableContent {
-  if (error) return [[cell(error, PALETTE.red)]];
-  if (rows.length === 0) return [[cell("No quota data", PALETTE.muted)]];
-  const compact = renderer.width < 100;
-  const terse = selectedIndex !== undefined && renderer.width < 54;
-  const usageHeader = selectedIndex === undefined ? "Left" : "Usage";
-  const content: TextTableContent = terse ? [[header("Provider"), header(usageHeader)]] : compact
-    ? [[header("Provider"), header(usageHeader), header("Reset")]]
-    : [[header("Provider"), header(usageHeader), header("Level"), header("Reset"), header("Card")]];
-  const visible = selectedIndex === undefined ? rows : visibleWindow(rows, selectedIndex, Math.max(2, renderer.height - 12));
+function providerTableModel(rows: readonly PlanRow[], renderer: CliRenderer, error?: string, selectedIndex?: number, mode: ProviderUsageMode = "token"): InteractiveTable {
+  if (error) return { content: [[cell(error, PALETTE.red)]], actions: [null] };
+  if (rows.length === 0) return { content: [[cell("No quota data", PALETTE.muted)]], actions: [null] };
+  const columns = providerTableColumns(Math.max(1, renderer.width - 4));
+  const content: TextTableContent = [columns.map(column => header(truncatePlain(column.label, column.width)))];
+  const actions: Array<MonitorAction | null> = [null];
+  const visible = selectedIndex === undefined ? rows : visibleWindow(rows, selectedIndex, Math.max(1, renderer.height - 12));
   for (const row of visible) {
-    const rowFg = row.form === "api" ? PALETTE.cyan : levelColor(row.level);
-    const providerCell = cell(`${selectedIndex !== undefined ? (rows.indexOf(row) === selectedIndex ? "> " : "  ") : ""}${providerDisplayLabel(row)}`, PALETTE.fg);
-    const leftCell = cell(providerLeftText(row), rowFg);
-    const resetCell = cell(row.autoResetIn || "", PALETTE.muted);
-    content.push(terse ? [providerCell, leftCell] : compact
-      ? [providerCell, leftCell, resetCell]
-      : [
-          providerCell,
-          leftCell,
-          cell(row.form === "api" ? "" : row.level, row.form === "api" ? PALETTE.muted : rowFg),
-          resetCell,
-          cell(row.form === "api" ? "" : row.cardTiming || "", PALETTE.muted),
-        ]);
+    actions.push({ type: "provider", key: providerSelectionKey(row) });
+    const selected = selectedIndex !== undefined && rows.indexOf(row) === selectedIndex;
+    const tone = providerPresentationTone(row);
+    const rowFg = providerQuotaColor(row);
+    const trend = providerUsageDisplayTrend(row, mode);
+    content.push(columns.map(column => {
+      const fit = (value: string) => truncatePlain(terminalText(value).replace(/\s+/g, " "), column.width);
+      if (column.key === "provider") return [
+        chunk(`${fit(`${selectedIndex === undefined ? "" : selected ? "> " : "  "}${providerDisplayLabel(row)}`)}\n`, PALETTE.fg, selected ? TextAttributes.BOLD : TextAttributes.NONE),
+        chunk(`${fit(`  ${providerFormLabel(row)}`)}\n`, PALETTE.muted),
+      ];
+      if (column.key === "quota") {
+        const quota = column.width < 24 ? providerLeftText(row).replace(/ AI credits\b/i, " credits") : providerLeftText(row);
+        return [chunk(`${fit(quota)}\n`, rowFg), ...providerUsageMeterChunks(row, column.width)];
+      }
+      if (column.key === "level") return cell(providerLevelLabel(row).split(" \u00b7 ").map(fit).slice(0, 2).join("\n"), rowFg);
+      if (column.key === "usage") {
+        const unit = trend?.unit?.replace(/^AI credits$/i, "credits") || (trend ? (trend.kind === "line" ? "30d" : "7d") : "");
+        return cell(`${fit(providerUsageSparkline(row, mode))}\n${fit(unit)}`, tone === "neutral" || row.collectionError ? PALETTE.muted : PALETTE.cyan);
+      }
+      if (column.key === "reset") return cell(fit(providerResetText(row.autoResetIn || "\u2014")), PALETTE.muted);
+      return cell(fit(providerCardText(row.cardTiming || "\u2014")), PALETTE.muted);
+    }));
   }
-  return content;
+  return { content, actions };
 }
 
 
@@ -1146,9 +1255,9 @@ export function fitPanelTitle(title: string, panelWidth: number): string {
 function shortcutFooter(width: number, scope: "projects" | "sessions" | "details" | "providers" | "agents"): string {
   const variants: Record<typeof scope, string[]> = {
     providers: [
-      "↑↓ provider · 1 % 2 tokens 3 cash · Tab mode · A agents · v sessions · r refresh · q quit",
-      "↑↓ · Tab mode · A agents · v sessions · r refresh · q quit",
-      "↑↓ · Tab mode · v back · q quit",
+      "↑↓ provider · 1 tokens 2 cash 3 % · Tab mode · PgUp/Dn details · r refresh · w web · v back · q quit",
+      "↑↓ · Tab mode · PgUp/Dn details · r refresh · v back · q quit",
+      "↑↓ · Tab · PgUp/Dn · v back · q",
     ],
     agents: [
       "↑↓ agent · 1-3/Tab scope · PgUp/Dn scroll · n more · r refresh · Esc sessions · q quit",
@@ -1179,7 +1288,85 @@ function shortcutFooter(width: number, scope: "projects" | "sessions" | "details
     ?? truncatePlain(variants[scope].at(-1)!, budget);
 }
 
-function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): MonitorRefs {
+function plainMouseClick(event: MouseEvent): boolean {
+  return event.button === 0 && !event.modifiers.shift && !event.modifiers.alt && !event.modifiers.ctrl;
+}
+
+function bindMonitorClick(
+  target: BoxRenderable | TextTableRenderable,
+  actionAt: (event: MouseEvent) => MonitorAction | undefined,
+  onAction?: (action: MonitorAction) => void,
+  onHover?: (event?: MouseEvent) => void,
+): void {
+  if (!onAction) return;
+  let pressed: { action: string; x: number; y: number } | undefined;
+  target.onMouseDown = event => {
+    const action = plainMouseClick(event) ? actionAt(event) : undefined;
+    pressed = action ? { action: JSON.stringify(action), x: event.x, y: event.y } : undefined;
+    if (pressed) event.preventDefault();
+  };
+  target.onMouseUp = event => {
+    const previous = pressed;
+    pressed = undefined;
+    // Text selection marks even a stationary table mouse-up as dragging.
+    if (!previous || event.x !== previous.x || event.y !== previous.y) return;
+    const action = plainMouseClick(event) ? actionAt(event) : undefined;
+    if (!action || previous.action !== JSON.stringify(action)) return;
+    event.stopPropagation();
+    onAction(action);
+  };
+  target.onMouseOver = event => onHover?.(event);
+  target.onMouseMove = event => onHover?.(event);
+  target.onMouseDrag = () => { pressed = undefined; onHover?.(); };
+  target.onMouseOut = event => {
+    pressed = undefined;
+    const inside = event.x >= target.screenX && event.x < target.screenX + target.width
+      && event.y >= target.screenY && event.y < target.screenY + target.height;
+    onHover?.(inside ? event : undefined);
+  };
+}
+
+function tableRowAt(table: TextTableRenderable, event: MouseEvent): number | undefined {
+  if (event.x < table.screenX || event.x >= table.screenX + table.width || event.y < table.screenY || event.y >= table.screenY + table.height) return;
+  let top = table.screenY;
+  for (let index = 0; index < table.content.length; index++) {
+    const lines = table.content[index]!.map(cell => (cell ?? []).map(chunk => chunk.text).join("").split("\n").length);
+    const height = Math.max(1, ...lines) + 2 * table.cellPaddingY;
+    if (event.y < top + height) return index;
+    top += height;
+  }
+}
+
+function tableActionAt(table: TextTableRenderable, actions: Array<MonitorAction | null>, event: MouseEvent): MonitorAction | undefined {
+  const row = tableRowAt(table, event);
+  return row === undefined ? undefined : actions[row] ?? undefined;
+}
+
+function paintMonitorButton(button: MonitorButton): void {
+  button.label.fg = color(button.active || button.hovered ? PALETTE.fg : PALETTE.muted);
+  button.label.attributes = (button.active ? TextAttributes.BOLD | TextAttributes.UNDERLINE : TextAttributes.NONE)
+    | (button.hovered ? TextAttributes.INVERSE | TextAttributes.BOLD : TextAttributes.NONE);
+}
+
+function paintMonitorTable(table: TextTableRenderable, hover: MonitorTableHover): void {
+  table.content = hover.row === undefined ? hover.content : hover.content.map((cells, index) => index !== hover.row ? cells
+    : cells.map((cell, column) => column !== hover.column ? cell : cell?.map((chunk, part) => part ? chunk : {
+      ...chunk, attributes: (chunk.attributes ?? TextAttributes.NONE) | TextAttributes.BOLD | TextAttributes.UNDERLINE,
+    })));
+}
+
+function setMonitorTableContent(refs: MonitorRefs, table: TextTableRenderable, content: TextTableContent, actions: Array<MonitorAction | null> = []): void {
+  const hover = refs.tableHovers.get(table)!;
+  hover.content = content;
+  const action = hover.row === undefined ? undefined : actions[hover.row];
+  if (!table.visible || !action || JSON.stringify(action) !== hover.actionKey) {
+    hover.row = undefined;
+    hover.actionKey = undefined;
+  }
+  paintMonitorTable(table, hover);
+}
+
+export function createMonitorView(renderer: CliRenderer, opts: Pick<OpenTuiMonitorOptions, "port" | "getPort">, onAction?: (action: MonitorAction) => void): MonitorRefs {
   renderer.setBackgroundColor(PALETTE.bg);
 
   const root = new BoxRenderable(renderer, {
@@ -1218,8 +1405,32 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     selectable: false,
   });
   headerBox.add(title);
+
+  const mouseButton = (parent: BoxRenderable, id: string, text: string, width: number, action: MonitorAction): MonitorButton => {
+    const box = new BoxRenderable(renderer, { id, height: 1, width, flexShrink: 0, alignItems: "center", justifyContent: "center", backgroundColor: PALETTE.bg });
+    const label = new TextRenderable(renderer, { content: ` ${text} `, height: 1, fg: PALETTE.muted, selectable: false });
+    box.add(label);
+    parent.add(box);
+    const button = { box, label, active: false, hovered: false };
+    bindMonitorClick(box, () => box.visible ? action : undefined, onAction, event => {
+      const hovered = Boolean(event) && box.visible;
+      if (button.hovered === hovered) return;
+      button.hovered = hovered;
+      paintMonitorButton(button);
+    });
+    return button;
+  };
+  const viewNavigation = new BoxRenderable(renderer, { id: "sessionbar-navigation", height: 1, width: 31, flexShrink: 0, flexDirection: "row", gap: 1 });
+  headerBox.add(viewNavigation);
+  const backButton = mouseButton(viewNavigation, "sessionbar-back", "\u2190", 3, { type: "back" });
+  backButton.box.visible = false;
+  const viewButtons = new Map<MonitorView, MonitorButton>();
+  for (const [view, label] of [["sessions", "Sessions"], ["providers", "Providers"], ["agents", "Agents"]] as const) {
+    viewButtons.set(view, mouseButton(viewNavigation, `sessionbar-view-${view}`, label, label.length + 2, { type: "view", view }));
+  }
   headerBox.add(online);
 
+  const activityRow = new BoxRenderable(renderer, { id: "sessionbar-activity-row", width: "100%", height: 1, flexDirection: "row", gap: 1 });
   const activity = new TextRenderable(renderer, {
     id: "sessionbar-activity",
     content: "",
@@ -1227,7 +1438,17 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     bg: PALETTE.bg,
     selectable: false,
     truncate: true,
+    height: 1,
+    flexGrow: 1,
+    flexShrink: 1,
   });
+  activityRow.add(activity);
+  const providerModes = new BoxRenderable(renderer, { id: "sessionbar-provider-modes", height: 1, width: 33, flexDirection: "row", gap: 1, flexShrink: 0, visible: false });
+  activityRow.add(providerModes);
+  const providerModeButtons = new Map<ProviderUsageMode, MonitorButton>();
+  for (const [mode, label] of [["token", "Token"], ["cash", "Cash"], ["percentage", "Percentage"]] as const) {
+    providerModeButtons.set(mode, mouseButton(providerModes, `sessionbar-mode-${mode}`, label, label.length + 4, { type: "mode", mode }));
+  }
 
   const projectsBox = new BoxRenderable(renderer, {
     id: "sessionbar-projects-box",
@@ -1255,12 +1476,15 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     showBorders: false,
     fg: PALETTE.fg,
     bg: PALETTE.panel,
+    selectionBg: PALETTE.accent,
+    selectionFg: PALETTE.selectionFg,
   });
   projectsBox.add(projectsTable);
 
   const body = new BoxRenderable(renderer, {
     id: "sessionbar-body",
     width: "100%",
+    flexBasis: 0,
     flexGrow: 1,
     flexShrink: 1,
     flexDirection: "row",
@@ -1296,6 +1520,8 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     showBorders: false,
     fg: PALETTE.fg,
     bg: PALETTE.panel,
+    selectionBg: PALETTE.accent,
+    selectionFg: PALETTE.selectionFg,
   });
   sessionsBox.add(sessionsTable);
 
@@ -1307,11 +1533,14 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     wrapMode: "none",
     columnWidthMode: "full",
     columnFitter: "proportional",
-    columnGap: 1,
+    columnGap: 2,
+    cellPadding: 0,
     border: false,
     showBorders: false,
     fg: PALETTE.fg,
     bg: PALETTE.panel,
+    selectionBg: PALETTE.accent,
+    selectionFg: PALETTE.selectionFg,
     visible: false,
   });
   sessionsBox.add(providersTable);
@@ -1338,6 +1567,8 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
     bg: PALETTE.panel,
     wrapMode: "word",
     selectable: true,
+    selectionBg: PALETTE.accent,
+    selectionFg: PALETTE.selectionFg,
   });
   const detailsScroll = new ScrollBoxRenderable(renderer, {
     id: "sessionbar-details-scroll",
@@ -1366,26 +1597,62 @@ function createRefs(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Monitor
   });
 
   root.add(headerBox);
-  root.add(activity);
+  root.add(activityRow);
   root.add(body);
   root.add(footer);
 
-  return {
+  const refs: MonitorRefs = {
     root,
     body,
     title,
     online,
     activity,
+    viewButtons,
+    viewNavigation,
+    backButton,
+    providerModes,
+    providerModeButtons,
     projectsBox,
     projectsTable,
     sessionsBox,
     sessionsTable,
     providersTable,
+    tableHovers: new Map(),
     detailsBox,
     detailsScroll,
     detailsText,
     footer,
   };
+  for (const table of [projectsTable, sessionsTable, providersTable]) {
+    refs.tableHovers.set(table, { content: [], column: table === projectsTable ? 1 : 0 });
+  }
+  const bindTable = (container: BoxRenderable, activeTable: () => TextTableRenderable, actions: () => Array<MonitorAction | null>, list: () => MonitorList) => {
+    bindMonitorClick(container, event => tableActionAt(activeTable(), actions(), event), onAction, event => {
+      const table = activeTable();
+      const hover = refs.tableHovers.get(table)!;
+      const candidate = event ? tableRowAt(table, event) : undefined;
+      const action = candidate === undefined ? undefined : actions()[candidate];
+      const row = action ? candidate : undefined;
+      const actionKey = action ? JSON.stringify(action) : undefined;
+      if (hover.row === row && hover.actionKey === actionKey) return;
+      hover.row = row;
+      hover.actionKey = actionKey;
+      paintMonitorTable(table, hover);
+    });
+    if (!onAction) return;
+    container.onMouseScroll = event => {
+      if (event.modifiers.shift || event.modifiers.alt || event.modifiers.ctrl || !actions().some(Boolean)) return;
+      if (event.scroll?.direction !== "up" && event.scroll?.direction !== "down") return;
+      event.stopPropagation();
+      onAction({ type: "step", list: list(), delta: event.scroll.direction === "up" ? -1 : 1, pageSize: actions().filter(Boolean).length });
+    };
+  };
+  bindTable(projectsBox, () => projectsTable, () => refs.model?.projectActions ?? [], () => "projects");
+  bindTable(sessionsBox,
+    () => refs.model?.view === "providers" ? providersTable : sessionsTable,
+    () => (refs.model?.view === "providers" ? refs.model.providerActions : refs.model?.sessionActions) ?? [],
+    () => refs.model?.view === "providers" ? "providers" : refs.model?.view === "agents" ? "agents" : "sessions");
+  return refs;
 }
 
 function providerRowsForState(state: Readonly<MonitorState>): PlanRow[] {
@@ -1433,9 +1700,10 @@ export function monitorVisibleModel(
       activity: state.agentSnapshot ? `${rows.length} observed sub-agents${coverage ? `  ${coverage}` : ""}` : "",
       projectsVisible: false, projectsTitle: "", projectsContent: [],
       sessionsWidth: listWidth, sessionsTitle: fitPanelTitle("Agents", listWidth), sessionsVisible: true, sessionsContent: content,
+      sessionActions: rows.length ? [null, ...visible.map(agent => ({ type: "agent" as const, id: agent.agent_id }))] : [],
       providersVisible: false, providersContent: [], detailsVisible: true, detailsWidth: detailWidth,
       detailsTitle: fitPanelTitle(`Agent / ${tab[0]!.toUpperCase() + tab.slice(1)}`, detailWidth),
-      detailsContent: agentDetailText(selected, tab, Math.max(1, detailWidth - 4)),
+      detailsContent: agentDetailText(selected, tab, detailTextWidth(detailWidth)),
       detailsScrollKey: `agent:${selected?.agent.agent_id ?? ""}:${tab}`,
       footer: state.filterActive ? `/${state.filterText}_  Esc clear  Enter accept` : shortcutFooter(renderer.width, "agents"),
       footerError: false, focusRegion: "agents",
@@ -1446,11 +1714,12 @@ export function monitorVisibleModel(
     const apiCount = providers.filter(row => row.form === "api").length;
     const subCount = providers.length - apiCount;
     const error = state.providersError;
-    const narrow = renderer.width < 90;
-    const listWidth = narrow ? layout.bodyWidth : layout.sidebarPanelWidth;
-    const detailWidth = narrow ? layout.bodyWidth : layout.detailPanelWidth;
+    const workspace = providerWorkspaceLayout(renderer.width, renderer.height, providers.length);
+    const listWidth = workspace.width;
+    const detailWidth = workspace.width;
     const selectedIndex = Math.max(0, Math.min(state.providerIndex ?? 0, providers.length - 1));
-    const usageMode = state.providerUsageMode ?? "percentage";
+    const usageMode = state.providerUsageMode ?? "token";
+    const table = providerTableModel(providers, { width: listWidth, height: workspace.visibleRows + 12 } as CliRenderer, error, selectedIndex, usageMode);
     return {
       view: state.view,
       width: renderer.width,
@@ -1472,11 +1741,14 @@ export function monitorVisibleModel(
       sessionsVisible: false,
       sessionsContent: [],
       providersVisible: true,
-      providersContent: providerTableContent(providers, { width: listWidth, height: narrow ? 15 : renderer.height } as CliRenderer, error, selectedIndex),
-      detailsVisible: true,
+      providersContent: table.content,
+      providerActions: table.actions,
+      providersHeight: workspace.tableHeight,
+      providerUsageMode: usageMode,
+      detailsVisible: providers.length > 0,
       detailsWidth: detailWidth,
-      detailsTitle: fitPanelTitle(`Usage / ${usageMode === "percentage" ? "%" : usageMode === "token" ? "Tokens" : "Cash"}`, detailWidth),
-      detailsContent: providerDetailText(providers[selectedIndex], usageMode, Math.max(1, detailWidth - 4)),
+      detailsTitle: fitPanelTitle(`Provider / ${usageMode === "percentage" ? "Percentage" : usageMode === "token" ? "Tokens" : "Cash"}`, detailWidth),
+      detailsContent: buildProviderDetailChunks(providers[selectedIndex], usageMode, detailTextWidth(detailWidth)),
       detailsScrollKey: `providers:${providers[selectedIndex]?.provider}:${selectedIndex}:${usageMode}`,
       footer: state.errorMsg ? `! ${state.errorMsg}` : state.filterActive ? `/${state.filterText}_  Esc clear  Enter accept` : shortcutFooter(renderer.width, "providers"),
       footerError: Boolean(state.errorMsg),
@@ -1489,15 +1761,18 @@ export function monitorVisibleModel(
   const projectData = projectRows(groups, state, now);
   const scopeSessions = selectedProjectSessions(state);
   const sessionData = sessionRows(state.projectFocusKey ? scopeSessions : shown, state);
+  const projects = projectTableModel(projectData, state, renderer);
+  const sessions = sessionTableModel(sessionData, state, renderer, now);
   const selected = selectedSession(state);
   const workspace = monitorWorkspaceLayout(renderer.width, renderer.height, Boolean(state.projectFocusKey));
   const shortWindow = compactHeight(renderer.height) && renderer.width < 120;
   const drilldown = shortWindow && Boolean(state.projectFocusKey);
+  const detailOnly = Boolean(state.detailId) && renderer.width < 70 && renderer.height <= 24;
   const panelWidth = (width: number | `${number}%`) => typeof width === "number" ? width : layout.bodyWidth;
   const detailPanelWidth = panelWidth(workspace.detailsWidth);
   const projectPanelWidth = panelWidth(workspace.projectWidth);
   const sessionPanelWidth = panelWidth(workspace.sessionsWidth);
-  const detailWidth = Math.max(1, detailPanelWidth - 4);
+  const detailWidth = detailTextWidth(detailPanelWidth);
   const details = selected
     ? detailTextForSession(selected, state.detailTab, detailWidth, now)
     : state.projectFocusKey
@@ -1537,11 +1812,13 @@ export function monitorVisibleModel(
     activity,
     projectsVisible: !drilldown,
     projectsTitle: fitPanelTitle(`${focusRegion === "projects" ? "› " : ""}Projects (${groups.size})`, projectPanelWidth),
-    projectsContent: projectTableContent(projectData, state, renderer),
+    projectsContent: projects.content,
+    projectActions: projects.actions,
     sessionsWidth: panelWidth(workspace.sessionsWidth),
     sessionsTitle: fitPanelTitle(`${focusRegion === "sessions" ? "› " : ""}${sessionTitle}`, sessionPanelWidth),
-    sessionsVisible: true,
-    sessionsContent: sessionTableContent(sessionData, state, renderer, now),
+    sessionsVisible: !detailOnly,
+    sessionsContent: detailOnly ? [] : sessions.content,
+    sessionActions: detailOnly ? [] : sessions.actions,
     providersVisible: false,
     providersContent: [],
     detailsVisible: !shortWindow || drilldown,
@@ -1561,18 +1838,56 @@ export function monitorVisibleModel(
   };
 }
 
-function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
-  const compactSecondary = model.view !== "sessions" && model.width < 90;
-  refs.sessionsBox.paddingY = compactSecondary ? 0 : 1;
-  refs.detailsBox.paddingY = compactSecondary ? 0 : 1;
-  refs.title.content = brandHeaderContent(model.title);
+export function renderMonitorView(refs: MonitorRefs, model: MonitorVisibleModel): void {
+  refs.model = model;
+  const compactSecondary = model.view === "providers" ? model.height <= 36 : model.view !== "sessions" && model.width < 90;
+  refs.sessionsBox.paddingY = compactSecondary || (model.view === "sessions" && model.width < 70 && compactHeight(model.height)) ? 0 : 1;
+  refs.detailsBox.paddingY = compactSecondary || (model.view === "sessions" && compactHeight(model.height)) ? 0 : 1;
+  refs.title.content = brandHeaderContent("SessionBar");
   refs.online.content = model.online;
+  refs.online.visible = model.width >= 60;
+  const canGoBack = model.view === "sessions" && model.focusRegion !== "projects";
+  refs.backButton.box.visible = canGoBack;
+  if (!canGoBack) refs.backButton.hovered = false;
+  paintMonitorButton(refs.backButton);
+  const viewLabels: Record<MonitorView, string> = model.width < 48
+    ? { sessions: "Sess", providers: "Prov", agents: "Agents" }
+    : { sessions: "Sessions", providers: "Providers", agents: "Agents" };
+  let navigationWidth = 2 + (canGoBack ? 4 : 0);
+  for (const [view, button] of refs.viewButtons) {
+    const label = viewLabels[view];
+    button.box.width = label.length + 2;
+    button.label.content = ` ${label} `;
+    navigationWidth += label.length + 2;
+    button.active = view === model.view;
+    paintMonitorButton(button);
+  }
+  refs.viewNavigation.width = navigationWidth;
   refs.activity.content = model.activity;
+  refs.activity.visible = true;
+  refs.providerModes.visible = model.view === "providers";
+  if (model.view === "providers") {
+    const prefix = model.width >= 100 ? model.activity : model.width >= 60 ? model.activity.split("  ")[0] : "";
+    const labels: Record<ProviderUsageMode, string> = { token: "Token", cash: "Cash", percentage: "Percentage" };
+    refs.activity.content = prefix;
+    refs.activity.visible = Boolean(prefix);
+    for (const [mode, button] of refs.providerModeButtons) {
+      const active = mode === model.providerUsageMode;
+      button.label.content = ` ${labels[mode]} `;
+      button.active = active;
+      paintMonitorButton(button);
+    }
+  } else {
+    for (const button of refs.providerModeButtons.values()) {
+      button.hovered = false;
+      paintMonitorButton(button);
+    }
+  }
   refs.projectsBox.visible = model.projectsVisible;
   refs.projectsBox.title = model.projectsTitle;
   refs.projectsBox.borderColor = model.focusRegion === "projects" ? color(PALETTE.accent) : color(PALETTE.border);
   refs.projectsBox.titleColor = model.focusRegion === "projects" ? color(PALETTE.accent) : color(PALETTE.fg);
-  refs.projectsTable.content = model.projectsContent;
+  setMonitorTableContent(refs, refs.projectsTable, model.projectsContent, model.projectActions);
   if (model.view === "sessions") {
     const drilldown = model.focusRegion === "sessions" || model.focusRegion === "details";
     const workspace = monitorWorkspaceLayout(model.width, model.height, drilldown);
@@ -1584,6 +1899,14 @@ function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
     refs.sessionsBox.flexGrow = compactHeight(model.height) && model.width < 120 && !drilldown ? 1 : 0;
     refs.detailsBox.width = workspace.detailsWidth;
     refs.detailsBox.height = workspace.detailsHeight;
+  } else if (model.view === "providers") {
+    refs.body.flexDirection = "column";
+    refs.sessionsBox.width = "100%";
+    refs.sessionsBox.height = model.providersHeight ?? 7;
+    refs.sessionsBox.flexGrow = 0;
+    refs.detailsBox.width = "100%";
+    refs.detailsBox.height = "auto";
+    refs.detailsBox.flexGrow = 1;
   } else {
     const narrow = model.width < 90;
     refs.body.flexDirection = narrow ? "column" : "row";
@@ -1594,18 +1917,22 @@ function updateRefs(refs: MonitorRefs, model: MonitorVisibleModel): void {
     refs.detailsBox.height = narrow ? "auto" : "100%";
     refs.detailsBox.flexGrow = 1;
   }
+  // Numeric widths disable shrinking in OpenTUI; restore it after layout changes.
+  refs.detailsBox.flexShrink = 1;
   refs.sessionsBox.title = model.sessionsTitle;
+  refs.sessionsBox.visible = model.view !== "sessions" || model.sessionsVisible;
   refs.sessionsBox.borderColor = model.focusRegion === "sessions" || model.focusRegion === "providers" || model.focusRegion === "agents" ? color(PALETTE.accent) : color(PALETTE.border);
   refs.sessionsBox.titleColor = model.focusRegion === "sessions" || model.focusRegion === "providers" || model.focusRegion === "agents" ? color(PALETTE.accent) : color(PALETTE.fg);
   refs.sessionsTable.visible = model.sessionsVisible;
-  refs.sessionsTable.content = model.sessionsContent;
+  setMonitorTableContent(refs, refs.sessionsTable, model.sessionsContent, model.sessionActions);
   refs.providersTable.visible = model.providersVisible;
-  refs.providersTable.content = model.providersContent;
+  setMonitorTableContent(refs, refs.providersTable, model.providersContent, model.providerActions);
   refs.detailsBox.visible = model.detailsVisible;
   refs.detailsBox.title = model.detailsTitle;
   refs.detailsBox.borderColor = model.focusRegion === "details" ? color(PALETTE.accent) : color(PALETTE.border);
   refs.detailsBox.titleColor = model.focusRegion === "details" ? color(PALETTE.accent) : color(PALETTE.fg);
   refs.detailsText.content = model.detailsContent;
+  refs.detailsText.width = detailTextWidth(model.detailsWidth);
   if (refs.detailsScrollKey !== model.detailsScrollKey) {
     refs.detailsScroll.scrollTo({ x: 0, y: 0 });
     refs.detailsScrollKey = model.detailsScrollKey;
@@ -1733,9 +2060,7 @@ function visibleSessionAgeDeadline(
   }
 
   const scope = state.projectFocusKey ? selectedProjectSessions(state) : shown;
-  const selectedIndex = state.projectFocusKey ? Math.max(0, state.selectedIdx) : 0;
-  const sessionSlots = Math.max(4, renderer.height - 17);
-  for (const session of visibleWindow(scope, selectedIndex, sessionSlots)) {
+  for (const session of visibleSessionWindow(scope, state, renderer)) {
     if (session.timestamp) deadline = earlierDeadline(deadline, nextAgeChangeAt(session.timestamp, now), now);
   }
 
@@ -1948,10 +2273,15 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
     backgroundColor: PALETTE.bg,
     targetFps: Math.max(1, Math.min(60, Math.round(1000 / opts.renderMs))),
     maxFps: 60,
-    useMouse: false,
+    useMouse: true,
+    enableMouseMovement: true,
     consoleMode: "disabled",
   });
 
+  return mountOpenTuiMonitor(renderer, opts);
+}
+
+export function mountOpenTuiMonitor(renderer: CliRenderer, opts: OpenTuiMonitorOptions): Promise<void> {
   return new Promise<void>((resolve) => {
     let state: MonitorState = clampState({
       sessions: [],
@@ -1976,10 +2306,10 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
     let freshnessTimer: ReturnType<typeof setTimeout> | undefined;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
     let terminalFocused = true;
-    const refs = createRefs(renderer, opts);
+    const refs = createMonitorView(renderer, opts, handleMouseAction);
 
     const requestVisibleUpdate = createVisibleModelUpdater((model: MonitorVisibleModel) => {
-      updateRefs(refs, model);
+      renderMonitorView(refs, model);
       renderer.requestRender();
     });
     const render = () => {
@@ -2032,6 +2362,17 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
         if (selected) agentClient?.select(selected.agent_id);
       }
     };
+    function handleMouseAction(action: MonitorAction) {
+      if (disposed) return;
+      const previousView = state.view;
+      const previousAgent = state.agentCursorId;
+      update(current => applyMonitorAction(current, action));
+      if (state.view === "providers" && previousView !== "providers") void refreshProviders("manual");
+      if (state.view === "agents") {
+        if (previousView !== "agents") void refreshAgents();
+        else if (state.agentCursorId && state.agentCursorId !== previousAgent) agentClient?.select(state.agentCursorId);
+      }
+    }
     const close = () => {
       if (disposed) return;
       disposed = true;
@@ -2111,14 +2452,13 @@ export async function runOpenTuiMonitor(opts: OpenTuiMonitorOptions): Promise<vo
       if (state.view === "providers") {
         if (scrollDetails(refs, key)) { renderer.requestRender(); return; }
         const char = printableChar(key);
-        const mode = state.providerUsageMode ?? "percentage";
+        const mode = state.providerUsageMode ?? "token";
         const number = /^[1-3]$/.test(char) ? Number(char) - 1 : -1;
         if (number >= 0 || key.name === "tab" || char === "[" || char === "]") {
           const index = number >= 0 ? number : (PROVIDER_USAGE_MODES.indexOf(mode) + (char === "[" ? 2 : 1)) % 3;
           update(current => ({ ...current, providerUsageMode: PROVIDER_USAGE_MODES[index] }));
         } else if (["up", "down", "j", "k"].includes(key.name)) {
-          update(current => ({ ...current, providerIndex: Math.max(0, Math.min(providerRowsForState(current).length - 1,
-            (current.providerIndex ?? 0) + (["up", "k"].includes(key.name) ? -1 : 1))) }));
+          update(current => applyMonitorAction(current, { type: "step", list: "providers", delta: ["up", "k"].includes(key.name) ? -1 : 1 }));
         } else if (key.name === "r") void refreshProviders("manual");
         else if (char === "/") update(current => ({ ...current, filterActive: true, filterText: "" }));
         else if (key.name === "escape") update(current => ({ ...current, view: "sessions", filterText: "" }));
