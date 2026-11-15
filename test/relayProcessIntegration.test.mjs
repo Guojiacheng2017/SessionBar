@@ -21,6 +21,7 @@ test("CLI reuses startup environment and applies a changed environment only on r
   // installed accounts, credential variables, existing Relay state and hooks.
   const env = {
     HOME: home,
+    TMPDIR: home, TEMP: home, TMP: home,
     PATH: process.env.PATH,
     SESSIONBAR_HOME: stateHome,
     SESSIONBAR_PROVIDER_POLL: "0",
@@ -65,7 +66,7 @@ test("CLI reuses startup environment and applies a changed environment only on r
 
 test("Bun local Relay transport bypasses proxy environment and preserves streaming", { timeout: 10_000 }, async t => {
   const home = mkdtempSync(join(tmpdir(), "sessionbar-bun-transport-"));
-  const env = { HOME: home, PATH: process.env.PATH };
+  const env = { HOME: home, TMPDIR: home, TEMP: home, TMP: home, PATH: process.env.PATH };
   let server;
   try {
     try { await exec("bun", ["--version"], { cwd: home, env, timeout: 3_000 }); }
