@@ -114,7 +114,7 @@ test("keeps a recently expired provider card visible without making it consumabl
     },
   });
   assert.ok(row);
-  assert.equal(row.cardTiming, "Card expired 2d ago");
+  assert.equal(row.cardTiming, "0 cards left · Card expired 2d ago");
 });
 
 test("reads account id from the current nested Codex auth shape", async () => {
@@ -254,4 +254,82 @@ test("redemption requires a successful HTTP response and an explicit known outco
       if (fixture.outcome === "error") assert.ok(result.reason);
     });
   }
+});
+
+test("collects native reset-card inventory without overlapping Wham reads", async () => {
+    const now = Date.parse("2026-11-15T12:00:00.000Z");
+    let inFlight = 0;
+    let posts = 0;
+    const row = await fetchOpenAISubscription({
+        authJsonPath, now,
+        fetchImpl: async (input, init) => {
+            if (init?.method !== "GET") {
+                posts++;
+                return Response.json({}, { status: 405 });
+            }
+            const concurrent = ++inFlight;
+            await new Promise(resolve => setImmediate(resolve));
+            inFlight--;
+            if (concurrent > 1)
+                return Response.json({ error: "overlapping read rejected" }, { status: 403 });
+            const path = new URL(String(input)).pathname;
+            if (path.endsWith("/rate-limit-reset-credits")) {
+                return Response.json({ available_count: 3, total_earned_count: 3, credits: [
+                        { id: "fixture-credit-1", reset_type: "codex_rate_limits", status: "available", is_supported_by_plan: true, expires_at: "2026-11-30T20:28:20.912477Z" },
+                        { id: "fixture-credit-2", reset_type: "codex_rate_limits", status: "available", is_supported_by_plan: true, expires_at: "2026-12-01T22:55:38.463630Z" },
+                        { id: "fixture-credit-3", reset_type: "codex_rate_limits", status: "available", is_supported_by_plan: true, expires_at: "2026-12-12T22:51:59.673386Z" },
+                    ] });
+            }
+            if (path.endsWith("/profiles/me"))
+                return Response.json({});
+            assert.ok(path.endsWith("/usage"));
+            return Response.json({ rate_limit: { primary_window: { used_percent: 92, reset_at: now + 3 * 3_600_000 } } });
+        },
+    });
+    assert.ok(row);
+    assert.equal(row.remaining, 8);
+    assert.match(row.cardTiming, /^3 cards left/);
+    assert.equal(posts, 0);
+});
+test("unavailable or malformed reset-card data is unknown rather than an empty inventory", async (t) => {
+    for (const [name, response] of [
+        ["forbidden", () => Response.json({ error: "forbidden" }, { status: 403 })],
+        ["upstream failure", () => Response.json({}, { status: 503 })],
+        ["missing credits", () => Response.json({ error: "unexpected schema" })],
+        ["null credits", () => Response.json({ credits: null })],
+        ["invalid JSON", () => new Response("not json")],
+    ]) {
+        await t.test(name, async () => {
+            const row = await fetchOpenAISubscription({
+                authJsonPath,
+                fetchImpl: async (input, init) => {
+                    assert.equal(init?.method, "GET");
+                    const path = new URL(String(input)).pathname;
+                    if (path.endsWith("/rate-limit-reset-credits"))
+                        return response();
+                    if (path.endsWith("/profiles/me"))
+                        return Response.json({});
+                    assert.ok(path.endsWith("/usage"));
+                    return Response.json({ rate_limit: { primary_window: { used_percent: 40, reset_at: Date.now() + 86400000 } } });
+                },
+            });
+            assert.ok(row);
+            assert.equal(row.remaining, 60);
+            assert.equal(row.cardTiming, "Cards unknown");
+        });
+    }
+});
+test("a confirmed empty reset-card list remains a measured zero", async () => {
+    const row = await fetchOpenAISubscription({
+        authJsonPath,
+        fetchImpl: async (input) => {
+            if (String(input).endsWith("/rate-limit-reset-credits"))
+                return Response.json({ available_count: 0, credits: [] });
+            if (String(input).endsWith("/profiles/me"))
+                return Response.json({});
+            return Response.json({ rate_limit: { primary_window: { used_percent: 40, reset_at: Date.now() + 86400000 } } });
+        },
+    });
+    assert.ok(row);
+    assert.equal(row.cardTiming, "0 cards left");
 });

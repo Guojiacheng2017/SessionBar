@@ -49,7 +49,9 @@ export function computeAdvice(state: QuotaState, now: number): Advice {
     pacing = "Resetting";
   }
 
-  const cardTiming = cardTimingText(state.cards ?? [], projectedCapHitAt, resetAt, now, remaining);
+  const cardTiming = state.cards === undefined
+    ? "Cards unknown"
+    : cardTimingText(state.cards, projectedCapHitAt, resetAt, now, remaining);
   const autoResetIn = autoResetText(resetAt, now);
 
   return { measuredRate, sustainableRate, actualVsSustainable, projectedCapHitAt, level, pacing, cardTiming, autoResetIn };
@@ -81,40 +83,44 @@ function cardTimingText(
   now: number,
   remaining: number,
 ): string {
+  if (cards.some(card => !Number.isSafeInteger(card.count) || card.count < 0
+    || (card.expiresAt !== undefined && !Number.isFinite(card.expiresAt)))) return "Cards unknown";
   // Expired cards are not actionable, but retain a short history in the
   // provider row so a reset disappearing from the upstream response is not
   // mistaken for never having existed.
   const active = cards.filter(
-    c => c.count > 0 && (c.expiresAt === undefined || c.expiresAt - now >= 0),
+    c => c.count > 0 && (c.expiresAt === undefined || c.expiresAt > now),
   );
   const total = active.reduce((sum, c) => sum + c.count, 0);
+  const inventory = `${total} ${total === 1 ? "card" : "cards"} left`;
+  const withInventory = (timing: string) => `${inventory} · ${timing}`;
   if (total === 0) {
     const recentExpired = cards
       .filter((c): c is ResetCard & { expiresAt: number } =>
         c.count > 0 && c.expiresAt !== undefined &&
-        c.expiresAt < now && now - c.expiresAt <= EXPIRED_CARD_RETENTION_MS,
+        c.expiresAt <= now && now - c.expiresAt <= EXPIRED_CARD_RETENTION_MS,
       )
       .sort((a, b) => b.expiresAt - a.expiresAt)[0];
     return recentExpired
-      ? `Card expired ${formatDuration(now - recentExpired.expiresAt)} ago`
-      : "No cards";
+      ? withInventory(`Card expired ${formatDuration(now - recentExpired.expiresAt)} ago`)
+      : inventory;
   }
   const soonestExpiry = active
     .filter((c): c is ResetCard & { expiresAt: number } => c.expiresAt !== undefined)
     .sort((a, b) => a.expiresAt - b.expiresAt)[0];
   if (soonestExpiry && soonestExpiry.expiresAt - now <= CARD_EXPIRY_GRACE_MS) {
-    return `Card expires in ${formatDuration(soonestExpiry.expiresAt - now)}`;
+    return withInventory(`Card expires in ${formatDuration(soonestExpiry.expiresAt - now)}`);
   }
   // remaining 0 counts as cap-hit even though projectedCapHitAt is null for it
   const capped = remaining === 0 || (projectedCapHitAt !== null && projectedCapHitAt < resetAt);
-  if (capped) return "Use card now";
+  if (capped) return withInventory("Use card now");
   const expiresBeforeReset = active.find(
     c => c.expiresAt !== undefined && c.expiresAt < resetAt,
   );
   if (expiresBeforeReset) {
-    return `Card expires in ${formatDuration(expiresBeforeReset.expiresAt! - now)}`;
+    return withInventory(`Card expires in ${formatDuration(expiresBeforeReset.expiresAt! - now)}`);
   }
-  return "Card available";
+  return withInventory("Card available");
 }
 
 function formatDuration(ms: number): string {

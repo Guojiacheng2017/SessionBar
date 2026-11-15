@@ -51,14 +51,13 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
     const headers = auth.headers;
     const fetchImpl = opts.fetchImpl ?? providerFetch;
 
-    let [usageBody, creditsBody, profileBody] = await Promise.all([
-      fetchJson(fetchImpl, WHAM_USAGE, headers),
-      fetchJson(fetchImpl, WHAM_CREDITS, headers),
-      fetchJson(fetchImpl, WHAM_PROFILE, headers),
-    ]);
+    // Wham can reject overlapping account reads. Wham 可能拒绝同账户的并发读取。
+    let usageBody = await fetchJson(fetchImpl, WHAM_USAGE, headers);
+    let creditsBody = await fetchJson(fetchImpl, WHAM_CREDITS, headers);
+    const profileBody = await fetchJson(fetchImpl, WHAM_PROFILE, headers);
     let cards = parseCredits(creditsBody, now);
 
-    if (opts.autoConsumeResetCards) {
+    if (opts.autoConsumeResetCards && cards !== undefined) {
       const candidate = nearestExpiringCard(cards, now);
       const windowMs = Number.isFinite(opts.autoConsumeBeforeMs)
         ? Math.max(0, opts.autoConsumeBeforeMs!)
@@ -74,10 +73,8 @@ export async function fetchOpenAISubscription(opts: WhamOpts = {}): Promise<Plan
           try { await opts.onResetCardConsume?.(result); } catch { /* status callback must not hide provider data */ }
           // The provider's usage window and card list are authoritative after a
           // redemption; do not infer the new state from the POST response.
-          [usageBody, creditsBody] = await Promise.all([
-            fetchJson(fetchImpl, WHAM_USAGE, headers),
-            fetchJson(fetchImpl, WHAM_CREDITS, headers),
-          ]);
+          usageBody = await fetchJson(fetchImpl, WHAM_USAGE, headers);
+          creditsBody = await fetchJson(fetchImpl, WHAM_CREDITS, headers);
           cards = parseCredits(creditsBody, now);
         }
       }
@@ -233,11 +230,12 @@ export async function consumeResetCard(opts: {
   }
 }
 
-function parseCredits(body: unknown, now: number): ResetCard[] {
+function parseCredits(body: unknown, now: number): ResetCard[] | undefined {
   const obj: Record<string, unknown> = body && typeof body === "object"
     ? body as Record<string, unknown>
     : {};
-  const arr = Array.isArray(body) ? body : Array.isArray(obj.credits) ? obj.credits : [];
+  const arr = Array.isArray(body) ? body : Array.isArray(obj.credits) ? obj.credits : undefined;
+  if (arr === undefined) return undefined;
   const retained = arr
     .filter((c: any) => c && typeof c === "object" && (c.status === undefined || c.status === "available"))
     .map((c: any) => ({

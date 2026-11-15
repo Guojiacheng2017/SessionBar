@@ -188,35 +188,35 @@ test("insufficient samples → no cap projection", () => {
 });
 
 test("card: spend when cap hit before reset and reset far", () => {
-  const advice = computeAdvice(state({
-    remaining: 100_000,
-    cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
-  }), NOW); // default 2x50k -> 2h cap hit, reset 168h out -> use card now
-  assert.match(advice.cardTiming, /Use card now/);
+    const advice = computeAdvice(state({
+        remaining: 100_000,
+        cards: [{ count: 1, expiresAt: NOW + 20 * 24 * 3_600_000 }],
+    }), NOW); // default 2x50k -> 2h cap hit, reset 168h out -> use card now
+    assert.equal(advice.cardTiming, "1 card left · Use card now");
 });
 
 test("card: expiring within 24h shows the remaining duration", () => {
-  const advice = computeAdvice(state({
-    remaining: 900_000,
-    rateSamples: [
-      { value: 5_000, at: NOW - 3_600_000 },
-      { value: 5_000, at: NOW - 7_200_000 },
-    ],
-    cards: [{ count: 1, expiresAt: NOW + 12 * 3_600_000 }], // expires in 12h
-  }), NOW);
-  assert.equal(advice.cardTiming, "Card expires in 12h");
+    const advice = computeAdvice(state({
+        remaining: 900_000,
+        rateSamples: [
+            { value: 5_000, at: NOW - 3_600_000 },
+            { value: 5_000, at: NOW - 7_200_000 },
+        ],
+        cards: [{ count: 1, expiresAt: NOW + 12 * 3_600_000 }], // expires in 12h
+    }), NOW);
+    assert.equal(advice.cardTiming, "1 card left · Card expires in 12h");
 });
 
 test("card: expiry exactly 24h away still shows the remaining duration", () => {
-  const advice = computeAdvice(state({
-    remaining: 900_000,
-    rateSamples: [
-      { value: 5_000, at: NOW - 3_600_000 },
-      { value: 5_000, at: NOW - 7_200_000 },
-    ],
-    cards: [{ count: 1, expiresAt: NOW + 24 * 3_600_000 }],
-  }), NOW);
-  assert.equal(advice.cardTiming, "Card expires in 1d");
+    const advice = computeAdvice(state({
+        remaining: 900_000,
+        rateSamples: [
+            { value: 5_000, at: NOW - 3_600_000 },
+            { value: 5_000, at: NOW - 7_200_000 },
+        ],
+        cards: [{ count: 1, expiresAt: NOW + 24 * 3_600_000 }],
+    }), NOW);
+    assert.equal(advice.cardTiming, "1 card left · Card expires in 1d");
 });
 
 test("card: no cap hit → save", () => {
@@ -250,18 +250,18 @@ test("card: remaining=0 with a valid card -> spend it now, not save", () => {
 });
 
 test("card: recently expired card remains visible but is not actionable", () => {
-  const advice = computeAdvice(state({
-    cards: [{ count: 1, expiresAt: NOW - 2 * 24 * 3_600_000 }],
-  }), NOW);
-  assert.doesNotMatch(advice.cardTiming, /Use card now|Card expiring/);
-  assert.equal(advice.cardTiming, "Card expired 2d ago");
+    const advice = computeAdvice(state({
+        cards: [{ count: 1, expiresAt: NOW - 2 * 24 * 3_600_000 }],
+    }), NOW);
+    assert.doesNotMatch(advice.cardTiming, /Use card now|Card expiring/);
+    assert.equal(advice.cardTiming, "0 cards left · Card expired 2d ago");
 });
 
 test("card: expired cards older than retention -> No reset cards", () => {
-  const advice = computeAdvice(state({
-    cards: [{ count: 1, expiresAt: NOW - 31 * 24 * 3_600_000 }],
-  }), NOW);
-  assert.match(advice.cardTiming, /No cards/);
+    const advice = computeAdvice(state({
+        cards: [{ count: 1, expiresAt: NOW - 31 * 24 * 3_600_000 }],
+    }), NOW);
+    assert.equal(advice.cardTiming, "0 cards left");
 });
 
 test("card: expires before reset in save branch → mentions it", () => {
@@ -319,4 +319,34 @@ test("red from low remaining (not fast burn) -> Quota low copy", () => {
   assert.equal(advice.level, "red");
   assert.match(advice.pacing, /<5% left/);
   assert.doesNotMatch(advice.pacing, /Burning too fast/);
+});
+
+test("card: shows the total remaining inventory across valid groups only", () => {
+    const advice = computeAdvice(state({
+        remaining: 0,
+        cards: [
+            { count: 2, expiresAt: NOW + 20 * 24 * 3_600_000 },
+            { count: 3 },
+            { count: 8, expiresAt: NOW - 1 },
+            { count: 0 },
+        ],
+    }), NOW);
+    assert.equal(advice.cardTiming, "5 cards left · Use card now");
+});
+
+test("card: an omitted inventory stays unknown while an explicit empty list is zero", () => {
+    assert.equal(computeAdvice(state({ cards: undefined }), NOW).cardTiming, "Cards unknown");
+    assert.equal(computeAdvice(state({ cards: [] }), NOW).cardTiming, "0 cards left");
+});
+
+test("card: expiry at the observation time is no longer actionable", () => {
+    const advice = computeAdvice(state({ remaining: 0, cards: [{ count: 1, expiresAt: NOW }] }), NOW);
+    assert.match(advice.cardTiming, /^0 cards left .*expired/);
+    assert.doesNotMatch(advice.cardTiming, /Use card now|expires in/);
+});
+
+test("card: malformed inventory cannot become an exact available count", () => {
+    for (const card of [{ count: Infinity }, { count: 0.5 }, { count: -1 }, { count: 1, expiresAt: NaN }]) {
+        assert.equal(computeAdvice(state({ cards: [card] }), NOW).cardTiming, "Cards unknown");
+    }
 });

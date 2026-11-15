@@ -475,7 +475,7 @@ function providerResetText(value: string): string {
 }
 
 function providerCardText(value: string): string {
-  return value.replace(/^card\s+/i, "");
+  return value.replace(/^No cards$/i, "0 cards left").replace(/(^| · )card\s+/gi, "$1");
 }
 
 function providerIconType(row: PlanRow): string {
