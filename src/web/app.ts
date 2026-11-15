@@ -1,5 +1,6 @@
 // SessionBar web dashboard — Tailwind + vanilla TS
 import { mountAppHeader } from "./appShell.js";
+import { PROVIDER_FREQUENCY_STORAGE_KEY, PROVIDER_VIEW_STORAGE_KEY, providerPreferenceKey, readInfrequentProviders, readProviderView, saveProviderView, updateProviderFrequency, type ProviderView } from "./providerPreferences.js";
 import type { SessionPayload } from "../shared/types.js";
 import type { Snapshot } from "../shared/agentContract.js";
 import { AgentClient } from "./agentClient.js";
@@ -69,6 +70,8 @@ const providersStatus = document.getElementById("providers-status")!;
 const providersDailyUsage = document.getElementById("providers-daily-usage")!;
 const providersBody = document.getElementById("providers-body")!;
 const providerUsageModeButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-provider-usage-mode]")];
+const providerViewButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-provider-view]")];
+const providerEditButton = document.getElementById("provider-edit-frequency") as HTMLButtonElement;
 const stopAgentAvatarFallbacks = installAgentAvatarFallbacks(document);
 
 const disconnectedBanner = document.getElementById("connection-banner") as HTMLDivElement;
@@ -90,6 +93,13 @@ let sessionAgeTimer: number | undefined;
 let providerGalleryMain: SplideInstance | null = null;
 let providerGalleryTabs: SplideInstance | null = null;
 let providerGalleryIndex = 0;
+let providerGalleryKey: string | undefined;
+let infrequentProviders = new Set<string>();
+let providerPreferencesPersisted = true;
+let providerView: ProviderView = "frequent";
+let editingProviderFrequency = false;
+try { infrequentProviders = readInfrequentProviders(window.localStorage); } catch { /* storage is optional; 存储可选 */ }
+try { providerView = readProviderView(window.localStorage); } catch { /* storage is optional; 存储可选 */ }
 const iconCache = new Map<string, string>();
 const PROVIDER_USAGE_MODE_KEY = "sessionbar:provider-usage-mode";
 let providerUsageMode = readProviderUsageMode();
@@ -126,6 +136,12 @@ function readProviderUsageMode(): ProviderUsageMode {
 function setProviderUsageMode(mode: ProviderUsageMode): void {
   providerUsageMode = mode;
   try { window.localStorage.setItem(PROVIDER_USAGE_MODE_KEY, mode); } catch { /* storage is optional */ }
+  renderProviders();
+}
+
+function setProviderView(view: ProviderView): void {
+  providerView = view;
+  try { saveProviderView(window.localStorage, view); } catch { /* storage is optional */ }
   renderProviders();
 }
 
@@ -304,6 +320,11 @@ function scheduleSceneMeasure(): void {
 }
 
 function renderProviders(): void {
+  const galleryKey = selectedProviderGalleryKey();
+  const active = document.activeElement;
+  const focusedPreference = active instanceof HTMLInputElement && providersBody.contains(active)
+    && active.dataset.providerFrequency !== undefined
+    ? { key: active.dataset.providerFrequency, gallery: Boolean(active.closest(".provider-gallery")) } : undefined;
   const statusText = providersError ? "Unavailable" : providersInitializing ? "Loading" : "";
   providersStatus.textContent = statusText;
   providersStatus.className = `providers-status${providersError ? " providers-status-error" : providersInitializing ? " providers-status-loading" : ""}`;
@@ -312,18 +333,42 @@ function renderProviders(): void {
   for (const button of providerUsageModeButtons) {
     button.setAttribute("aria-pressed", String(button.dataset.providerUsageMode === providerUsageMode));
   }
+  for (const button of providerViewButtons) {
+    button.setAttribute("aria-pressed", String(button.dataset.providerView === (editingProviderFrequency ? "all" : providerView)));
+    button.disabled = editingProviderFrequency;
+  }
+  const editLabel = editingProviderFrequency ? "Done editing frequent providers" : "Edit frequent providers";
+  providerEditButton.textContent = editingProviderFrequency ? "Done" : "Edit";
+  providerEditButton.setAttribute("aria-label", editLabel);
+  providerEditButton.setAttribute("title", editLabel);
+  providerEditButton.setAttribute("aria-pressed", String(editingProviderFrequency));
   providersBody.innerHTML = providerTableMarkup(providers, {
     loading: providersInitializing,
     error: providersError || undefined,
     iconCache,
     usageMode: providerUsageMode,
+    infrequentProviders,
+    view: providerView,
+    editingFrequency: editingProviderFrequency,
   });
-  mountProviderGallery();
+  mountProviderGallery(galleryKey);
+  if (focusedPreference) {
+    const surface = focusedPreference.gallery ? ".provider-gallery" : ".provider-table";
+    [...providersBody.querySelectorAll<HTMLInputElement>(`${surface} [data-provider-frequency]`)]
+      .find(input => input.dataset.providerFrequency === focusedPreference.key)?.focus({ preventScroll: true });
+  }
   providersBody.querySelector("[data-providers-retry]")?.addEventListener("click", () => { void fetchProviders(); });
   if (sceneExpandedHeight > 0) scheduleSceneMeasure();
 }
 
-function mountProviderGallery(): void {
+function selectedProviderGalleryKey(): string | undefined {
+  return providerGalleryMain
+    ? providersBody.querySelectorAll<HTMLElement>(".provider-gallery-card")[providerGalleryMain.index]?.dataset.providerKey
+    : providerGalleryKey;
+}
+
+function mountProviderGallery(selectedKey?: string): void {
+  providerGalleryKey = selectedKey;
   if (providerGalleryMain) providerGalleryIndex = providerGalleryMain.index;
   providerGalleryMain?.destroy(true);
   providerGalleryTabs?.destroy(true);
@@ -333,6 +378,10 @@ function mountProviderGallery(): void {
   const mainElement = providersBody.querySelector(".provider-gallery-main");
   const tabsElement = providersBody.querySelector(".provider-gallery-tabs");
   if (!mainElement || !tabsElement) return;
+  const cards = [...mainElement.querySelectorAll<HTMLElement>("[data-provider-key]")];
+  const selectedIndex = cards.findIndex(card => card.dataset.providerKey === selectedKey);
+  providerGalleryIndex = selectedIndex < 0 ? 0 : selectedIndex;
+  providerGalleryKey = cards[providerGalleryIndex]?.dataset.providerKey;
   const tabs = new window.Splide(tabsElement, {
     autoWidth: true,
     gap: "6px",
@@ -344,7 +393,7 @@ function mountProviderGallery(): void {
     drag: "free",
     snap: true,
     keyboard: "focused",
-    start: Math.min(providerGalleryIndex, providers.length - 1),
+    start: providerGalleryIndex,
   });
   const main = new window.Splide(mainElement, {
     type: "slide",
@@ -357,10 +406,14 @@ function mountProviderGallery(): void {
     flickMaxPages: 1,
     autoHeight: true,
     keyboard: "focused",
-    start: Math.min(providerGalleryIndex, providers.length - 1),
+    start: providerGalleryIndex,
   });
   main.sync(tabs);
-  main.on("moved", (index) => { if (typeof index === "number") providerGalleryIndex = index; });
+  main.on("moved", (index) => {
+    if (typeof index !== "number") return;
+    providerGalleryIndex = index;
+    providerGalleryKey = mainElement.querySelectorAll<HTMLElement>("[data-provider-key]")[index]?.dataset.providerKey;
+  });
   main.mount();
   tabs.mount();
   tabsElement.addEventListener("click", event => {
@@ -930,7 +983,53 @@ window.addEventListener("resize", () => {
   scheduleSceneMeasure();
 });
 reducedMotion.addEventListener("change", scheduleSceneMeasure);
-providerGalleryMedia.addEventListener("change", mountProviderGallery);
+providerGalleryMedia.addEventListener("change", () => { mountProviderGallery(selectedProviderGalleryKey()); });
+providersBody.addEventListener("change", event => {
+  const input = event.target;
+  if (!editingProviderFrequency || !(input instanceof HTMLInputElement) || input.dataset.providerFrequency === undefined) return;
+  const key = input.dataset.providerFrequency;
+  if (!providers.some(row => providerPreferenceKey(row) === key)) return;
+  if (input.checked) infrequentProviders.delete(key);
+  else infrequentProviders.add(key);
+  try {
+    const updated = updateProviderFrequency(window.localStorage, key, input.checked, infrequentProviders, providerPreferencesPersisted);
+    infrequentProviders = updated.infrequentProviders;
+    providerPreferencesPersisted = updated.persisted;
+  } catch { providerPreferencesPersisted = false; }
+  renderProviders();
+});
+window.addEventListener("storage", event => {
+  if (event.key !== null && event.key !== PROVIDER_FREQUENCY_STORAGE_KEY && event.key !== PROVIDER_VIEW_STORAGE_KEY) return;
+  try {
+    if (event.storageArea !== window.localStorage) return;
+    if (event.key === null || event.key === PROVIDER_FREQUENCY_STORAGE_KEY) {
+      infrequentProviders = readInfrequentProviders(window.localStorage);
+      providerPreferencesPersisted = true;
+    }
+    if (event.key === null || event.key === PROVIDER_VIEW_STORAGE_KEY) providerView = readProviderView(window.localStorage);
+    renderProviders();
+  } catch { /* storage is optional */ }
+});
+for (const button of providerViewButtons) {
+  button.addEventListener("click", () => {
+    const view = button.dataset.providerView;
+    if (!editingProviderFrequency && (view === "frequent" || view === "all")) setProviderView(view);
+  });
+}
+providerEditButton.addEventListener("click", () => {
+  editingProviderFrequency = !editingProviderFrequency;
+  renderProviders();
+});
+providersPanel.addEventListener("keydown", event => {
+  if (event.key !== "Escape" || !editingProviderFrequency) return;
+  event.preventDefault();
+  editingProviderFrequency = false;
+  renderProviders();
+  providerEditButton.focus({ preventScroll: true });
+});
+providersBody.addEventListener("click", event => {
+  if ((event.target as Element | null)?.closest("[data-providers-show-all]")) setProviderView("all");
+});
 for (const button of providerUsageModeButtons) {
   button.addEventListener("click", () => {
     const mode = button.dataset.providerUsageMode;

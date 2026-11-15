@@ -71,6 +71,13 @@
                 <p id="providers-daily-usage" class="providers-description provider-daily-usage"><span class="daily-usage-label">Today</span><span class="daily-usage-empty">No usage data yet</span></p>
             </div>
             <div class="providers-header-actions">
+                <div class="provider-display-controls">
+                    <div class="provider-visibility-mode" role="group" aria-label="Provider visibility">
+                        <button type="button" data-provider-view="frequent" aria-pressed="true">Frequent-use only</button>
+                        <button type="button" data-provider-view="all" aria-pressed="false">All</button>
+                    </div>
+                    <button type="button" id="provider-edit-frequency" class="provider-edit-button" aria-label="Edit frequent providers" title="Edit frequent providers" aria-pressed="false" aria-controls="providers-body">Edit</button>
+                </div>
                 <div id="provider-usage-mode" class="provider-usage-mode" role="group" aria-label="Provider usage metric">
                     <button type="button" data-provider-usage-mode="token" aria-pressed="true">Token</button>
                     <button type="button" data-provider-usage-mode="cash" aria-pressed="false">Cash</button>

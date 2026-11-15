@@ -2,6 +2,7 @@ import { isSystemEfficiencySnapshot, type SessionPayload, type SystemEfficiencyS
 import type { PlanRow, ProviderUsageMode } from "../providers/planTypes.js";
 import { providerDisplayLabel, providerUsageTrendForMode } from "../providers/providerUsageMetrics.js";
 import { compactNumber } from "../tui/displayUtils.js";
+import { providerPreferenceKey, type ProviderView } from "./providerPreferences.js";
 
 export const UI = {
   statusSummary: "flex items-center gap-x-4 gap-y-2 shrink-0 min-h-7 flex-wrap text-[13px] text-muted",
@@ -36,6 +37,9 @@ export interface ProviderTableState {
   error?: string;
   iconCache?: Map<string, string>;
   usageMode?: ProviderUsageMode;
+  infrequentProviders?: ReadonlySet<string>;
+  view?: ProviderView;
+  editingFrequency?: boolean;
 }
 
 // LobeHub icon CDN — light variant for dark backgrounds, dark variant for light.
@@ -612,22 +616,31 @@ export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTab
     return `<div class="provider-state"><strong>No quota data</strong><span>Provider credentials or subscription data are not available yet.</span></div>`;
   }
 
-  const galleryTabs = rows.map((row, index) => {
+  const isFrequent = (row: PlanRow) => !state.infrequentProviders?.has(providerPreferenceKey(row));
+  const orderedRows = rows
+    .filter(row => state.editingFrequency || state.view === "all" || isFrequent(row))
+    .sort((a, b) => Number(isFrequent(b)) - Number(isFrequent(a)));
+  if (orderedRows.length === 0) {
+    return `<div class="provider-state" role="status"><strong>No frequent providers</strong><button type="button" class="provider-retry" data-providers-show-all>Show all</button></div>`;
+  }
+
+  const galleryTabs = orderedRows.map((row, index) => {
     const label = providerDisplayLabel(row);
-    return `<li class="splide__slide provider-gallery-tab" aria-label="Show ${escapeHtml(label)}" data-provider-gallery-index="${index}">${iconMarkup(providerIconType(row), state.iconCache)}<span>${escapeHtml(label)}</span></li>`;
+    return `<li class="splide__slide provider-gallery-tab${isFrequent(row) ? "" : " is-infrequent"}" aria-label="Show ${escapeHtml(label)}" data-provider-gallery-index="${index}">${iconMarkup(providerIconType(row), state.iconCache)}<span>${escapeHtml(label)}</span></li>`;
   }).join("");
-  const galleryCards = rows.map(row => {
+  const galleryCards = orderedRows.map(row => {
+    const frequent = isFrequent(row);
     const tone = row.stale ? "api" : row.form === "api" ? "api" : row.level;
     const label = providerDisplayLabel(row);
     const form = providerFormLabel(row);
     const hasFormInLabel = label.toLocaleLowerCase().includes(form.toLocaleLowerCase());
     const usageSource = providerUsageTrendForMode(row, state.usageMode ?? "token")?.source;
-    const providerMeta = [hasFormInLabel ? "" : form, usageSource].filter(Boolean).join(" / ");
+    const providerMeta = [hasFormInLabel ? "" : form, usageSource, frequent ? "" : "Infrequent"].filter(Boolean).join(" / ");
     const resetPresent = Boolean(row.autoResetIn && row.autoResetIn !== "—");
     const cardPresent = Boolean(row.cardTiming && row.cardTiming !== "—");
-    return `<li class="splide__slide"><article class="provider-gallery-card">
+    return `<li class="splide__slide"><article class="provider-gallery-card${frequent ? "" : " is-infrequent"}" data-provider-key="${escapeHtml(providerPreferenceKey(row))}">
       <header class="provider-gallery-card-header">
-        <span class="provider-name"><span class="provider-icon">${iconMarkup(providerIconType(row), state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${providerMeta ? `<small>${escapeHtml(providerMeta)}</small>` : ""}</span></span>
+        <span class="provider-name">${state.editingFrequency ? providerFrequencyMarkup(row, frequent) : ""}<span class="provider-icon">${iconMarkup(providerIconType(row), state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${providerMeta ? `<small>${escapeHtml(providerMeta)}</small>` : ""}</span></span>
         <span class="provider-left provider-left-${tone}">${escapeHtml(providerLeftText(row))}</span>
       </header>
       <div class="provider-gallery-usage"><span>${providerUsageTrendForMode(row, state.usageMode ?? "token")?.kind === "line" ? "Monthly cumulative" : "Last 7 days"}</span>${providerUsageMarkup(row, state.usageMode ?? "token")}</div>
@@ -643,18 +656,19 @@ export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTab
     <div class="provider-row provider-row-head" role="row">
       <span role="columnheader">Provider</span><span role="columnheader">Quota / Usage</span><span role="columnheader">Level</span><span role="columnheader">Usage</span><span role="columnheader">Reset</span><span role="columnheader">Card</span>
     </div>
-    ${rows.map(row => {
+    ${orderedRows.map(row => {
+      const frequent = isFrequent(row);
       const tone = row.stale ? "api" : row.form === "api" ? "api" : row.level;
       const label = providerDisplayLabel(row);
       const form = providerFormLabel(row);
       const hasFormInLabel = label.toLocaleLowerCase().includes(form.toLocaleLowerCase());
       const usageSource = providerUsageTrendForMode(row, state.usageMode ?? "token")?.source;
-      const providerMeta = [hasFormInLabel ? "" : form, usageSource].filter(Boolean).join(" / ");
+      const providerMeta = [hasFormInLabel ? "" : form, usageSource, frequent ? "" : "Infrequent"].filter(Boolean).join(" / ");
       const iconType = providerIconType(row);
       const resetPresent = Boolean(row.autoResetIn && row.autoResetIn !== "—");
       const cardPresent = Boolean(row.cardTiming && row.cardTiming !== "—");
-      return `<div class="provider-row" role="row">
-        <span class="provider-name" role="cell"><span class="provider-icon">${iconMarkup(iconType, state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${providerMeta ? `<small>${escapeHtml(providerMeta)}</small>` : ""}</span></span>
+      return `<div class="provider-row${frequent ? "" : " is-infrequent"}" role="row" data-provider-key="${escapeHtml(providerPreferenceKey(row))}">
+        <span class="provider-name" role="cell">${state.editingFrequency ? providerFrequencyMarkup(row, frequent) : ""}<span class="provider-icon">${iconMarkup(iconType, state.iconCache)}</span><span class="provider-name-copy">${escapeHtml(label)}${providerMeta ? `<small>${escapeHtml(providerMeta)}</small>` : ""}</span></span>
         <span class="provider-left provider-left-${tone}" role="cell">${escapeHtml(providerLeftText(row))}</span>
         <span class="provider-level provider-level-${tone}" role="cell" aria-label="${escapeHtml(providerLevelLabel(row))}">${providerLevelMarkup(row)}</span>
         ${providerUsageMarkup(row, state.usageMode ?? "token")}
@@ -667,4 +681,9 @@ export function providerTableMarkup(rows: readonly PlanRow[], state: ProviderTab
     <div class="provider-gallery-tabs splide" aria-label="Choose provider"><div class="splide__track"><ul class="splide__list">${galleryTabs}</ul></div></div>
     <div class="provider-gallery-main splide" aria-label="Provider details"><div class="splide__track"><ul class="splide__list">${galleryCards}</ul></div></div>
   </div>`;
+}
+
+function providerFrequencyMarkup(row: PlanRow, frequent: boolean): string {
+  const title = frequent ? "Mark as infrequent" : "Mark as frequent";
+  return `<label class="provider-frequency" title="${title}"><input type="checkbox" role="switch" data-provider-frequency="${escapeHtml(providerPreferenceKey(row))}" aria-label="Frequent provider: ${escapeHtml(providerDisplayLabel(row))}"${frequent ? " checked" : ""}><span class="provider-frequency-track" aria-hidden="true"></span></label>`;
 }
