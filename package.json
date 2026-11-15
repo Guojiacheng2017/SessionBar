@@ -3,6 +3,12 @@
   "version": "1.1.0",
   "description": "Terminal dashboard for AI CLI agent sessions — Claude Code, Gemini CLI, Codex, Copilot",
   "type": "module",
+  "imports": {
+    "#app/web/executionViews.js": {
+      "types": "./src/web/executionViews.ts",
+      "default": "./dist/web/executionViews.js"
+    }
+  },
   "bin": {
     "sessionbar": "./dist/cli/cli.js"
   },
@@ -26,7 +32,8 @@
     "prestart": "npm run build",
     "start": "node dist/cli/cli.js",
     "prepack": "npm run build",
-    "test": "npm run build && node --import ./test/isolateEnvironment.mjs --test test/*.test.mjs"
+    "test": "npm run build && node --import ./test/isolateEnvironment.mjs --test test/*.test.mjs && npm run test:tools",
+    "test:tools": "tsc -p tsconfig.tools.json && node --experimental-strip-types --import ./test/isolateEnvironment.mjs --test test/codexCalibrationScripts.test.ts"
   },
   "dependencies": {
     "@opentui/core": "^0.4.1",
