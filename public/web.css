@@ -1624,11 +1624,21 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 .execution-summary { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 7px 0 12px; color: var(--sb-muted); font-size: 10px; line-height: 1.6; }
 .execution-summary b { color: var(--sb-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .execution-gantt { min-width: 0; margin: 10px 0; }
+.execution-gantt-toolbar { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; color: var(--sb-muted); font-size: 10px; }
+.execution-gantt-toolbar > span { flex: 1; min-width: 0; font-size: 9px; }
+.execution-gantt-toolbar button { min-width: 28px; min-height: 28px; padding: 3px 7px; border: 1px solid var(--sb-border); border-radius: 5px; background: var(--sb-surface); color: var(--sb-ink); cursor: pointer; font: inherit; }
+.execution-gantt-toolbar button:hover { background: var(--sb-surface-hover); }
+.execution-gantt-toolbar button:disabled { opacity: .4; cursor: default; }
+.execution-gantt-toolbar output { min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; }
+.execution-gantt-toolbar button:focus-visible, .execution-readable .execution-span:focus-visible { outline: 2px solid var(--sb-accent); outline-offset: 3px; }
 .execution-timeline-scroll { max-width: 100%; max-height: clamp(162px, 22dvh, 200px); overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 1px solid var(--sb-border); border-radius: 9px; background: var(--sb-surface-highlight); }
 .execution-timeline { min-width: 520px; padding: 0 10px 4px; }
+.execution-readable .execution-timeline { min-width: 0; }
 .execution-axis, .execution-lane { display: grid; grid-template-columns: 124px minmax(0, 1fr); }
+.execution-readable .execution-axis, .execution-readable .execution-lane { grid-template-columns: 148px minmax(0, 1fr); }
 .execution-axis { position: sticky; top: 0; z-index: 3; align-items: center; min-height: 30px; color: var(--sb-muted); background: var(--sb-surface-highlight); font-size: 9px; }
 .execution-axis > span, .execution-lane-label { position: sticky; left: 0; z-index: 2; background: var(--sb-surface-highlight); }
+.execution-readable .execution-axis > span, .execution-readable .execution-lane-label { left: 10px; box-shadow: -10px 0 var(--sb-surface-highlight); }
 .execution-axis > span { align-self: stretch; display: flex; align-items: center; }
 .execution-axis > div { position: relative; height: 12px; margin-right: 8px; }
 .execution-axis time { position: absolute; transform: translateX(-50%); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -1637,9 +1647,14 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 .execution-lane { min-height: 44px; border-top: 1px solid var(--sb-line-subtle); }
 .execution-lane-label { display: flex; flex-direction: column; justify-content: flex-start; gap: 3px; padding: 8px 10px 7px 0; min-width: 0; }
 .execution-lane-label strong { overflow: hidden; color: var(--sb-ink); font-size: 10px; line-height: 1.25; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
+.execution-readable .execution-lane-label strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; font-size: 11px; line-height: 1.35; white-space: normal; }
 .execution-lane-label > span { overflow: hidden; color: var(--sb-muted); font-size: 9px; line-height: 1.25; white-space: nowrap; text-overflow: ellipsis; }
 .execution-lane-track { position: relative; min-height: 43px; margin-right: 8px; border-left: 1px solid var(--sb-line-subtle); background-image: linear-gradient(to right, transparent calc(100% - 1px), var(--sb-line-subtle) 0); background-size: 25% 100%; }
 .execution-span { position: absolute; display: block; height: 20px; min-width: 2px; padding: 2px 5px; overflow: hidden; border: 1px solid var(--sb-accent); border-radius: 4px; background: var(--sb-icon-bg); color: var(--sb-ink); line-height: 14px; font-size: 9px; white-space: nowrap; }
+.execution-readable .execution-span { padding: 0; overflow: visible; font: inherit; line-height: 16px; font-size: 10px; cursor: pointer; text-align: left; }
+.execution-span-label { position: absolute; top: 0; left: 5px; display: block; width: max-content; max-width: 180px; overflow: hidden; text-overflow: ellipsis; line-height: 18px; }
+.execution-span[aria-pressed="true"] { outline: 2px solid var(--sb-accent); outline-offset: 2px; }
+.execution-selection { margin: 6px 0 0; padding: 7px 9px; border-left: 2px solid var(--sb-accent); background: var(--sb-surface-highlight); color: var(--sb-ink); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
 .execution-span[data-span-kind="call"] { border-style: dashed; }
 .execution-span[data-span-role="plan"] { border-color: var(--sb-muted); background: var(--sb-surface-raised); color: var(--sb-muted); }
 .execution-span[data-span-kind="run"], .execution-phase-span { border-color: var(--sb-green); background: var(--sb-surface-raised); box-shadow: inset 0 -2px var(--sb-green); }
@@ -1677,6 +1692,10 @@ input::placeholder { color: var(--sb-muted); opacity: 1; }
 @media (max-width: 640px) {
   .execution-heading { align-items: flex-start; }
   .execution-timeline-scroll { max-height: 200px; }
+  .execution-readable .execution-axis, .execution-readable .execution-lane { grid-template-columns: 124px minmax(0, 1fr); }
+  .execution-gantt-toolbar { flex-wrap: wrap; }
+  .execution-gantt-toolbar > span { flex-basis: 100%; }
+  .execution-gantt-toolbar button { min-width: 36px; min-height: 36px; }
   .execution-dag .workflow-viewport { max-height: 180px; }
   .execution-dag .workflow-toolbar { padding: 2px 5px; }
   .execution-dag .workflow-toolbar button { min-height: 36px; min-width: 32px; }

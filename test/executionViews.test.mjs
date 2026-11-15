@@ -143,3 +143,23 @@ test('a transient read failure retains visible data with an explicit stale state
   assert.match(executionTraceMarkup(client.value, client.error), /stale/i);
   client.stop();
 });
+
+test('short calls retain their actual time scale and expose complete accessible timing labels', () => {
+    const markup = executionTraceMarkup(view({ observed_since: 1000, observed_at: 121000, spans: [
+            { span_id: 'short-call', agent_id: 'main', kind: 'call', label: 'bash <inspect>', started_at: 2100, ended_at: 2200, state: 'completed' },
+            { span_id: 'ongoing', agent_id: 'main', kind: 'call', label: 'bash', started_at: 120000, ended_at: null, state: 'open' },
+        ] }));
+    const bar = markup.match(/<button[^>]+data-execution-span="short-call"[^>]*>/)?.[0];
+    assert.ok(bar, 'a short interval must be keyboard and touch accessible');
+    assert.match(bar, /width:0\.084%/);
+    assert.match(bar, /aria-label="bash &lt;inspect&gt;.*0\.1s/);
+    assert.match(markup, /aria-label="Zoom in Gantt"/);
+    assert.match(markup, /aria-label="Zoom out Gantt"/);
+    assert.match(markup, /data-execution-action="fit"/);
+});
+test('an interval clipped by the Gantt window still reports its complete observed duration', () => {
+    const markup = executionTraceMarkup(view({ observed_at: 241000, spans: [
+            { span_id: 'long-call', agent_id: 'main', kind: 'call', label: 'bash', started_at: 1000, ended_at: null, state: 'open' },
+        ] }));
+    assert.match(markup, /aria-label="bash.*end not observed.*240\.0s"/);
+});

@@ -62,14 +62,15 @@ function ganttMarkup(view: ExecutionSnapshot): string {
   const start = Math.max(view.observed_since, end - 120_000, starts.length ? Math.min(...starts) : view.observed_since);
   const range = Math.max(1000, end - start);
   const percent = (at: number) => Math.max(0, Math.min(100, (at - start) / range * 100));
-  const geometry = (from: number, until: number) => `left:${percent(from).toFixed(3)}%;width:${Math.max(.3, percent(until) - percent(from)).toFixed(3)}%`;
+  const geometry = (from: number, until: number) => `left:${percent(from).toFixed(3)}%;width:${Math.max(0, percent(until) - percent(from)).toFixed(3)}%`;
   const label = (name: string, detail: string) => `<div class="execution-lane-label"><strong title="${escapeHtml(name)}">${escapeHtml(name)}</strong><span>${escapeHtml(detail)}</span></div>`;
   const phaseRows = view.phases.map(phase => {
     const running = phase.state === "in_progress" && !["unknown", "lost"].includes(view.lanes.find(lane => lane.agent_id === phase.agent_id)?.status || "unknown");
     const until = phase.ended_at ?? (running ? end : null);
     let mark = `<span class="execution-untimed">${phase.started_at === null ? phase.state === "pending" ? "Not started" : "Start not observed" : "End not observed"}</span>`;
     if (phase.started_at !== null && until !== null) {
-      mark = until < start ? '<span class="execution-untimed">Before this window</span>' : `<span class="execution-span execution-phase-span" data-phase-interval="${escapeHtml(phase.phase_id)}" data-phase-state="${phase.state}" style="${geometry(phase.started_at, until)};top:8px" title="${escapeHtml(`${phase.label} · ${clock(phase.started_at)} → ${phase.ended_at === null ? "end not observed" : clock(phase.ended_at)}`)}"><span>${escapeHtml(phase.label)}</span></span>`;
+      const text = `${phase.label} · ${phaseLabel(phase.state)} · ${clock(phase.started_at)} → ${phase.ended_at === null ? "end not observed" : clock(phase.ended_at)} · ${duration(phase.started_at, until)}`;
+      mark = until < start ? '<span class="execution-untimed">Before this window</span>' : `<button type="button" class="execution-span execution-phase-span" data-phase-interval="${escapeHtml(phase.phase_id)}" data-interval-key="${escapeHtml(`phase:${phase.phase_id}`)}" data-phase-state="${phase.state}" style="${geometry(phase.started_at, until)};top:8px" title="${escapeHtml(text)}" aria-label="${escapeHtml(text)}" aria-pressed="false"><span class="execution-span-label">${escapeHtml(phase.label)}</span></button>`;
     }
     const owner = view.lanes.length > 1 ? ` · ${view.lanes.find(lane => lane.agent_id === phase.agent_id)?.label || "Agent"}` : "";
     return `<div class="execution-lane execution-phase-lane" data-phase-state="${phase.state}">${label(phase.label, phaseLabel(phase.state) + owner)}<div class="execution-lane-track">${mark}</div></div>`;
@@ -89,8 +90,8 @@ function ganttMarkup(view: ExecutionSnapshot): string {
       let track = trackEnds.findIndex(last => last <= from);
       if (track < 0) track = trackEnds.length;
       trackEnds[track] = until;
-      const text = `${span.label} · ${typeName(span.kind)} · ${clock(span.started_at)} → ${span.ended_at === null ? "end not observed" : clock(span.ended_at)} · ${duration(from, until)}`;
-      return `<span class="execution-span" data-execution-span="${escapeHtml(span.span_id)}" data-span-kind="${span.kind}" data-span-role="${nativeWait(span) ? "wait" : planningCall(span) ? "plan" : "work"}" data-span-state="${span.state}" style="${geometry(from, until)};top:${8 + track * 28}px" title="${escapeHtml(text)}"><span>${escapeHtml(span.label)}</span></span>`;
+      const text = `${span.label} · ${typeName(span.kind)} · ${clock(span.started_at)} → ${span.ended_at === null ? "end not observed" : clock(span.ended_at)} · ${duration(span.started_at!, span.ended_at ?? end)}`;
+      return `<button type="button" class="execution-span" data-execution-span="${escapeHtml(span.span_id)}" data-interval-key="${escapeHtml(`span:${span.span_id}`)}" data-span-kind="${span.kind}" data-span-role="${nativeWait(span) ? "wait" : planningCall(span) ? "plan" : "work"}" data-span-state="${span.state}" style="${geometry(from, until)};top:${8 + track * 28}px" title="${escapeHtml(text)}" aria-label="${escapeHtml(text)}" aria-pressed="false"><span class="execution-span-label">${escapeHtml(span.label)}</span></button>`;
     }).join("");
     const first = spans[0]!, lane = view.lanes.find(item => item.agent_id === first.agent_id);
     return `<div class="execution-lane" style="min-height:${Math.max(44, trackEnds.length * 28 + 16)}px">${label(lane?.label || "Agent", nativeWait(first) ? "Native waits" : planningCall(first) ? "Plan updates" : typeName(first.kind))}<div class="execution-lane-track">${bars}</div></div>`;
@@ -99,7 +100,7 @@ function ganttMarkup(view: ExecutionSnapshot): string {
   const runRows = [...groups.values()].filter(spans => spans[0]!.kind === "run").map(renderGroup).join("");
   const waitRows = [...groups.values()].filter(spans => nativeWait(spans[0]!)).map(renderGroup).join("");
   const rows = [...groups.values()].filter(spans => !["agent", "run"].includes(spans[0]!.kind) && !nativeWait(spans[0]!)).map(renderGroup).join("");
-  const chart = phaseRows || rows || agentRows || runRows || waitRows ? `<div class="execution-timeline-scroll" tabindex="0" role="region" aria-label="Gantt timeline. Scroll to explore tasks and agents."><div class="execution-timeline"><div class="execution-axis"><span>Task / agent</span><div>${[0, .25, .5, .75, 1].map(part => `<time style="left:${part * 100}%">${clock(start + range * part)}</time>`).join("")}</div></div>${agentRows}${phaseRows}${runRows}${waitRows}${rows}</div></div>` : '<p class="execution-chart-empty">No new execution events since observation began. Previous log history is not replayed.</p>';
+  const chart = phaseRows || rows || agentRows || runRows || waitRows ? `<div class="execution-gantt-toolbar" aria-label="Gantt controls"><span>Scroll to explore · select an interval for timing</span><button type="button" data-execution-action="out" aria-label="Zoom out Gantt">−</button><output data-execution-zoom aria-live="polite">100%</output><button type="button" data-execution-action="in" aria-label="Zoom in Gantt">+</button><button type="button" data-execution-action="fit">Fit</button></div><div class="execution-timeline-scroll" tabindex="0" role="region" aria-label="Gantt timeline. Scroll to explore tasks and agents."><div class="execution-timeline" data-gantt-range="${range}" style="min-width:${Math.max(520, range / 100 + 182)}px"><div class="execution-axis"><span>Task / agent</span><div>${[0, .25, .5, .75, 1].map(part => `<time style="left:${part * 100}%">${clock(start + range * part)}</time>`).join("")}</div></div>${agentRows}${phaseRows}${runRows}${waitRows}${rows}</div></div><p class="execution-selection" data-execution-selection hidden></p>` : '<p class="execution-chart-empty">No new execution events since observation began. Previous log history is not replayed.</p>';
   return `<section class="execution-gantt"><div class="execution-chart-heading"><h4>Gantt</h4><span>≤2 min · dashed calls include waiting</span></div>${chart}</section>`;
 }
 
@@ -113,7 +114,7 @@ export function executionTraceMarkup(view: ExecutionSnapshot | null, error: stri
     : `<section class="execution-dag execution-dag-empty"><div class="execution-chart-heading"><h4>Task DAG</h4></div><p class="execution-chart-empty">${missingGraph}</p></section>`;
   const heading = '<div class="execution-heading"><h4>Live execution</h4><span class="execution-live-label">Observed as it runs</span></div>';
   const key = view ? escapeHtml(JSON.stringify([view.session_id, view.stream_id])) : "waiting";
-  const wrap = (body: string) => `<sessionbar-execution class="execution-view" data-execution-key="${key}">${heading}${body}</sessionbar-execution>`;
+  const wrap = (body: string) => `<sessionbar-execution class="execution-view execution-readable" data-execution-key="${key}">${heading}${body}</sessionbar-execution>`;
   if (!view || view.availability === "unsupported") {
     const message = error ? escapeHtml(error) : !view ? "Connecting to native execution observations…" : "Native live execution is not yet connected for this harness.";
     return wrap(`<section class="execution-gantt"><div class="execution-chart-heading"><h4>Gantt</h4></div><p class="execution-chart-empty">${message}</p></section>${dag}`);
@@ -127,16 +128,17 @@ export function executionTraceMarkup(view: ExecutionSnapshot | null, error: stri
   return wrap(`${warning}${counts}${ganttMarkup(view)}${dag}${intervals}${interpretation}`);
 }
 
-interface ExecutionViewState { tools: boolean; source: boolean; left: number; top: number }
+interface ExecutionViewState { tools: boolean; source: boolean; left: number; top: number; zoom: number; follow: boolean; selected: string | null }
 const states = new Map<string, ExecutionViewState>();
 
 /** A live update keeps the user's disclosure and Gantt scroll choices. */
 export function installExecutionViews(): void {
   if (customElements.get("sessionbar-execution")) return;
   class ExecutionView extends HTMLElement {
-    private state: ExecutionViewState = { tools: false, source: false, left: 0, top: 0 };
+    private state: ExecutionViewState = { tools: false, source: false, left: 0, top: 0, zoom: 1, follow: true, selected: null };
     private frame = 0;
     private ready = false;
+    private resize?: ResizeObserver;
     connectedCallback(): void {
       this.frame = requestAnimationFrame(() => {
         if (!this.isConnected) return;
@@ -146,7 +148,14 @@ export function installExecutionViews(): void {
         if (tools) tools.open = this.state.tools;
         if (source) source.open = this.state.source;
         const gantt = this.querySelector<HTMLElement>(".execution-timeline-scroll");
-        if (gantt) { gantt.scrollLeft = this.state.left; gantt.scrollTop = this.state.top; }
+        this.layout();
+        if (gantt) {
+          gantt.scrollLeft = this.state.follow ? gantt.scrollWidth - gantt.clientWidth : this.state.left;
+          gantt.scrollTop = this.state.top;
+          this.resize = new ResizeObserver(() => this.layout());
+          this.resize.observe(gantt);
+        }
+        this.addEventListener("click", this.onClick);
         this.addEventListener("toggle", this.remember, true);
         gantt?.addEventListener("scroll", this.remember, { passive: true });
         this.ready = true;
@@ -156,6 +165,8 @@ export function installExecutionViews(): void {
       if (this.ready) this.save();
       this.ready = false;
       cancelAnimationFrame(this.frame);
+      this.resize?.disconnect();
+      this.removeEventListener("click", this.onClick);
       this.removeEventListener("toggle", this.remember, true);
       this.querySelector(".execution-timeline-scroll")?.removeEventListener("scroll", this.remember);
     }
@@ -168,8 +179,82 @@ export function installExecutionViews(): void {
     }
     private remember = (): void => {
       const gantt = this.querySelector<HTMLElement>(".execution-timeline-scroll");
-      if (gantt) { this.state.left = gantt.scrollLeft; this.state.top = gantt.scrollTop; }
+      if (gantt) {
+        this.state.left = gantt.scrollLeft;
+        this.state.top = gantt.scrollTop;
+        this.state.follow = gantt.scrollWidth - gantt.clientWidth - gantt.scrollLeft < 3;
+      }
       this.save();
+    };
+    /** Captions reserve space independently of the duration bars. */
+    private layout(): void {
+      const timeline = this.querySelector<HTMLElement>(".execution-timeline");
+      if (!timeline) return;
+      const base = Math.max(520, Number(timeline.dataset.ganttRange) / 100 + 182);
+      timeline.style.minWidth = this.state.zoom === 0 ? "0px" : `${base * this.state.zoom}px`;
+      const output = this.querySelector<HTMLOutputElement>("[data-execution-zoom]");
+      if (output) output.value = this.state.zoom === 0 ? "Fit" : `${Math.round(this.state.zoom * 100)}%`;
+      const viewport = this.querySelector<HTMLElement>(".execution-timeline-scroll")!;
+      this.querySelector<HTMLButtonElement>('[data-execution-action="out"]')!.disabled = timeline.offsetWidth <= viewport.clientWidth;
+      this.querySelector<HTMLButtonElement>('[data-execution-action="in"]')!.disabled = this.state.zoom >= 8;
+      for (const lane of this.querySelectorAll<HTMLElement>(".execution-lane")) {
+        const track = lane.querySelector<HTMLElement>(".execution-lane-track")!;
+        const width = track.clientWidth;
+        if (!width) continue;
+        const ends: number[] = [];
+        for (const bar of track.querySelectorAll<HTMLButtonElement>(".execution-span")) {
+          const caption = bar.querySelector<HTMLElement>(".execution-span-label")!;
+          caption.style.maxWidth = `${Math.min(180, Math.max(0, width - 12))}px`;
+          const x = bar.offsetLeft, barWidth = bar.offsetWidth;
+          let captionWidth = caption.offsetWidth, captionLeft = 5;
+          if (barWidth < captionWidth + 10) {
+            const before = Math.max(0, x - 6), after = Math.max(0, width - x - barWidth - 6);
+            caption.style.maxWidth = `${Math.min(180, Math.max(before, after))}px`;
+            captionWidth = caption.offsetWidth;
+            captionLeft = after >= captionWidth ? barWidth + 5 : -captionWidth - 6;
+          }
+          caption.style.left = `${captionLeft}px`;
+          const left = Math.min(x, x + captionLeft), right = Math.max(x + barWidth, x + captionLeft + captionWidth);
+          let row = ends.findIndex(end => end + 6 <= left);
+          if (row < 0) row = ends.length;
+          ends[row] = right;
+          bar.style.top = `${8 + row * 28}px`;
+          bar.setAttribute("aria-pressed", String(bar.dataset.intervalKey === this.state.selected));
+        }
+        lane.style.minHeight = `${Math.max(44, ends.length * 28 + 16)}px`;
+      }
+      const axis = this.querySelector<HTMLElement>(".execution-axis > div");
+      axis?.querySelectorAll("time").forEach((time, index) => {
+        time.hidden = axis.clientWidth < 180 ? index > 0 && index < 4 : axis.clientWidth < 340 && index % 2 === 1;
+      });
+      const selection = this.querySelector<HTMLElement>("[data-execution-selection]");
+      const selected = [...this.querySelectorAll<HTMLButtonElement>("[data-interval-key]")]
+        .find(bar => bar.dataset.intervalKey === this.state.selected);
+      if (selection) { selection.hidden = !selected; selection.textContent = selected?.title ?? ""; }
+      if (this.state.follow) viewport.scrollLeft = viewport.scrollWidth - viewport.clientWidth;
+    }
+    private onClick = (event: MouseEvent): void => {
+      if (!(event.target instanceof Element)) return;
+      const bar = event.target.closest<HTMLButtonElement>("[data-interval-key]");
+      if (bar) {
+        this.state.selected = bar.dataset.intervalKey!;
+        this.layout();
+        this.save();
+        return;
+      }
+      const action = event.target.closest<HTMLElement>("[data-execution-action]")?.dataset.executionAction;
+      if (!action) return;
+      const viewport = this.querySelector<HTMLElement>(".execution-timeline-scroll")!;
+      const timeline = this.querySelector<HTMLElement>(".execution-timeline")!;
+      const axis = this.querySelector<HTMLElement>(".execution-axis > div")!;
+      const visible = Math.max(0, viewport.clientWidth - (timeline.offsetWidth - axis.clientWidth));
+      const center = (viewport.scrollLeft + visible / 2) / Math.max(1, axis.clientWidth);
+      const base = Math.max(520, Number(timeline.dataset.ganttRange) / 100 + 182);
+      const scale = this.state.zoom || viewport.clientWidth / base;
+      this.state.zoom = action === "fit" ? 0 : Math.max(.25, Math.min(8, scale * (action === "in" ? 2 : .5)));
+      this.layout();
+      if (!this.state.follow) viewport.scrollLeft = Math.max(0, center * axis.clientWidth - visible / 2);
+      this.remember();
     };
   }
   customElements.define("sessionbar-execution", ExecutionView);
